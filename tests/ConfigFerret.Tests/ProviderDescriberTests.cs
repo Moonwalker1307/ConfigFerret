@@ -25,6 +25,28 @@ public sealed class ProviderDescriberTests : IDisposable
         Assert.Null(describer.FindEnvironmentVariable("Z_", "Db:T", "2"));
     }
 
+    [Fact]
+    public void Names_the_environment_variable_as_it_is_spelled()
+    {
+        var provider = Single(new ConfigurationBuilder().AddEnvironmentVariables("CFSPELL_"));
+
+        var step = Describer(new() { ["cfspell_db__HOST"] = "h" }).Describe(provider, "Db:Host", "h");
+
+        Assert.Equal("environment variable cfspell_db__HOST", step.Source);
+    }
+
+    [Fact]
+    public void Warns_once_and_leaves_out_lines_when_a_json_file_cannot_be_parsed()
+    {
+        var path = Path.Join(_dir, "broken.json");
+        File.WriteAllText(path, "{ \"A\": ");
+        var diagnostics = new TraceDiagnostics();
+
+        Assert.Empty(JsonLineLocator.TryLocate(path, diagnostics));
+        Assert.Empty(JsonLineLocator.TryLocate(Path.Join(_dir, "missing.json"), diagnostics));
+        Assert.StartsWith($"Could not read line numbers from {path}: ", Assert.Single(diagnostics.Warnings), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("MYSQLCONNSTR_")]
     [InlineData("SQLAZURECONNSTR_")]
