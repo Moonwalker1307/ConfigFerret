@@ -1,0 +1,3 @@
+db.timeout=42
+image.tag=v1\,2,list[0]=a
+logging.level=null

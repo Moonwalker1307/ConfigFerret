@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Fuzzing runs on one framework; the parsers are the same code on net10.0 and net11.0. -->
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ConfigFerret.Fuzz</RootNamespace>
+    <!-- Fuzz targets catch broad exception types on purpose and are not a public API. -->
+    <NoWarn>$(NoWarn);CA1031;CA1515;CA1303</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpFuzz" Version="2.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.15" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/ConfigFerret/ConfigFerret.csproj" />
+  </ItemGroup>
+
+</Project>

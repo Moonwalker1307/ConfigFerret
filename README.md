@@ -151,6 +151,8 @@ TargetFrameworks=net10.0 dotnet stryker
 
 The HTML report is written to `tests/ConfigFerret.Tests/StrykerOutput/<run>/reports/`.
 
+The parsers are fuzzed every night on Linux with SharpFuzz and libFuzzer. See [fuzz/README.md](fuzz/README.md).
+
 ## License
 
 MIT

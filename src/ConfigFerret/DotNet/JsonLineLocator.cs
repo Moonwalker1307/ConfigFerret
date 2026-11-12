@@ -23,6 +23,13 @@ internal static class JsonLineLocator
 
     public static Dictionary<string, int> Locate(ReadOnlySpan<byte> json)
     {
+        // Found by fuzzing: Utf8JsonReader rejects a byte order mark, which editors such as Visual Studio
+        // often write, while the .NET JSON provider reads the file fine.
+        if (json.StartsWith("\uFEFF"u8))
+        {
+            json = json[3..];
+        }
+
         var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var reader = new Utf8JsonReader(json, new JsonReaderOptions
         {
@@ -32,6 +39,7 @@ internal static class JsonLineLocator
 
         var path = new List<string>();
         var arrayIndex = new Stack<int>(); // -1 for objects
+        var openLines = new Stack<(int Line, bool HasChildren)>(); // where each open container starts
         string? property = null;
         var line = 1;
         long counted = 0;
@@ -49,16 +57,28 @@ internal static class JsonLineLocator
 
             counted = start;
 
+            if (reader.TokenType is not (JsonTokenType.EndObject or JsonTokenType.EndArray) && openLines.TryPop(out var parent))
+            {
+                openLines.Push(parent with { HasChildren = true });
+            }
+
             switch (reader.TokenType)
             {
                 case JsonTokenType.PropertyName:
-                    property = reader.GetString();
+                    property = ReadPropertyName(ref reader);
                     continue;
                 case JsonTokenType.EndObject:
                 case JsonTokenType.EndArray:
                     arrayIndex.Pop();
+                    var (openLine, hasChildren) = openLines.Pop();
                     if (path.Count > 0)
                     {
+                        // .NET configuration keeps an empty object or array as a key with an empty value.
+                        if (!hasChildren)
+                        {
+                            result.TryAdd(ConfigurationPath.Combine(path), openLine);
+                        }
+
                         path.RemoveAt(path.Count - 1);
                     }
 
@@ -88,6 +108,7 @@ internal static class JsonLineLocator
                 }
 
                 arrayIndex.Push(reader.TokenType == JsonTokenType.StartArray ? 0 : -1);
+                openLines.Push((line, false));
             }
             else if (segment is not null)
             {
@@ -97,5 +118,25 @@ internal static class JsonLineLocator
         }
 
         return result;
+    }
+
+    private static string? ReadPropertyName(ref Utf8JsonReader reader)
+    {
+        try
+        {
+            return reader.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            // Invalid UTF-8 in a property name. The .NET JSON provider still loads the file, so read the name
+            // the same lenient way rather than failing the whole file: replace the bad bytes, then unescape.
+            var lenient = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(reader.ValueSpan));
+            var quoted = new byte[lenient.Length + 2];
+            quoted[0] = quoted[^1] = (byte)'"';
+            lenient.CopyTo(quoted, 1);
+            var inner = new Utf8JsonReader(quoted);
+            inner.Read();
+            return inner.GetString();
+        }
     }
 }

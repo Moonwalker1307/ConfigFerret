@@ -39,6 +39,7 @@
     <None Include="../../README.md" Pack="true" PackagePath="/" />
     <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
     <InternalsVisibleTo Include="ConfigFerret.Tests" />
+    <InternalsVisibleTo Include="ConfigFerret.Fuzz" />
   </ItemGroup>
 
 </Project>

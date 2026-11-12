@@ -1,0 +1,76 @@
+name: Fuzz
+
+# Fuzzes the parsers every night with SharpFuzz and libFuzzer. See fuzz/README.md.
+on:
+  schedule:
+    - cron: '23 2 * * *' # 02:23 UTC every night
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds to fuzz each target
+        default: '1200'
+  pull_request:
+    # A short smoke run when the harness or the parsers change, so the nightly run doesn't break unnoticed.
+    paths:
+      - 'fuzz/**'
+      - 'src/**'
+      - '.github/workflows/fuzz.yml'
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CXX: clang++-18
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [json, helm-values, helm-set, helm-template, kubernetes, kustomize, env-names]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install clang with the libFuzzer runtime
+        run: sudo apt-get update && sudo apt-get install -y clang-18 libclang-rt-18-dev
+
+      # The corpus each night's run grows is kept in the cache and fed to the next night's run.
+      - name: Restore the corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: fuzz/work/${{ matrix.target }}/corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        run: fuzz/run.sh ${{ matrix.target }} ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '1200' }}
+
+      - name: Save the corpus
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: fuzz/work/${{ matrix.target }}/corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      - name: Replay the findings for a readable stack trace
+        if: failure()
+        run: |
+          dotnet build fuzz/ConfigFerret.Fuzz -c Release -p:TargetFrameworks=net10.0 -v quiet
+          fuzz/ConfigFerret.Fuzz/bin/Release/net10.0/ConfigFerret.Fuzz ${{ matrix.target }} fuzz/findings/${{ matrix.target }} || true
+
+      - name: Upload the findings
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-findings-${{ matrix.target }}
+          path: fuzz/findings/${{ matrix.target }}
+          if-no-files-found: ignore

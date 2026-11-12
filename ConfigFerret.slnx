@@ -5,4 +5,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/ConfigFerret.Tests/ConfigFerret.Tests.csproj" />
   </Folder>
+  <Folder Name="/fuzz/">
+    <Project Path="fuzz/ConfigFerret.Fuzz/ConfigFerret.Fuzz.csproj" />
+  </Folder>
 </Solution>

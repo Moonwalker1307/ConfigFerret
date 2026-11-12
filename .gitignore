@@ -427,5 +427,11 @@ FodyWeavers.xsd
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
 
+# Fuzzing: tools, instrumented build, corpus and crashes from local runs
+fuzz/.tools/
+fuzz/out/
+fuzz/work/
+fuzz/findings/
+
 # Stryker.NET mutation testing reports
 StrykerOutput/
