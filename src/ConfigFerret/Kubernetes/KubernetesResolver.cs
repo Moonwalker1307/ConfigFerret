@@ -179,27 +179,24 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         Reference = isSecret ? new SecretKeyRef(data.Name, key) : new ConfigMapKeyRef(data.Name, key),
     };
 
+    private static string? RelativeToMount(VolumeMount mount, string mountPath, string normalized)
+    {
+        if (mount.SubPath is { Length: > 0 } subPath)
+        {
+            return string.Equals(normalized, mountPath, StringComparison.Ordinal) ? subPath : null;
+        }
+
+        return normalized.StartsWith(mountPath + "/", StringComparison.Ordinal) ? normalized[(mountPath.Length + 1)..] : null;
+    }
+
     private List<ProvenanceStep> ResolveFile(Workload workload, Container container, string path)
     {
         var normalized = path.Replace('\\', '/');
         foreach (var mount in container.VolumeMounts.OrderByDescending(m => m.MountPath.Length))
         {
             var mountPath = mount.MountPath.TrimEnd('/');
-            string relative;
-            if (mount.SubPath is { Length: > 0 } subPath)
-            {
-                if (!string.Equals(normalized, mountPath, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                relative = subPath;
-            }
-            else if (normalized.StartsWith(mountPath + "/", StringComparison.Ordinal))
-            {
-                relative = normalized[(mountPath.Length + 1)..];
-            }
-            else
+            var relative = RelativeToMount(mount, mountPath, normalized);
+            if (relative is null)
             {
                 continue;
             }

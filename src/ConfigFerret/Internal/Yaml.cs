@@ -32,7 +32,8 @@ internal static class Yaml
 
     public static IEnumerable<KeyValuePair<string, YamlNode>> Pairs(this YamlNode? node)
     {
-        if (node is not YamlMappingNode map)
+        var map = node as YamlMappingNode;
+        if (map is null)
         {
             yield break;
         }
