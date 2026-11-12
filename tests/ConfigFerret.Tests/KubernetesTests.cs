@@ -112,6 +112,30 @@ public class KubernetesTests
         Assert.Contains("/api/v1/namespaces/prod/configmaps/forbidden", handler.Requests);
     }
 
+    [Fact]
+    public async Task Fetches_each_configmap_the_pod_references_once_and_never_secrets()
+    {
+        using var handler = new FakeApi();
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://k8s.test/") };
+
+        var manifests = await KubernetesInCluster.LoadPodAsync(client, "prod", "worker");
+
+        Assert.Equal("pod worker", manifests.Workloads[0].SourceName);
+        Assert.Equal("configmap api-config", manifests.ConfigMaps["api-config"].SourceName);
+        Assert.Equal(
+            [
+                "/api/v1/namespaces/prod/pods/worker",
+                "/api/v1/namespaces/prod/configmaps/api-config",
+                "/api/v1/namespaces/prod/configmaps/env-key",
+                "/api/v1/namespaces/prod/configmaps/projected",
+            ],
+            handler.Requests);
+    }
+
+    [Fact]
+    public async Task LoadPodAsync_rejects_a_null_client() =>
+        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(null!, "ns", "pod"));
+
     private sealed class FakeApi : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
@@ -125,6 +149,17 @@ public class KubernetesTests
                 "/api/v1/namespaces/prod/pods/api-7d9f" => """
                     {"kind":"Pod","metadata":{"name":"api-7d9f"},"spec":{"containers":[{"name":"api",
                       "envFrom":[{"configMapRef":{"name":"api-config"}},{"configMapRef":{"name":"forbidden"}},{"secretRef":{"name":"s"}}]}]}}
+                    """,
+                "/api/v1/namespaces/prod/pods/worker" => """
+                    {"kind":"Pod","metadata":{"name":"worker"},"spec":{
+                      "containers":[{"name":"w",
+                        "envFrom":[{"configMapRef":{"name":"api-config"}},{"secretRef":{"name":"s"}}],
+                        "env":[
+                          {"name":"A","valueFrom":{"configMapKeyRef":{"name":"env-key","key":"a"}}},
+                          {"name":"B","valueFrom":{"configMapKeyRef":{"name":"api-config","key":"b"}}},
+                          {"name":"C","valueFrom":{"secretKeyRef":{"name":"env-secret","key":"c"}}}]}],
+                      "volumes":[{"name":"v","projected":{"sources":[
+                        {"configMap":{"name":"projected"}},{"secret":{"name":"projected-secret"}}]}}]}}
                     """,
                 "/api/v1/namespaces/prod/configmaps/api-config" => """{"kind":"ConfigMap","metadata":{"name":"api-config"},"data":{"Db__Timeout":"42"}}""",
                 _ => null,
