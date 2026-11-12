@@ -1,0 +1,107 @@
+name: Security
+
+on:
+  schedule:
+    # Nightly at 03:17 UTC.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  # Also run on pull requests that change this workflow or package references, so changes are checked before they merge.
+  pull_request:
+    paths:
+      - '.github/workflows/security.yml'
+      - '**/*.csproj'
+      - '**/*.props'
+      - '**/*.targets'
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  nuget-audit:
+    name: NuGet vulnerable and deprecated packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+
+      - run: dotnet restore
+
+      - name: Vulnerable packages (fails the job)
+        shell: bash
+        run: |
+          dotnet list package --vulnerable --include-transitive | tee vulnerable.txt
+          dotnet list package --vulnerable --include-transitive --format json > vulnerable.json
+          count=$(jq '[.projects[].frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?)] | length' vulnerable.json)
+          {
+            echo "## Vulnerable NuGet packages"
+            echo
+            echo '```'
+            cat vulnerable.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -gt 0 ]; then
+            echo "::error::Found $count vulnerable NuGet package(s). See the job summary."
+            exit 1
+          fi
+
+      - name: Deprecated packages (warns only)
+        shell: bash
+        run: |
+          dotnet list package --deprecated --include-transitive | tee deprecated.txt
+          dotnet list package --deprecated --include-transitive --format json > deprecated.json
+          count=$(jq '[.projects[].frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?)] | length' deprecated.json)
+          {
+            echo "## Deprecated NuGet packages"
+            echo
+            echo '```'
+            cat deprecated.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -gt 0 ]; then
+            echo "::warning::Found $count deprecated NuGet package(s). See the job summary."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nuget-audit
+          path: |
+            vulnerable.*
+            deprecated.*
+
+  codeql:
+    name: CodeQL (C#)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          build-mode: manual
+          queries: security-and-quality
+
+      - run: dotnet build -c Release
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:csharp
