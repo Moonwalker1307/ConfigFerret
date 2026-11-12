@@ -77,4 +77,18 @@ public class JsonLineLocatorTests
 
         Assert.Equal(3, lines["Db:Timeout"]);
     }
+
+    [Fact]
+    public void Locate_unescapes_property_names_that_also_hold_invalid_utf8()
+    {
+        // Found by the nightly fuzzer on its first CI run.
+        byte[] json = [.. "{\"Feat\\\"ure"u8, 0xD4, .. "s\": [1]}"u8];
+        using var stream = new MemoryStream(json);
+        var config = new ConfigurationBuilder().AddJsonStream(stream).Build();
+        var key = Assert.Single(config.AsEnumerable(), p => p.Value is not null).Key;
+
+        var lines = JsonLineLocator.Locate(json);
+
+        Assert.Equal(1, lines[key]);
+    }
 }

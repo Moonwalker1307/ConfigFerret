@@ -129,8 +129,14 @@ internal static class JsonLineLocator
         catch (InvalidOperationException)
         {
             // Invalid UTF-8 in a property name. The .NET JSON provider still loads the file, so read the name
-            // the same lenient way rather than failing the whole file.
-            return System.Text.Encoding.UTF8.GetString(reader.ValueSpan);
+            // the same lenient way rather than failing the whole file: replace the bad bytes, then unescape.
+            var lenient = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(reader.ValueSpan));
+            var quoted = new byte[lenient.Length + 2];
+            quoted[0] = quoted[^1] = (byte)'"';
+            lenient.CopyTo(quoted, 1);
+            var inner = new Utf8JsonReader(quoted);
+            inner.Read();
+            return inner.GetString();
         }
     }
 }
