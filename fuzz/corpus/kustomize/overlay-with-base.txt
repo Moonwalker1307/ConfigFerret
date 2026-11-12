@@ -1,0 +1,19 @@
+namePrefix: prod-
+resources:
+  - ../base
+configMapGenerator:
+  - name: api-config
+    behavior: merge
+    envs:
+      - app.properties
+%%
+# production overrides
+KS_Db__Timeout=42
+%%
+resources:
+  - deployment.yaml
+configMapGenerator:
+  - name: api-config
+    literals:
+      - KS_Db__Timeout=30
+      - KS_Db__Host=localhost

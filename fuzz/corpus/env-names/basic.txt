@@ -1,0 +1,7 @@
+CFT_
+Db:Timeout
+42
+CFT_Db__Timeout=42
+CFT_DB__TIMEOUT=43
+CFT_SQLCONNSTR_Main=Server=x
+Other=1

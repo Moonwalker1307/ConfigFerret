@@ -1,0 +1,7 @@
+resources:
+  - deployment.yaml
+configMapGenerator:
+  - name: api-config
+    literals:
+      - KS_Db__Timeout=30
+      - KS_Db__Host=localhost
