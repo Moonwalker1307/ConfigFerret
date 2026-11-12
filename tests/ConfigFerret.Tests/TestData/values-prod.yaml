@@ -1,0 +1,4 @@
+db:
+  timeout: 42
+logging:
+  extra: null

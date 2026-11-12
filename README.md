@@ -1,1 +1,130 @@
 # ConfigFerret
+
+**Why is this value 42?** ConfigFerret traces every effective .NET configuration value back through all the
+layers that set it: appsettings files, environment variables, the command line, Kubernetes ConfigMaps and
+Secrets, Helm values files and Kustomize overlays.
+
+```
+Db:Timeout = "42"
+  set in appsettings.json, overridden by appsettings.Production.json, overridden again by environment variable DB__Timeout from ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.db.timeout, set in values-prod.yaml over values.yaml (chart default)
+  [overridden] appsettings.json (line 4) = "30"
+  [overridden] appsettings.Production.json (line 3) = "60"
+  [effective]  environment variable DB__Timeout = "42"
+    <- [effective]  ConfigMap api-config (key DB__Timeout, rendered.yaml:7) = "42"
+                    envFrom on Deployment/api, container api
+      <- [effective]  Helm template templates/configmap.yaml (line 6) = "42" [inferred]
+                      renders .Values.db.timeout
+        <- [overridden] values.yaml (chart default) (line 3, db.timeout) = "30"
+        <- [effective]  values-prod.yaml (line 2, db.timeout) = "42"
+```
+
+Each layer has its own partial debug view (`GetDebugView()`, `helm get values`, `kubectl describe`).
+ConfigFerret joins them into one history per key.
+
+## Install
+
+```
+dotnet package add ConfigFerret
+```
+
+Targets `net10.0` and `net11.0`.
+
+## Use
+
+### Just .NET configuration
+
+```csharp
+using ConfigFerret;
+
+var builder = WebApplication.CreateBuilder(args);
+Console.WriteLine(builder.Configuration.Explain("Db:Timeout"));
+
+// Or every setting, as text or JSON:
+var report = builder.Configuration.TraceProvenance();
+Console.WriteLine(report.ToText());
+File.WriteAllText("config-provenance.json", report.ToJson());
+```
+
+### With Kubernetes, Helm and Kustomize
+
+```csharp
+using ConfigFerret;
+using ConfigFerret.Helm;
+using ConfigFerret.Kubernetes;
+using ConfigFerret.Kustomize;
+
+var report = ConfigTracer.For(builder.Configuration)
+    // Rendered manifests: `helm template`, `kustomize build` or `kubectl get deploy/api -o yaml` plus its ConfigMaps.
+    .WithKubernetes(KubernetesManifests.LoadFiles("rendered.yaml"), workload: "api", container: "api")
+    // The chart and the values passed to helm install/upgrade, in the same order.
+    .WithHelm(HelmChart.Load("charts/api", valuesFiles: ["values-prod.yaml"], setValues: ["db.timeout=42"]))
+    // Or the overlay you deploy with kustomize.
+    .WithKustomize(Kustomization.Load("deploy/overlays/prod"))
+    .Trace();
+
+Console.WriteLine(report.Explain("Db:Timeout"));
+```
+
+### Inside a running pod
+
+```csharp
+if (KubernetesInCluster.IsInCluster)
+{
+    var pod = await KubernetesInCluster.LoadCurrentPodAsync();
+    var report = ConfigTracer.For(builder.Configuration).WithKubernetes(pod).Trace();
+}
+```
+
+This reads the pod (`POD_NAME` or `HOSTNAME`) and the ConfigMaps it references with the pod's service account.
+Grant it `get` on `pods` and `configmaps` in its namespace. Secrets are never read through the API.
+
+## What it traces
+
+| Layer | What ConfigFerret shows |
+| --- | --- |
+| JSON files (`appsettings*.json`) | File and line number |
+| User secrets | Marked sensitive |
+| Environment variables | The exact variable name, including prefixes and `__`, and `*CONNSTR_` connection strings |
+| Command line | The argument |
+| Key-per-file (mounted secrets) | The file, marked sensitive |
+| Kubernetes `env` | Literal value, `configMapKeyRef`, `secretKeyRef`, `fieldRef`, with workload and container |
+| Kubernetes `envFrom` | Which ConfigMap or Secret, with prefix, and the precedence between `envFrom` and `env` |
+| Kubernetes volumes | Which ConfigMap or Secret key a mounted file comes from (`configMap`, `secret`, `projected`, `subPath`, `items`) |
+| Helm | The template line that renders the key, and every values file and `--set` that set or removed the value |
+| Kustomize | Every `configMapGenerator` and `secretGenerator` across bases and overlays (`create`, `merge`, `replace`, `literals`, `envs`, `files`, `namePrefix`, `nameSuffix`, hash suffixes) |
+
+Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and `List` documents.
+
+## Secrets
+
+Values are redacted as `***` when they come from a Secret, user secrets or key-per-file, or when the key looks
+secret (`password`, `token`, `apikey`, `connectionstring` and so on). Turn this off only on your own machine:
+
+```csharp
+ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
+```
+
+## Limits
+
+- Helm links are found by scanning templates for `.Values.x.y` on lines that set an env `value:` or a data key,
+  so they are marked `[inferred]`. Values used through `with`, `range`, `include` or helpers are not linked yet.
+  Subchart values are not traced yet.
+- Kustomize patches that edit env entries or ConfigMap data are not traced yet.
+- Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
+  further upstream from them.
+
+## Build
+
+```
+dotnet build
+dotnet test
+dotnet pack src/ConfigFerret -c Release
+```
+
+Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, pass `-p:TargetFrameworks=net10.0`.
+CI builds and tests both on Windows, Linux and macOS, and packs the NuGet package. Pushing a `v*` tag publishes
+it to nuget.org when the `NUGET_API_KEY` secret is set.
+
+## License
+
+MIT

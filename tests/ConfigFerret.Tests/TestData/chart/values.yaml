@@ -1,0 +1,8 @@
+replicaCount: 1
+db:
+  timeout: 30
+  host: db.internal
+logging:
+  level: Information
+  extra:
+    a: 1
