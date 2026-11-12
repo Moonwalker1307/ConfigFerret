@@ -24,13 +24,7 @@ public static class KubernetesInCluster
     /// <param name="cancellationToken">A cancellation token.</param>
     public static async Task<KubernetesManifests> LoadCurrentPodAsync(string? podName = null, string? @namespace = null, CancellationToken cancellationToken = default)
     {
-        var host = Environment.GetEnvironmentVariable("KUBERNETES_SERVICE_HOST")
-            ?? throw new InvalidOperationException("KUBERNETES_SERVICE_HOST is not set; this process does not seem to run in a pod.");
-        var port = Environment.GetEnvironmentVariable("KUBERNETES_SERVICE_PORT") ?? "443";
-        var token = (await File.ReadAllTextAsync(Path.Combine(ServiceAccountPath, "token"), cancellationToken).ConfigureAwait(false)).Trim();
-        @namespace ??= Environment.GetEnvironmentVariable("POD_NAMESPACE")
-            ?? (await File.ReadAllTextAsync(Path.Combine(ServiceAccountPath, "namespace"), cancellationToken).ConfigureAwait(false)).Trim();
-        podName ??= Environment.GetEnvironmentVariable("POD_NAME") ?? Environment.GetEnvironmentVariable("HOSTNAME") ?? Environment.MachineName;
+        var target = await ResolveTargetAsync(ServiceAccountPath, Environment.GetEnvironmentVariable, podName, @namespace, cancellationToken).ConfigureAwait(false);
 
         var caPath = Path.Combine(ServiceAccountPath, "ca.crt");
 #pragma warning disable CA2000 // The handler is owned and disposed by the HttpClient.
@@ -58,10 +52,25 @@ public static class KubernetesInCluster
             };
         }
 
+        using var client = new HttpClient(handler) { BaseAddress = target.BaseAddress };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", target.Token);
+        return await LoadPodAsync(client, target.Namespace, target.PodName, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Works out the API address, token, namespace and pod name from the environment and service account.</summary>
+    internal static async Task<InClusterTarget> ResolveTargetAsync(
+        string serviceAccountPath, Func<string, string?> getEnvironmentVariable, string? podName, string? @namespace, CancellationToken cancellationToken)
+    {
+        var host = getEnvironmentVariable("KUBERNETES_SERVICE_HOST")
+            ?? throw new InvalidOperationException("KUBERNETES_SERVICE_HOST is not set; this process does not seem to run in a pod.");
+        var port = getEnvironmentVariable("KUBERNETES_SERVICE_PORT") ?? "443";
+        var token = (await File.ReadAllTextAsync(Path.Combine(serviceAccountPath, "token"), cancellationToken).ConfigureAwait(false)).Trim();
+        @namespace ??= getEnvironmentVariable("POD_NAMESPACE")
+            ?? (await File.ReadAllTextAsync(Path.Combine(serviceAccountPath, "namespace"), cancellationToken).ConfigureAwait(false)).Trim();
+        podName ??= getEnvironmentVariable("POD_NAME") ?? getEnvironmentVariable("HOSTNAME") ?? Environment.MachineName;
+
         var hostPart = host.Contains(':', StringComparison.Ordinal) ? $"[{host}]" : host;
-        using var client = new HttpClient(handler) { BaseAddress = new Uri($"https://{hostPart}:{port}/") };
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return await LoadPodAsync(client, @namespace, podName, cancellationToken).ConfigureAwait(false);
+        return new InClusterTarget(new Uri($"https://{hostPart}:{port}/"), token, @namespace, podName);
     }
 
     /// <summary>
@@ -105,3 +114,6 @@ public static class KubernetesInCluster
         return manifests;
     }
 }
+
+/// <summary>Where and as whom <see cref="KubernetesInCluster"/> reads the current pod.</summary>
+internal sealed record InClusterTarget(Uri BaseAddress, string Token, string Namespace, string PodName);
