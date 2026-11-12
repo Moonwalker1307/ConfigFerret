@@ -199,9 +199,10 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
 
     private static ProvenanceStep DescribeKeyPerFile(IConfigurationProvider provider, string key, string? value)
     {
-        // KeyPerFileConfigurationProvider has a public Source with a FileProvider. Read it by reflection so the
-        // package does not have to depend on Microsoft.Extensions.Configuration.KeyPerFile.
-        var source = provider.GetType().GetProperty("Source")?.GetValue(provider);
+        // KeyPerFileConfigurationProvider keeps its source, which has the FileProvider, in a non-public Source
+        // property. Read it by reflection so the package does not have to depend on
+        // Microsoft.Extensions.Configuration.KeyPerFile.
+        var source = provider.GetType().GetProperty("Source", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(provider);
         var fileProvider = source?.GetType().GetProperty("FileProvider")?.GetValue(source) as IFileProvider;
         var fileName = key.Replace(":", "__", StringComparison.Ordinal);
         var physical = fileProvider?.GetFileInfo(fileName).PhysicalPath;

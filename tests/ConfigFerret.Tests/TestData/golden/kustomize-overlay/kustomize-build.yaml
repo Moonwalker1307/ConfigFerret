@@ -1,0 +1,35 @@
+apiVersion: v1
+data:
+  BILLING_Billing__Currency: EUR
+  BILLING_Billing__InvoiceDueDays: "14"
+  BILLING_Billing__RetryCount: "10"
+  BILLING_Logging__LogLevel__Default: Debug
+  BILLING_Smtp__Host: smtp.staging.internal
+  BILLING_Smtp__Port: "25"
+kind: ConfigMap
+metadata:
+  name: staging-billing-config-8tk4mh2b7c
+---
+apiVersion: v1
+data:
+  BILLING_Stripe__ApiKey: c2tfdGVzdF9zdGFnaW5n
+kind: Secret
+metadata:
+  name: staging-billing-secrets-m6f9g2d5h8
+type: Opaque
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: staging-billing
+spec:
+  template:
+    spec:
+      containers:
+      - envFrom:
+        - configMapRef:
+            name: staging-billing-config-8tk4mh2b7c
+        - secretRef:
+            name: staging-billing-secrets-m6f9g2d5h8
+        image: ghcr.io/example/billing:2.0.3
+        name: billing

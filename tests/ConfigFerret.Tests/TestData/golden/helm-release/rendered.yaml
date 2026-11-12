@@ -1,0 +1,67 @@
+---
+# Source: orders/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-config
+  labels:
+    app.kubernetes.io/name: orders
+data:
+  Db__Port: "5432"
+  Db__Timeout: "60"
+  Cache__Ttl: "900"
+  Logging__LogLevel__Default: "Warning"
+  Features__Search: "true"
+---
+# Source: orders/templates/endpoints.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-endpoints
+data:
+  api-base-url: "https://eu.api.example.test"
+---
+# Created outside the chart by the platform team's secret sync.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orders-db
+type: Opaque
+data:
+  password: cHJvZC1zM2NyM3Q=
+---
+# Source: orders/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+spec:
+  replicas: 6
+  template:
+    spec:
+      containers:
+        - name: orders
+          image: "ghcr.io/example/orders:1.4.0"
+          envFrom:
+            - prefix: ORDERS_
+              configMapRef:
+                name: orders-config
+          env:
+            - name: ORDERS_Db__Host
+              value: "orders-db.prod.svc"
+            - name: ORDERS_Db__Password
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db
+                  key: password
+            - name: ORDERS_Api__BaseUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: orders-endpoints
+                  key: api-base-url
+            - name: ORDERS_Pod__Name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+        - name: metrics
+          image: ghcr.io/example/metrics-exporter:0.9.1

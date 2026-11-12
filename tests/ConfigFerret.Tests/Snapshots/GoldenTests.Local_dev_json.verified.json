@@ -1,0 +1,137 @@
+﻿{
+  "settings": [
+    {
+      "key": "Banner",
+      "value": "Welcome\nto the dev build",
+      "sensitive": false,
+      "story": "set in appsettings.json",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 13",
+          "value": "Welcome\nto the dev build",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "ConnectionStrings:Default",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in appsettings.json, overridden by environment variable DEVAPP_ConnectionStrings__Default",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 3",
+          "value": "***",
+          "effective": false,
+          "sensitive": true
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable DEVAPP_ConnectionStrings__Default",
+          "value": "***",
+          "effective": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "key": "Jwt:Issuer",
+      "value": "https://dev.localhost:5001",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by appsettings.Development.json",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 6",
+          "value": "https://localhost:5001",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.Development.json",
+          "location": "line 6",
+          "value": "https://dev.localhost:5001",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Jwt:SigningKey",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in appsettings.json, overridden by user secrets (secrets.json)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 7",
+          "value": "dev-signing-key",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "user secrets (secrets.json)",
+          "location": "line 3",
+          "value": "***",
+          "effective": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "key": "Paging:MaxPageSize",
+      "value": "50",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by command-line argument --Paging:MaxPageSize",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 11",
+          "value": "100",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "command-line argument --Paging:MaxPageSize",
+          "value": "50",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Paging:PageSize",
+      "value": "10",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by appsettings.Development.json, overridden again by environment variable DEVAPP_Paging__PageSize",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 10",
+          "value": "20",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.Development.json",
+          "location": "line 3",
+          "value": "5",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable DEVAPP_Paging__PageSize",
+          "value": "10",
+          "effective": true
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

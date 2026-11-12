@@ -432,3 +432,6 @@ fuzz/.tools/
 fuzz/out/
 fuzz/work/
 fuzz/findings/
+
+# Stryker.NET mutation testing reports
+StrykerOutput/
