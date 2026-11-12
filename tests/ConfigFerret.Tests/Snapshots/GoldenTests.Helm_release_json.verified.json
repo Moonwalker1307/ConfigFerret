@@ -98,7 +98,7 @@
               "location": "key Cache__Ttl, rendered.yaml:12",
               "value": "900",
               "effective": true,
-              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "note": "envFrom on Deployment/orders, container orders with prefix 'ORDERS_'",
               "origins": [
                 {
                   "kind": "Helm",
@@ -248,7 +248,7 @@
               "location": "key Db__Port, rendered.yaml:10",
               "value": "5432",
               "effective": true,
-              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "note": "envFrom on Deployment/orders, container orders with prefix 'ORDERS_'",
               "origins": [
                 {
                   "kind": "Helm",
@@ -306,7 +306,7 @@
               "location": "key Db__Timeout, rendered.yaml:11",
               "value": "60",
               "effective": true,
-              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "note": "envFrom on Deployment/orders, container orders with prefix 'ORDERS_'",
               "origins": [
                 {
                   "kind": "Helm",
@@ -371,7 +371,7 @@
               "location": "key Features__Search, rendered.yaml:14",
               "value": "true",
               "effective": true,
-              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "note": "envFrom on Deployment/orders, container orders with prefix 'ORDERS_'",
               "origins": [
                 {
                   "kind": "Helm",
@@ -435,7 +435,7 @@
               "location": "key Logging__LogLevel__Default, rendered.yaml:13",
               "value": "Warning",
               "effective": true,
-              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "note": "envFrom on Deployment/orders, container orders with prefix 'ORDERS_'",
               "origins": [
                 {
                   "kind": "Helm",
