@@ -53,4 +53,14 @@ public class HelmChartTests
         Assert.Equal("[c]", chart.GetValue("hosts"));
         Assert.Equal(2, chart.History["hosts"].Count);
     }
+
+    [Fact]
+    public void Set_keeps_commas_inside_a_list()
+    {
+        var chart = HelmChart.Load(TestPaths.Data("chart"), setValues: ["tags={a, b,c},db.timeout=7", "empty={}"]);
+
+        Assert.Equal("[a, b, c]", chart.GetValue("tags"));
+        Assert.Equal("7", chart.GetValue("db.timeout"));
+        Assert.Equal("[]", chart.GetValue("empty"));
+    }
 }

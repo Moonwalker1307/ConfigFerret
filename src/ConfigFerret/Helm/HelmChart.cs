@@ -143,7 +143,7 @@ public sealed partial class HelmChart
             }
 
             var path = part[..eq];
-            var value = part[(eq + 1)..];
+            var value = SetList(part[(eq + 1)..]);
             var source = $"--set {path}";
             if (value == "null")
             {
@@ -157,9 +157,16 @@ public sealed partial class HelmChart
         }
     }
 
+    /// <summary>Shows a <c>--set</c> list such as <c>{a,b}</c> the way a values file list is shown, <c>[a, b]</c>.</summary>
+    private static string SetList(string value) =>
+        value.Length >= 2 && value[0] == '{' && value[^1] == '}'
+            ? "[" + string.Join(", ", value[1..^1].Split(',', StringSplitOptions.TrimEntries)) + "]"
+            : value;
+
     private static IEnumerable<string> SplitSet(string expression)
     {
         var current = new System.Text.StringBuilder();
+        var braces = 0; // commas inside a {a,b} list belong to the list
         for (var i = 0; i < expression.Length; i++)
         {
             var c = expression[i];
@@ -167,13 +174,14 @@ public sealed partial class HelmChart
             {
                 current.Append(expression[++i]);
             }
-            else if (c == ',')
+            else if (c == ',' && braces == 0)
             {
                 yield return current.ToString();
                 current.Clear();
             }
             else
             {
+                braces += c == '{' ? 1 : c == '}' && braces > 0 ? -1 : 0;
                 current.Append(c);
             }
         }
