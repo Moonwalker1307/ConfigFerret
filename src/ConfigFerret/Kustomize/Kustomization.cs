@@ -90,7 +90,8 @@ public sealed class Kustomization
         var state = new List<GeneratedData>();
         foreach (var resource in doc.Get("resources").Items().Concat(doc.Get("bases").Items()).Concat(doc.Get("components").Items()))
         {
-            if (resource.Scalar() is not { } rel)
+            var rel = resource.Scalar();
+            if (rel is null)
             {
                 continue;
             }
@@ -183,7 +184,8 @@ public sealed class Kustomization
 
         foreach (var env in generator.Get("envs").Items().Append(generator.Get("env") ?? new YamlScalarNode()))
         {
-            if (env.Scalar() is not { } rel)
+            var rel = env.Scalar();
+            if (rel is null)
             {
                 continue;
             }
@@ -214,7 +216,8 @@ public sealed class Kustomization
 
         foreach (var fileEntry in generator.Get("files").Items())
         {
-            if (fileEntry.Scalar() is not { } spec)
+            var spec = fileEntry.Scalar();
+            if (spec is null)
             {
                 continue;
             }
