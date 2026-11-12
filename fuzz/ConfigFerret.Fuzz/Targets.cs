@@ -25,7 +25,7 @@ internal sealed class InvariantException(string message) : Exception(message);
 /// </summary>
 internal static class Targets
 {
-    private static readonly string Scratch = Path.Combine(Path.GetTempPath(), $"configferret-fuzz-{Environment.ProcessId}");
+    private static readonly string Scratch = Path.Join(Path.GetTempPath(), $"configferret-fuzz-{Environment.ProcessId}");
 
     public static readonly IReadOnlyDictionary<string, FuzzTarget> All = new Dictionary<string, FuzzTarget>(StringComparer.Ordinal)
     {
@@ -224,13 +224,13 @@ internal static class Targets
     private static void KustomizeTarget(ReadOnlySpan<byte> data)
     {
         var parts = Split(data);
-        var overlay = Path.Combine(Scratch, "kustomize", "overlay");
-        var baseDir = Path.Combine(Scratch, "kustomize", "base");
+        var overlay = Path.Join(Scratch, "kustomize", "overlay");
+        var baseDir = Path.Join(Scratch, "kustomize", "base");
         Directory.CreateDirectory(overlay);
         Directory.CreateDirectory(baseDir);
-        WriteOrDelete(Path.Combine(overlay, "kustomization.yaml"), parts.ElementAtOrDefault(0) ?? "");
-        WriteOrDelete(Path.Combine(overlay, "app.properties"), parts.ElementAtOrDefault(1));
-        WriteOrDelete(Path.Combine(baseDir, "kustomization.yaml"), parts.ElementAtOrDefault(2));
+        WriteOrDelete(Path.Join(overlay, "kustomization.yaml"), parts.ElementAtOrDefault(0) ?? "");
+        WriteOrDelete(Path.Join(overlay, "app.properties"), parts.ElementAtOrDefault(1));
+        WriteOrDelete(Path.Join(baseDir, "kustomization.yaml"), parts.ElementAtOrDefault(2));
 
         Kustomization kustomization;
         try
@@ -319,7 +319,7 @@ internal static class Targets
 
     private static string EmptyDirectory()
     {
-        var dir = Path.Combine(Scratch, "empty");
+        var dir = Path.Join(Scratch, "empty");
         Directory.CreateDirectory(dir);
         return dir;
     }

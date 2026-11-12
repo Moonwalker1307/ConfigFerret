@@ -34,11 +34,11 @@ public class FuzzRegressionTests
     {
         // The fuzz input holds several files separated by %% lines; the first is the kustomization.
         var kustomization = Read("kustomize-plain-scalar.txt").Split("\n%%\n")[0];
-        var dir = Path.Combine(Path.GetTempPath(), $"configferret-{Guid.NewGuid():N}");
+        var dir = Path.Join(Path.GetTempPath(), $"configferret-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         try
         {
-            File.WriteAllText(Path.Combine(dir, "kustomization.yaml"), kustomization);
+            File.WriteAllText(Path.Join(dir, "kustomization.yaml"), kustomization);
 
             Assert.Throws<FormatException>(() => Kustomization.Load(dir));
         }
