@@ -103,21 +103,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Check the nuget.org user is set
-        shell: bash
-        env:
-          NUGET_USER: ${{ vars.NUGET_USER }}
-        run: |
-          if [ -z "$NUGET_USER" ]; then
-            echo "::error::Set the NUGET_USER repository variable to the nuget.org user that owns the trusted publishing policy."
-            exit 1
-          fi
-
       - name: Log in to nuget.org
         id: login
         uses: NuGet/login@v1
         with:
-          user: ${{ vars.NUGET_USER }}
+          # The nuget.org account that owns the trusted publishing policy. Override with the NUGET_USER repository variable.
+          user: ${{ vars.NUGET_USER || 'Moonwalker1307' }}
 
       - name: Push
         shell: bash
