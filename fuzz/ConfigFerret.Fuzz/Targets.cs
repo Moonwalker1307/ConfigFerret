@@ -96,6 +96,11 @@ internal static class Targets
         {
             throw new FormatException(ex.Message, ex);
         }
+        catch (InvalidOperationException ex)
+        {
+            // The provider throws this for an escaped lone surrogate in a property name.
+            throw new FormatException(ex.Message, ex);
+        }
 
         var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in AllKeys(provider, null))

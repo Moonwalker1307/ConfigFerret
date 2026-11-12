@@ -91,4 +91,14 @@ public class JsonLineLocatorTests
 
         Assert.Equal(1, lines[key]);
     }
+
+    [Fact]
+    public void Locate_rejects_an_escaped_lone_surrogate_as_malformed_json()
+    {
+        // Found by fuzzing: this threw InvalidOperationException, which TryLocate does not catch.
+        // The .NET JSON provider cannot load it either.
+        var json = Encoding.UTF8.GetBytes("{\"a\\uDDDDb\": 1}");
+
+        Assert.ThrowsAny<System.Text.Json.JsonException>(() => JsonLineLocator.Locate(json));
+    }
 }
