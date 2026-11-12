@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Moonwalker1307/ConfigFerret/main/assets/logo.png" alt="ConfigFerret" width="600">
+</p>
+
 # ConfigFerret
 
 **Why is this value 42?** ConfigFerret traces every effective .NET configuration value back through all the
