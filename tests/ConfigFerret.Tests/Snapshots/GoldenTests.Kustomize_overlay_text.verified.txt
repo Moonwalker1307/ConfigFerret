@@ -13,7 +13,7 @@ Billing:InvoiceDueDays = "14"
   [effective]  environment variable BILLING_Billing__InvoiceDueDays = "14"
     <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Billing__InvoiceDueDays, kustomize-build.yaml:4) = "14"
                     envFrom on Deployment/staging-billing, container billing
-      <- [effective]  base/kustomization.yaml (line 2, configMapGenerator staging-billing-config) = "14"
+      <- [effective]  base/kustomization.yaml (line 12, configMapGenerator staging-billing-config) = "14"
                       create (env file billing.properties:2)
 
 Billing:RetryCount = "10"
@@ -22,9 +22,9 @@ Billing:RetryCount = "10"
   [effective]  environment variable BILLING_Billing__RetryCount = "10"
     <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Billing__RetryCount, kustomize-build.yaml:5) = "10"
                     envFrom on Deployment/staging-billing, container billing
-      <- [overridden] base/kustomization.yaml (line 3, configMapGenerator staging-billing-config) = "5"
+      <- [overridden] base/kustomization.yaml (line 12, configMapGenerator staging-billing-config) = "5"
                       create (env file billing.properties:3)
-      <- [effective]  overlays/staging/kustomization.yaml (line 1, configMapGenerator staging-billing-config) = "10"
+      <- [effective]  overlays/staging/kustomization.yaml (line 12, configMapGenerator staging-billing-config) = "10"
                       merge (env file staging.properties:1)
 
 Logging:LogLevel:Default = "Debug"
@@ -33,7 +33,7 @@ Logging:LogLevel:Default = "Debug"
   [effective]  environment variable BILLING_Logging__LogLevel__Default = "Debug"
     <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Logging__LogLevel__Default, kustomize-build.yaml:6) = "Debug"
                     envFrom on Deployment/staging-billing, container billing
-      <- [effective]  overlays/staging/kustomization.yaml (line 2, configMapGenerator staging-billing-config) = "Debug"
+      <- [effective]  overlays/staging/kustomization.yaml (line 12, configMapGenerator staging-billing-config) = "Debug"
                       merge (env file staging.properties:2)
 
 Smtp:Host = "smtp.staging.internal"

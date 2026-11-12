@@ -268,4 +268,26 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Assert.Empty(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "x", Reference = new ConfigMapKeyRef("c", "A") }, diagnostics));
         Assert.Empty(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.KubernetesConfigMap, Source = "x", Reference = new FileRef("/x") }, diagnostics));
     }
+
+    [Fact]
+    public void Env_file_entries_point_at_the_envs_line_in_the_kustomization()
+    {
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                literals: [X=0]
+                envs:
+                  - first.properties
+                  - second.properties
+            """);
+        Write("app/first.properties", "# comment\nA=1\n");
+        Write("app/second.properties", "\n\n\nB=2\n");
+        var cfg = Load().Find("cfg", isSecret: false)!;
+
+        // The line is the envs entry in kustomization.yaml, not the line inside the env file.
+        Assert.Equal(5, cfg.Keys["A"][0].Line);
+        Assert.Equal("create (env file first.properties:2)", cfg.Keys["A"][0].How);
+        Assert.Equal(6, cfg.Keys["B"][0].Line);
+        Assert.Equal("create (env file second.properties:4)", cfg.Keys["B"][0].How);
+    }
 }
