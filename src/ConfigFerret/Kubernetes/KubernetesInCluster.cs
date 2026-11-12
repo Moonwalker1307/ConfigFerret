@@ -1,6 +1,5 @@
 using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
-using ConfigFerret.Internal;
 
 namespace ConfigFerret.Kubernetes;
 
@@ -80,6 +79,8 @@ public static class KubernetesInCluster
     public static async Task<KubernetesManifests> LoadPodAsync(HttpClient client, string @namespace, string podName, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(@namespace);
+        ArgumentNullException.ThrowIfNull(podName);
         var podJson = await client.GetStringAsync(
             new Uri($"api/v1/namespaces/{Uri.EscapeDataString(@namespace)}/pods/{Uri.EscapeDataString(podName)}", UriKind.Relative),
             cancellationToken).ConfigureAwait(false);
@@ -104,11 +105,9 @@ public static class KubernetesInCluster
                 continue;
             }
 
+            // Add reports text that cannot be parsed as a FormatException, like Parse does for the pod.
             var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            foreach (var doc in Yaml.LoadDocuments(json))
-            {
-                manifests.AddObject(doc, $"configmap {name}");
-            }
+            manifests.Add(json, $"configmap {name}");
         }
 
         return manifests;

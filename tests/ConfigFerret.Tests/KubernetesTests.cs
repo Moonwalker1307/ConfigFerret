@@ -136,6 +136,14 @@ public class KubernetesTests
     public async Task LoadPodAsync_rejects_a_null_client() =>
         await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(null!, "ns", "pod"));
 
+    [Fact]
+    public async Task LoadPodAsync_rejects_a_null_namespace_or_pod_name()
+    {
+        using var client = new HttpClient();
+        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(client, null!, "pod"));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(client, "ns", null!));
+    }
+
     private sealed class FakeApi : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
