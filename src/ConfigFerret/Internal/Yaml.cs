@@ -15,7 +15,7 @@ internal static class Yaml
         var stream = new YamlStream();
         try
         {
-            RejectForwardAliases(text);
+            RejectUnsafeAliases(text);
             using var reader = new StringReader(text);
             stream.Load(reader);
         }
@@ -29,26 +29,45 @@ internal static class Yaml
     }
 
     /// <summary>
-    /// Rejects an alias that comes before its anchor. YAML does not allow it, and YamlDotNet's representation
-    /// model accepts it but then overflows the stack when the alias is a mapping key (found by fuzzing).
-    /// A stack overflow ends the process, so this has to be caught before the document is loaded.
+    /// Rejects an alias that comes before its anchor, and an alias inside the node its anchor is on.
+    /// YAML does not allow the first. Both make a stack overflow, which ends the process, so they have to be
+    /// caught before the document is loaded (found by fuzzing): YamlDotNet's representation model overflows on a
+    /// forward alias used as a mapping key, and walking a node that contains itself never ends.
     /// </summary>
-    private static void RejectForwardAliases(string text)
+    private static void RejectUnsafeAliases(string text)
     {
         using var reader = new StringReader(text);
         var parser = new Parser(reader);
-        var anchors = new HashSet<AnchorName>();
+        var current = new Dictionary<AnchorName, int>(); // the latest definition of each anchor
+        var open = new Stack<int>(); // definitions of the collections being read, 0 for none
+        var nextId = 1;
         while (parser.MoveNext())
         {
             switch (parser.Current)
             {
                 case DocumentStart:
-                    anchors.Clear();
+                    current.Clear();
                     break;
-                case AnchorAlias alias when !anchors.Contains(alias.Value):
+                case AnchorAlias alias when !current.ContainsKey(alias.Value):
                     throw new YamlException(alias.Start, alias.End, $"The alias *{alias.Value} is used before its anchor &{alias.Value} is defined.");
-                case NodeEvent { Anchor.IsEmpty: false } node:
-                    anchors.Add(node.Anchor);
+                case AnchorAlias alias when open.Contains(current[alias.Value]):
+                    throw new YamlException(alias.Start, alias.End, $"The alias *{alias.Value} is inside the node its anchor &{alias.Value} is on, so the node would contain itself.");
+                case MappingStart or SequenceStart:
+                    var start = (NodeEvent)parser.Current;
+                    var definition = 0;
+                    if (!start.Anchor.IsEmpty)
+                    {
+                        definition = nextId++;
+                        current[start.Anchor] = definition;
+                    }
+
+                    open.Push(definition);
+                    break;
+                case MappingEnd or SequenceEnd:
+                    open.Pop();
+                    break;
+                case NodeEvent { Anchor.IsEmpty: false } scalar:
+                    current[scalar.Anchor] = nextId++;
                     break;
             }
         }
