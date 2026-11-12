@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  CFT_Db__Timeout: {{ .Values.db.timeout | quote }}
+  CFT_Logging__Level: {{ .Values.logging.level | quote }}

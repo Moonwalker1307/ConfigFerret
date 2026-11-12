@@ -1,0 +1,55 @@
+# Source: api/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  CFT_Db__Timeout: "42"
+  CFT_Logging__Level: "Information"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secrets
+data:
+  password: cHJvZC1wYXNzd29yZA==
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-files
+data:
+  appsettings.Production.json: |
+    { "Db": { "Timeout": 60 } }
+---
+# Source: api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            - name: CFT_Db__Host
+              value: "db.internal"
+            - name: CFT_Db__Password
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: password
+          volumeMounts:
+            - name: files
+              mountPath: /app/appsettings.Production.json
+              subPath: appsettings.Production.json
+        - name: sidecar
+          image: busybox
+      volumes:
+        - name: files
+          configMap:
+            name: api-files

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ConfigFerret/ConfigFerret.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ConfigFerret.Tests/ConfigFerret.Tests.csproj" />
+  </Folder>
+</Solution>
