@@ -74,8 +74,8 @@ public class GoldenTests
     {
         var dir = Fixture("helm-release");
         var config = new ConfigurationBuilder()
-            .AddJsonFile(Path.Combine(dir, "app", "appsettings.json"))
-            .AddJsonFile(Path.Combine(dir, "app", "appsettings.Production.json"))
+            .AddJsonFile(Path.Join(dir, "app", "appsettings.json"))
+            .AddJsonFile(Path.Join(dir, "app", "appsettings.Production.json"))
             .AddEnvironmentVariables(SetProcessEnvironment(OrdersPod, "ORDERS_"))
             .AddCommandLine(["--Features:Search=false"])
             .Build();
@@ -86,10 +86,10 @@ public class GoldenTests
                 o.Environment = OrdersPod;
                 o.RevealSensitiveValues = reveal;
             })
-            .WithKubernetes(KubernetesManifests.LoadFile(Path.Combine(dir, "rendered.yaml")), workload: "orders", container: "orders")
+            .WithKubernetes(KubernetesManifests.LoadFile(Path.Join(dir, "rendered.yaml")), workload: "orders", container: "orders")
             .WithHelm(HelmChart.Load(
-                Path.Combine(dir, "chart"),
-                [Path.Combine(dir, "values-prod.yaml"), Path.Combine(dir, "values-eu.yaml")],
+                Path.Join(dir, "chart"),
+                [Path.Join(dir, "values-prod.yaml"), Path.Join(dir, "values-eu.yaml")],
                 ["cache.ttl=900"]))
             .Trace();
     }
@@ -98,14 +98,14 @@ public class GoldenTests
     {
         var dir = Fixture("kustomize-overlay");
         var config = new ConfigurationBuilder()
-            .AddJsonFile(Path.Combine(dir, "app", "appsettings.json"))
+            .AddJsonFile(Path.Join(dir, "app", "appsettings.json"))
             .AddEnvironmentVariables(SetProcessEnvironment(BillingPod, "BILLING_"))
             .Build();
 
         return ConfigTracer.For(config)
             .WithOptions(o => o.Environment = BillingPod)
-            .WithKubernetes(KubernetesManifests.LoadFile(Path.Combine(dir, "kustomize-build.yaml")))
-            .WithKustomize(Kustomization.Load(Path.Combine(dir, "kustomize", "overlays", "staging")))
+            .WithKubernetes(KubernetesManifests.LoadFile(Path.Join(dir, "kustomize-build.yaml")))
+            .WithKustomize(Kustomization.Load(Path.Join(dir, "kustomize", "overlays", "staging")))
             .Trace();
     }
 
@@ -113,9 +113,9 @@ public class GoldenTests
     {
         var dir = Fixture("local-dev");
         var config = new ConfigurationBuilder()
-            .AddJsonFile(Path.Combine(dir, "appsettings.json"))
-            .AddJsonFile(Path.Combine(dir, "appsettings.Development.json"))
-            .AddJsonFile(Path.Combine(dir, "usersecrets", "orders-api-6f1c2e9a", "secrets.json"))
+            .AddJsonFile(Path.Join(dir, "appsettings.json"))
+            .AddJsonFile(Path.Join(dir, "appsettings.Development.json"))
+            .AddJsonFile(Path.Join(dir, "usersecrets", "orders-api-6f1c2e9a", "secrets.json"))
             .AddEnvironmentVariables(SetProcessEnvironment(DeveloperShell, "DEVAPP_"))
             .AddCommandLine(["--Paging:MaxPageSize=50"])
             .Build();
