@@ -12,6 +12,14 @@ internal static class Yaml
     /// <exception cref="YamlException">The text is not valid YAML.</exception>
     public static List<YamlNode> LoadDocuments(string text)
     {
+        // Found by fuzzing: YamlDotNet 18.1.0 reads input through a 1024-character look-ahead buffer, and some
+        // text whose length is an exact multiple of 1024 makes its scanner spin for seconds. A trailing line break
+        // moves the end off the boundary and changes nothing for config YAML.
+        if (text.Length > 0 && text.Length % 1024 == 0)
+        {
+            text += "\n";
+        }
+
         var stream = new YamlStream();
         try
         {

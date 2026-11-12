@@ -97,4 +97,24 @@ public class FuzzRegressionTests
 
         Assert.Equal("5", HelmChart.FromText([("values.yaml", yaml)]).GetValue("a.c"));
     }
+
+    [Fact]
+    public void Yaml_of_exactly_1024_characters_does_not_stall_the_scanner()
+    {
+        // Found by fuzzing: YamlDotNet's scanner spun for over 10 seconds on this 1024-character input.
+        var yaml = Read("helm-values-1024-chars-slow.yaml");
+        Assert.Equal(1024, yaml.Length);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            HelmChart.FromText([("values.yaml", yaml)]);
+        }
+        catch (FormatException)
+        {
+            // Rejecting it is fine; taking seconds is not.
+        }
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"Parsing took {watch.Elapsed}.");
+    }
 }
