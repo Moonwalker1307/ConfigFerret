@@ -1,0 +1,331 @@
+﻿{
+  "settings": [
+    {
+      "key": "Billing:Currency",
+      "value": "EUR",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Billing__Currency from ConfigMap staging-billing-config-8tk4mh2b7c, set in base/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 3",
+          "value": "USD",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Billing__Currency",
+          "value": "EUR",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap staging-billing-config-8tk4mh2b7c",
+              "location": "key BILLING_Billing__Currency, kustomize-build.yaml:3",
+              "value": "EUR",
+              "effective": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "base/kustomization.yaml",
+                  "location": "line 8, configMapGenerator staging-billing-config",
+                  "value": "EUR",
+                  "effective": true,
+                  "note": "create (literal)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Billing:InvoiceDueDays",
+      "value": "14",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Billing__InvoiceDueDays from ConfigMap staging-billing-config-8tk4mh2b7c, set in base/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 4",
+          "value": "30",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Billing__InvoiceDueDays",
+          "value": "14",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap staging-billing-config-8tk4mh2b7c",
+              "location": "key BILLING_Billing__InvoiceDueDays, kustomize-build.yaml:4",
+              "value": "14",
+              "effective": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "base/kustomization.yaml",
+                  "location": "line 2, configMapGenerator staging-billing-config",
+                  "value": "14",
+                  "effective": true,
+                  "note": "create (env file billing.properties:2)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Billing:RetryCount",
+      "value": "10",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Billing__RetryCount from ConfigMap staging-billing-config-8tk4mh2b7c, set in overlays/staging/kustomization.yaml over base/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 5",
+          "value": "3",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Billing__RetryCount",
+          "value": "10",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap staging-billing-config-8tk4mh2b7c",
+              "location": "key BILLING_Billing__RetryCount, kustomize-build.yaml:5",
+              "value": "10",
+              "effective": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "base/kustomization.yaml",
+                  "location": "line 3, configMapGenerator staging-billing-config",
+                  "value": "5",
+                  "effective": false,
+                  "note": "create (env file billing.properties:3)"
+                },
+                {
+                  "kind": "Kustomize",
+                  "source": "overlays/staging/kustomization.yaml",
+                  "location": "line 1, configMapGenerator staging-billing-config",
+                  "value": "10",
+                  "effective": true,
+                  "note": "merge (env file staging.properties:1)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Logging:LogLevel:Default",
+      "value": "Debug",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Logging__LogLevel__Default from ConfigMap staging-billing-config-8tk4mh2b7c, set in overlays/staging/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 16",
+          "value": "Information",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Logging__LogLevel__Default",
+          "value": "Debug",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap staging-billing-config-8tk4mh2b7c",
+              "location": "key BILLING_Logging__LogLevel__Default, kustomize-build.yaml:6",
+              "value": "Debug",
+              "effective": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "overlays/staging/kustomization.yaml",
+                  "location": "line 2, configMapGenerator staging-billing-config",
+                  "value": "Debug",
+                  "effective": true,
+                  "note": "merge (env file staging.properties:2)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Smtp:Host",
+      "value": "smtp.staging.internal",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Smtp__Host from ConfigMap staging-billing-config-8tk4mh2b7c, set in overlays/staging/kustomization.yaml over base/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 8",
+          "value": "localhost",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Smtp__Host",
+          "value": "smtp.staging.internal",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap staging-billing-config-8tk4mh2b7c",
+              "location": "key BILLING_Smtp__Host, kustomize-build.yaml:7",
+              "value": "smtp.staging.internal",
+              "effective": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "base/kustomization.yaml",
+                  "location": "line 9, configMapGenerator staging-billing-config",
+                  "value": "smtp.internal",
+                  "effective": false,
+                  "note": "create (literal)"
+                },
+                {
+                  "kind": "Kustomize",
+                  "source": "overlays/staging/kustomization.yaml",
+                  "location": "line 10, configMapGenerator staging-billing-config",
+                  "value": "smtp.staging.internal",
+                  "effective": true,
+                  "note": "merge (literal)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Smtp:Port",
+      "value": "25",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Smtp__Port from ConfigMap staging-billing-config-8tk4mh2b7c, set in base/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 9",
+          "value": "1025",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Smtp__Port",
+          "value": "25",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap staging-billing-config-8tk4mh2b7c",
+              "location": "key BILLING_Smtp__Port, kustomize-build.yaml:8",
+              "value": "25",
+              "effective": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "base/kustomization.yaml",
+                  "location": "line 10, configMapGenerator staging-billing-config",
+                  "value": "25",
+                  "effective": true,
+                  "note": "create (literal)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Stripe:ApiKey",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in appsettings.json, overridden by environment variable BILLING_Stripe__ApiKey from Secret staging-billing-secrets-m6f9g2d5h8, set in overlays/staging/kustomization.yaml over base/kustomization.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 12",
+          "value": "***",
+          "effective": false,
+          "sensitive": true
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable BILLING_Stripe__ApiKey",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "origins": [
+            {
+              "kind": "KubernetesSecret",
+              "source": "Secret staging-billing-secrets-m6f9g2d5h8",
+              "location": "key BILLING_Stripe__ApiKey, kustomize-build.yaml:15",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "note": "envFrom on Deployment/staging-billing, container billing",
+              "origins": [
+                {
+                  "kind": "Kustomize",
+                  "source": "base/kustomization.yaml",
+                  "location": "line 16, secretGenerator staging-billing-secrets",
+                  "value": "***",
+                  "effective": false,
+                  "sensitive": true,
+                  "note": "create (literal)"
+                },
+                {
+                  "kind": "Kustomize",
+                  "source": "overlays/staging/kustomization.yaml",
+                  "location": "line 14, secretGenerator staging-billing-secrets",
+                  "value": null,
+                  "effective": false,
+                  "removal": true,
+                  "sensitive": true,
+                  "note": "replace"
+                },
+                {
+                  "kind": "Kustomize",
+                  "source": "overlays/staging/kustomization.yaml",
+                  "location": "line 17, secretGenerator staging-billing-secrets",
+                  "value": "***",
+                  "effective": true,
+                  "sensitive": true,
+                  "note": "replace (literal)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

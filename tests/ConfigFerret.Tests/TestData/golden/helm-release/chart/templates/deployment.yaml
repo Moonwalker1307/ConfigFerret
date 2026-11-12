@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    spec:
+      containers:
+        - name: orders
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          envFrom:
+            - prefix: ORDERS_
+              configMapRef:
+                name: {{ .Release.Name }}-config
+          env:
+            - name: ORDERS_Db__Host
+              value: {{ .Values.db.host | quote }}
+            - name: ORDERS_Db__Password
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-db
+                  key: password
+            - name: ORDERS_Api__BaseUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Release.Name }}-endpoints
+                  key: api-base-url
+            - name: ORDERS_Pod__Name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+        - name: metrics
+          image: ghcr.io/example/metrics-exporter:0.9.1
