@@ -51,4 +51,33 @@ public class KustomizationTests
             root.Delete(recursive: true);
         }
     }
+
+    [Fact]
+    public void A_configmap_and_a_secret_can_share_a_name()
+    {
+        // Found by fuzzing: this threw ArgumentException from Load.
+        var root = Directory.CreateTempSubdirectory("ferret-");
+        try
+        {
+            File.WriteAllText(Path.Join(root.FullName, "kustomization.yaml"), """
+                configMapGenerator:
+                  - name: api
+                    literals: [MODE=fast]
+                secretGenerator:
+                  - name: api
+                    literals: [PASSWORD=hunter2]
+                """);
+
+            var kustomization = Kustomization.Load(root.FullName);
+
+            Assert.Equal("fast", kustomization.Find("api", isSecret: false)!.Keys["MODE"][^1].Value);
+            Assert.Equal("hunter2", kustomization.Find("api-0123456789", isSecret: true)!.Keys["PASSWORD"][^1].Value);
+            Assert.Single(kustomization.ConfigMaps);
+            Assert.Single(kustomization.Secrets);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
 }

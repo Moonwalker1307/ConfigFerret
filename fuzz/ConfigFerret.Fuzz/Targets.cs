@@ -257,7 +257,7 @@ internal static class Targets
 
         var resolver = new KustomizeResolver(kustomization);
         var diagnostics = new TraceDiagnostics();
-        foreach (var (name, generated) in kustomization.Generated)
+        foreach (var (name, generated) in kustomization.ConfigMaps.Concat(kustomization.Secrets))
         {
             if (kustomization.Find(name, generated.IsSecret) is null || kustomization.Find(name + "-0123456789", generated.IsSecret) is null)
             {
