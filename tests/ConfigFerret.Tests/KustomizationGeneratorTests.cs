@@ -56,7 +56,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Write("app/b.properties", "E=5\n");
         var k = Load();
 
-        var cfg = k.Generated["cfg"];
+        var cfg = k.ConfigMaps["cfg"];
         Assert.Equal(["A", "B", "C", "D "], cfg.Keys.Keys.Order(StringComparer.Ordinal));
         Assert.Equal("1", cfg.Keys["A"][0].Value);
         Assert.Equal(3, cfg.Keys["A"][0].Line);
@@ -64,7 +64,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Assert.Equal("quoted", cfg.Keys["B"][0].Value);
         Assert.Equal("single", cfg.Keys["C"][0].Value);
         Assert.Equal(" 4", cfg.Keys["D "][0].Value);
-        Assert.Equal("5", k.Generated["single"].Keys["E"][0].Value);
+        Assert.Equal("5", k.ConfigMaps["single"].Keys["E"][0].Value);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
                   - conf/app.json
                   - alias=conf/other.txt
             """);
-        var cfg = Load().Generated["cfg"];
+        var cfg = Load().ConfigMaps["cfg"];
 
         Assert.Null(cfg.Keys["app.json"][0].Value);
         Assert.Equal("create (file conf/app.json)", cfg.Keys["app.json"][0].How);
@@ -98,7 +98,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
                   - =z
                   - C='
             """);
-        var cfg = Load().Generated["cfg"];
+        var cfg = Load().ConfigMaps["cfg"];
 
         Assert.Equal(["A", "B", "C"], cfg.Keys.Keys.Order(StringComparer.Ordinal));
         Assert.Equal("x", cfg.Keys["A"][0].Value);
@@ -129,12 +129,12 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Write("app/deployment.yaml", "kind: Deployment\n");
         var k = Load();
 
-        var m = k.Generated["m"];
+        var m = k.ConfigMaps["m"];
         Assert.Equal(["1"], m.Keys["A"].Select(h => h.Value));
         Assert.Equal(["2", "3"], m.Keys["B"].Select(h => h.Value));
         Assert.Equal("merge (literal)", m.Keys["B"][1].How);
         Assert.Equal(["base/kustomization.yaml", "app/kustomization.yaml"], m.Keys["B"].Select(h => h.Kustomization));
-        Assert.Equal(["Z"], k.Generated["c"].Keys.Keys);
+        Assert.Equal(["Z"], k.ConfigMaps["c"].Keys.Keys);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
                 behavior: replace
                 literals: [C=3]
             """);
-        var s = Load().Generated["s"];
+        var s = Load().Secrets["s"];
 
         Assert.Equal([false, true], s.Keys["A"].Select(h => h.IsRemoval));
         Assert.Equal("replace", s.Keys["A"][1].How);
@@ -187,7 +187,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
             """);
         var k = Load();
 
-        Assert.Equal(["b-v2", "own-v2"], k.Generated.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["b-v2", "own-v2"], k.ConfigMaps.Keys.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
                 literals: [A=1]
             """);
 
-        Assert.Equal("app/kustomization.yml", Load().Generated["cfg"].Keys["A"][0].Kustomization);
+        Assert.Equal("app/kustomization.yml", Load().ConfigMaps["cfg"].Keys["A"][0].Kustomization);
     }
 
     [Fact]
@@ -207,7 +207,9 @@ public sealed class KustomizationGeneratorTests : IDisposable
     {
         Write("app/Kustomization", "");
 
-        Assert.Empty(Load().Generated);
+        var empty = Load();
+        Assert.Empty(empty.ConfigMaps);
+        Assert.Empty(empty.Secrets);
     }
 
     [Fact]
@@ -231,7 +233,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Write("x/kustomization.yaml", "resources: [../base]\n");
         Write("app/kustomization.yaml", "resources: [../base, ../x]\n");
 
-        Assert.Single(Load().Generated);
+        Assert.Single(Load().ConfigMaps);
     }
 
     [Fact]
