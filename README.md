@@ -138,6 +138,19 @@ it to nuget.org with [trusted publishing](https://learn.microsoft.com/nuget/nuge
 is stored. It needs a trusted publishing policy on nuget.org for workflow `ci.yml` in this repository, owned by
 the nuget.org account `Moonwalker1307` (set the `NUGET_USER` repository variable to use another account).
 
+### Mutation testing
+
+[Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) checks how many code changes the tests
+catch. It runs on `net10.0`, and needs the `TargetFrameworks` variable so the build skips `net11.0`:
+
+```
+dotnet tool restore
+cd tests/ConfigFerret.Tests
+TargetFrameworks=net10.0 dotnet stryker
+```
+
+The HTML report is written to `tests/ConfigFerret.Tests/StrykerOutput/<run>/reports/`.
+
 ## License
 
 MIT
