@@ -25,7 +25,7 @@ internal static class JsonLineLocator
     {
         // Found by fuzzing: Utf8JsonReader rejects a byte order mark, which editors such as Visual Studio
         // often write, while the .NET JSON provider reads the file fine.
-        if (json.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]))
+        if (json.StartsWith("\uFEFF"u8))
         {
             json = json[3..];
         }

@@ -58,7 +58,8 @@ public class JsonLineLocatorTests
         // Found by fuzzing: this used to throw InvalidOperationException out of the tracer,
         // although the .NET JSON provider loads the same file.
         byte[] json = [.. "{\n  \"Db\": {\n    \"T"u8, 0xD4, .. "t\": 60\n  }\n}\n"u8];
-        var config = new ConfigurationBuilder().AddJsonStream(new MemoryStream(json)).Build();
+        using var stream = new MemoryStream(json);
+        var config = new ConfigurationBuilder().AddJsonStream(stream).Build();
         var key = Assert.Single(config.AsEnumerable(), p => p.Value is not null).Key;
 
         var lines = JsonLineLocator.Locate(json);
