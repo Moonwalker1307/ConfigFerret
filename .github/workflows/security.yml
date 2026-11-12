@@ -107,6 +107,18 @@ jobs:
           category: /language:csharp
           output: sarif-results
 
+      - name: Summarize CodeQL results
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## CodeQL results"
+            echo
+            jq -r '.runs[].results[] | "- `\(.ruleId)` (\(.level // "warning")) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine): \(.message.text | split("\n")[0])"' sarif-results/*.sarif
+            echo
+            echo "Total: $(jq '[.runs[].results[]] | length' sarif-results/*.sarif)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Keep the raw results as an artifact so they can be read without access to the Security tab.
       - uses: actions/upload-artifact@v5
         if: always()
