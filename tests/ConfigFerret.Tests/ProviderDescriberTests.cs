@@ -65,7 +65,7 @@ public sealed class ProviderDescriberTests : IDisposable
     [InlineData(false, null)]
     public void Notes_optional_files(bool optional, string? note)
     {
-        var path = Path.Combine(_dir, "settings.json");
+        var path = Path.Join(_dir, "settings.json");
         File.WriteAllText(path, """{ "A": "1" }""");
         var provider = Single(new ConfigurationBuilder().AddJsonFile(path, optional));
 
@@ -80,8 +80,8 @@ public sealed class ProviderDescriberTests : IDisposable
     [Fact]
     public void Marks_user_secrets_as_sensitive()
     {
-        var dir = Directory.CreateDirectory(Path.Combine(_dir, "usersecrets", "abc")).FullName;
-        var path = Path.Combine(dir, "secrets.json");
+        var dir = Directory.CreateDirectory(Path.Join(_dir, "usersecrets", "abc")).FullName;
+        var path = Path.Join(dir, "secrets.json");
         File.WriteAllText(path, """{ "Pw": "x" }""");
         var provider = Single(new ConfigurationBuilder().AddJsonFile(path));
 
@@ -119,11 +119,11 @@ public sealed class ProviderDescriberTests : IDisposable
     [Fact]
     public void Describes_key_per_file_secrets()
     {
-        File.WriteAllText(Path.Combine(_dir, "Db__Password"), "pw");
+        File.WriteAllText(Path.Join(_dir, "Db__Password"), "pw");
         var provider = Single(new ConfigurationBuilder().AddKeyPerFile(_dir, optional: false));
 
         var step = Describer().Describe(provider, "Db:Password", "pw");
-        var physical = Path.Combine(_dir, "Db__Password");
+        var physical = Path.Join(_dir, "Db__Password");
 
         Assert.Equal($"key-per-file {physical}", step.Source);
         Assert.True(step.IsSensitive);
