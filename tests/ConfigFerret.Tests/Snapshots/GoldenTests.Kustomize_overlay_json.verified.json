@@ -71,7 +71,7 @@
                 {
                   "kind": "Kustomize",
                   "source": "base/kustomization.yaml",
-                  "location": "line 2, configMapGenerator staging-billing-config",
+                  "location": "line 12, configMapGenerator staging-billing-config",
                   "value": "14",
                   "effective": true,
                   "note": "create (env file billing.properties:2)"
@@ -112,7 +112,7 @@
                 {
                   "kind": "Kustomize",
                   "source": "base/kustomization.yaml",
-                  "location": "line 3, configMapGenerator staging-billing-config",
+                  "location": "line 12, configMapGenerator staging-billing-config",
                   "value": "5",
                   "effective": false,
                   "note": "create (env file billing.properties:3)"
@@ -120,7 +120,7 @@
                 {
                   "kind": "Kustomize",
                   "source": "overlays/staging/kustomization.yaml",
-                  "location": "line 1, configMapGenerator staging-billing-config",
+                  "location": "line 12, configMapGenerator staging-billing-config",
                   "value": "10",
                   "effective": true,
                   "note": "merge (env file staging.properties:1)"
@@ -161,7 +161,7 @@
                 {
                   "kind": "Kustomize",
                   "source": "overlays/staging/kustomization.yaml",
-                  "location": "line 2, configMapGenerator staging-billing-config",
+                  "location": "line 12, configMapGenerator staging-billing-config",
                   "value": "Debug",
                   "effective": true,
                   "note": "merge (env file staging.properties:2)"
