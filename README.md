@@ -126,7 +126,7 @@ dotnet pack src/ConfigFerret -c Release
 ```
 
 Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, pass `-p:TargetFrameworks=net10.0`.
-CI builds and tests both on Windows, Linux and macOS, and packs the NuGet package. Pushing a `v*` tag publishes
+CI builds and tests both on Linux for pull requests, and on Windows, Linux and macOS after a merge to `main`, then packs the NuGet package. Pushing a `v*` tag publishes
 it to nuget.org when the `NUGET_API_KEY` secret is set.
 
 ## License
