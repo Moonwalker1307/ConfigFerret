@@ -140,8 +140,9 @@ public sealed class Kustomization
         foreach (var generator in generators.Items())
         {
             var name = generator.Str("name");
-            if (name is null)
+            if (string.IsNullOrEmpty(name))
             {
+                // kustomize rejects a generator without a name (found by fuzzing: name: '').
                 continue;
             }
 

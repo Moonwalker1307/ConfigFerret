@@ -80,4 +80,23 @@ public class KustomizationTests
             root.Delete(recursive: true);
         }
     }
+
+    [Fact]
+    public void A_generator_with_an_empty_name_is_skipped()
+    {
+        // Found by fuzzing: name: '' produced a generated ConfigMap that Find could never match.
+        var root = Directory.CreateTempSubdirectory("ferret-");
+        try
+        {
+            File.WriteAllText(Path.Join(root.FullName, "kustomization.yaml"), "configMapGenerator:\n  - name: ''\n    literals: [A=1]\n");
+
+            var kustomization = Kustomization.Load(root.FullName);
+
+            Assert.Empty(kustomization.ConfigMaps);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
 }
