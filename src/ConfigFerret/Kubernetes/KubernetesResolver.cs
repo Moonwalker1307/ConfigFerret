@@ -53,12 +53,20 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         }
 
         var workload = candidates[0];
-        var containers = workload.Containers
-            .Where(c => containerName is null || string.Equals(c.Name, containerName, StringComparison.Ordinal))
-            .ToList();
+        // Without a name, pick among the app containers; init containers run before the app and are rarely what is traced.
+        var containers = containerName is not null
+            ? workload.Containers.Where(c => string.Equals(c.Name, containerName, StringComparison.Ordinal)).ToList()
+            : workload.Containers.Where(c => !c.IsInitContainer).ToList();
+        if (containers.Count == 0 && containerName is null)
+        {
+            containers = [.. workload.Containers];
+        }
+
         if (containers.Count == 0)
         {
-            diagnostics.Warn($"No container named '{containerName}' in {workload.DisplayName}.");
+            diagnostics.Warn(containerName is null
+                ? $"{workload.DisplayName} has no containers."
+                : $"No container named '{containerName}' in {workload.DisplayName}.");
             return null;
         }
 

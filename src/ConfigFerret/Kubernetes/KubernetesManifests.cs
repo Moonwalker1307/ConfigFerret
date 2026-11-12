@@ -128,15 +128,14 @@ public sealed class KubernetesManifests
             return;
         }
 
-        var containers = podSpec.Get("containers").Items()
-            .Concat(podSpec.Get("initContainers").Items())
-            .Select(ReadContainer)
+        var containers = podSpec.Get("containers").Items().Select(c => ReadContainer(c, isInit: false))
+            .Concat(podSpec.Get("initContainers").Items().Select(c => ReadContainer(c, isInit: true)))
             .ToList();
         var volumes = podSpec.Get("volumes").Items().Select(ReadVolume).ToList();
         _workloads.Add(new Workload(kind, name, containers, volumes, sourceName));
     }
 
-    private static Container ReadContainer(YamlNode c)
+    private static Container ReadContainer(YamlNode c, bool isInit)
     {
         var env = new List<EnvEntry>();
         foreach (var e in c.Get("env").Items())
@@ -191,7 +190,7 @@ public sealed class KubernetesManifests
             .Select(m => new VolumeMount(m.Str("name") ?? "", m.Str("mountPath") ?? "", m.Str("subPath")))
             .ToList();
 
-        return new Container(c.Str("name") ?? "(unnamed)", env, envFrom, mounts);
+        return new Container(c.Str("name") ?? "(unnamed)", env, envFrom, mounts, isInit);
     }
 
     private static Volume ReadVolume(YamlNode v)
@@ -290,7 +289,17 @@ public sealed record Workload(string Kind, string Name, IReadOnlyList<Container>
 }
 
 /// <summary>A container in a pod spec.</summary>
-public sealed record Container(string Name, IReadOnlyList<EnvEntry> Env, IReadOnlyList<EnvFromEntry> EnvFrom, IReadOnlyList<VolumeMount> VolumeMounts);
+/// <param name="Name">The container name.</param>
+/// <param name="Env">The <c>env</c> entries.</param>
+/// <param name="EnvFrom">The <c>envFrom</c> entries.</param>
+/// <param name="VolumeMounts">The <c>volumeMounts</c> entries.</param>
+/// <param name="IsInitContainer">True for an entry in <c>initContainers</c>.</param>
+public sealed record Container(
+    string Name,
+    IReadOnlyList<EnvEntry> Env,
+    IReadOnlyList<EnvFromEntry> EnvFrom,
+    IReadOnlyList<VolumeMount> VolumeMounts,
+    bool IsInitContainer = false);
 
 /// <summary>An <c>env</c> entry in a container.</summary>
 public sealed record EnvEntry(string Name, EnvValueSource Source, int Line);
