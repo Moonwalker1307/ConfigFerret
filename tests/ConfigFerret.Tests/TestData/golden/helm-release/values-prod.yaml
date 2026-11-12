@@ -1,0 +1,8 @@
+replicaCount: 6
+db:
+  host: orders-db.prod.svc
+  timeout: 45
+logging:
+  level: Warning
+features:
+  recommendations: null

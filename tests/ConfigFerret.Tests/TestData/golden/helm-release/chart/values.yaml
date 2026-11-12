@@ -1,0 +1,17 @@
+replicaCount: 2
+image:
+  repository: ghcr.io/example/orders
+  tag: "1.4.0"
+db:
+  host: postgres.default.svc
+  port: 5432
+  timeout: 30
+cache:
+  ttl: 300
+logging:
+  level: Information
+api:
+  baseUrl: https://api.example.test
+features:
+  search: true
+  recommendations: false

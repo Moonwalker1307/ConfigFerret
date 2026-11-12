@@ -1,0 +1,512 @@
+﻿{
+  "settings": [
+    {
+      "key": "AllowedHosts",
+      "value": "*",
+      "sensitive": false,
+      "story": "set in appsettings.json",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 23",
+          "value": "*",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Api:BaseUrl",
+      "value": "https://eu.api.example.test",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Api__BaseUrl from ConfigMap orders-endpoints, rendered by Helm template templates/endpoints.yaml from .Values.api.baseUrl, set in values-eu.yaml over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 21",
+          "value": "http://localhost:5080",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Api__BaseUrl",
+          "value": "https://eu.api.example.test",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-endpoints",
+              "location": "key api-base-url, rendered.yaml:22",
+              "value": "https://eu.api.example.test",
+              "effective": true,
+              "note": "configMapKeyRef on Deployment/orders, container orders",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/endpoints.yaml",
+                  "location": "line 6",
+                  "value": "https://eu.api.example.test",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.api.baseUrl",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 14, api.baseUrl",
+                      "value": "https://api.example.test",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "values-eu.yaml",
+                      "location": "line 4, api.baseUrl",
+                      "value": "https://eu.api.example.test",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Cache:Ttl",
+      "value": "900",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Cache__Ttl from ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.cache.ttl, set in --set cache.ttl over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 9",
+          "value": "60",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Cache__Ttl",
+          "value": "900",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-config",
+              "location": "key Cache__Ttl, rendered.yaml:12",
+              "value": "900",
+              "effective": true,
+              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/configmap.yaml",
+                  "location": "line 10",
+                  "value": "900",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.cache.ttl",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 10, cache.ttl",
+                      "value": "300",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "--set cache.ttl",
+                      "location": "cache.ttl",
+                      "value": "900",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db:Host",
+      "value": "orders-db.prod.svc",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Db__Host from Deployment/orders env ORDERS_Db__Host, rendered by Helm template templates/deployment.yaml from .Values.db.host, set in values-prod.yaml over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 3",
+          "value": "localhost",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Db__Host",
+          "value": "orders-db.prod.svc",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesWorkload",
+              "source": "Deployment/orders env ORDERS_Db__Host",
+              "location": "rendered.yaml:50",
+              "value": "orders-db.prod.svc",
+              "effective": true,
+              "note": "container orders",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/deployment.yaml",
+                  "location": "line 18",
+                  "value": "orders-db.prod.svc",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.db.host",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 6, db.host",
+                      "value": "postgres.default.svc",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "values-prod.yaml",
+                      "location": "line 3, db.host",
+                      "value": "orders-db.prod.svc",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db:Password",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Db__Password from Secret orders-db",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 6",
+          "value": "***",
+          "effective": false,
+          "sensitive": true
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Db__Password",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "origins": [
+            {
+              "kind": "KubernetesSecret",
+              "source": "Secret orders-db",
+              "location": "key password, rendered.yaml:31",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "note": "secretKeyRef on Deployment/orders, container orders"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db:Port",
+      "value": "5432",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Db__Port from ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.db.port, set in values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 4",
+          "value": "5432",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Db__Port",
+          "value": "5432",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-config",
+              "location": "key Db__Port, rendered.yaml:10",
+              "value": "5432",
+              "effective": true,
+              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/configmap.yaml",
+                  "location": "line 8",
+                  "value": "5432",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.db.port",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 7, db.port",
+                      "value": "5432",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db:Timeout",
+      "value": "60",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by appsettings.Production.json, overridden again by environment variable ORDERS_Db__Timeout from ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.db.timeout, set in values-eu.yaml over values.yaml (chart default) and values-prod.yaml",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 5",
+          "value": "15",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.Production.json",
+          "location": "line 3",
+          "value": "30",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Db__Timeout",
+          "value": "60",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-config",
+              "location": "key Db__Timeout, rendered.yaml:11",
+              "value": "60",
+              "effective": true,
+              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/configmap.yaml",
+                  "location": "line 9",
+                  "value": "60",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.db.timeout",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 8, db.timeout",
+                      "value": "30",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "values-prod.yaml",
+                      "location": "line 4, db.timeout",
+                      "value": "45",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "values-eu.yaml",
+                      "location": "line 2, db.timeout",
+                      "value": "60",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Features:Search",
+      "value": "false",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Features__Search from ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.features.search, set in values.yaml (chart default), overridden again by command-line argument --Features:Search",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 18",
+          "value": "True",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Features__Search",
+          "value": "true",
+          "effective": false,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-config",
+              "location": "key Features__Search, rendered.yaml:14",
+              "value": "true",
+              "effective": true,
+              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/configmap.yaml",
+                  "location": "line 12",
+                  "value": "true",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.features.search",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 16, features.search",
+                      "value": "true",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "command-line argument --Features:Search",
+          "value": "false",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Logging:LogLevel:Default",
+      "value": "Warning",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by appsettings.Production.json, overridden again by environment variable ORDERS_Logging__LogLevel__Default from ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.logging.level, set in values-prod.yaml over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 13",
+          "value": "Debug",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.Production.json",
+          "location": "line 7",
+          "value": "Information",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Logging__LogLevel__Default",
+          "value": "Warning",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-config",
+              "location": "key Logging__LogLevel__Default, rendered.yaml:13",
+              "value": "Warning",
+              "effective": true,
+              "note": "envFrom on Deployment/orders, container orders with prefix \u0027ORDERS_\u0027",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/configmap.yaml",
+                  "location": "line 11",
+                  "value": "Warning",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.logging.level",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 12, logging.level",
+                      "value": "Information",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "values-prod.yaml",
+                      "location": "line 6, logging.level",
+                      "value": "Warning",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Logging:LogLevel:Microsoft.AspNetCore",
+      "value": "Warning",
+      "sensitive": false,
+      "story": "set in appsettings.json",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 14",
+          "value": "Warning",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Pod:Name",
+      "value": "orders-7c9d8f6b5-x2kqp",
+      "sensitive": false,
+      "story": "set in environment variable ORDERS_Pod__Name from downward API metadata.name",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Pod__Name",
+          "value": "orders-7c9d8f6b5-x2kqp",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesField",
+              "source": "downward API metadata.name",
+              "location": "rendered.yaml:62",
+              "value": null,
+              "effective": true,
+              "note": "fieldRef on Deployment/orders, container orders"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

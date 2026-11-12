@@ -1,0 +1,4 @@
+db:
+  timeout: 60
+api:
+  baseUrl: https://eu.api.example.test

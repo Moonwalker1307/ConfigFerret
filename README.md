@@ -126,6 +126,13 @@ dotnet pack src/ConfigFerret -c Release
 ```
 
 Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, pass `-p:TargetFrameworks=net10.0`.
+
+`GoldenTests` traces three realistic setups in `tests/ConfigFerret.Tests/TestData/golden/` (a Helm release, a
+Kustomize overlay and a developer machine) and compares the full text and JSON output with the approved snapshots
+in `tests/ConfigFerret.Tests/Snapshots/`, using [Verify](https://github.com/VerifyTests/Verify). When you change
+the output on purpose, the failing test writes a `.received.` file next to the snapshot: check the diff, then
+rename it to `.verified.` (or accept it in your diff tool) and commit it.
+
 CI builds and tests both on Linux for pull requests, and on Windows, Linux and macOS after a merge to `main`, then packs the NuGet package. Pushing a `v*` tag publishes
 it to nuget.org with [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing), so no API key
 is stored. It needs a trusted publishing policy on nuget.org for workflow `ci.yml` in this repository, owned by

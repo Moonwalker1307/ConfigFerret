@@ -1,0 +1,30 @@
+﻿Banner = "Welcome\nto the dev build"
+  set in appsettings.json
+  [effective]  appsettings.json (line 13) = "Welcome\nto the dev build"
+
+ConnectionStrings:Default = "***"
+  set in appsettings.json, overridden by environment variable DEVAPP_ConnectionStrings__Default
+  [overridden] appsettings.json (line 3) = "***"
+  [effective]  environment variable DEVAPP_ConnectionStrings__Default = "***"
+
+Jwt:Issuer = "https://dev.localhost:5001"
+  set in appsettings.json, overridden by appsettings.Development.json
+  [overridden] appsettings.json (line 6) = "https://localhost:5001"
+  [effective]  appsettings.Development.json (line 6) = "https://dev.localhost:5001"
+
+Jwt:SigningKey = "***"
+  set in appsettings.json, overridden by user secrets (secrets.json)
+  [overridden] appsettings.json (line 7) = "dev-signing-key"
+  [effective]  user secrets (secrets.json) (line 3) = "***"
+
+Paging:MaxPageSize = "50"
+  set in appsettings.json, overridden by command-line argument --Paging:MaxPageSize
+  [overridden] appsettings.json (line 11) = "100"
+  [effective]  command-line argument --Paging:MaxPageSize = "50"
+
+Paging:PageSize = "10"
+  set in appsettings.json, overridden by appsettings.Development.json, overridden again by environment variable DEVAPP_Paging__PageSize
+  [overridden] appsettings.json (line 10) = "20"
+  [overridden] appsettings.Development.json (line 3) = "5"
+  [effective]  environment variable DEVAPP_Paging__PageSize = "10"
+

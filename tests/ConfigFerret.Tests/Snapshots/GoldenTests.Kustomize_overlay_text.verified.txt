@@ -1,0 +1,71 @@
+﻿Billing:Currency = "EUR"
+  set in appsettings.json, overridden by environment variable BILLING_Billing__Currency from ConfigMap staging-billing-config-8tk4mh2b7c, set in base/kustomization.yaml
+  [overridden] appsettings.json (line 3) = "USD"
+  [effective]  environment variable BILLING_Billing__Currency = "EUR"
+    <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Billing__Currency, kustomize-build.yaml:3) = "EUR"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [effective]  base/kustomization.yaml (line 8, configMapGenerator staging-billing-config) = "EUR"
+                      create (literal)
+
+Billing:InvoiceDueDays = "14"
+  set in appsettings.json, overridden by environment variable BILLING_Billing__InvoiceDueDays from ConfigMap staging-billing-config-8tk4mh2b7c, set in base/kustomization.yaml
+  [overridden] appsettings.json (line 4) = "30"
+  [effective]  environment variable BILLING_Billing__InvoiceDueDays = "14"
+    <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Billing__InvoiceDueDays, kustomize-build.yaml:4) = "14"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [effective]  base/kustomization.yaml (line 2, configMapGenerator staging-billing-config) = "14"
+                      create (env file billing.properties:2)
+
+Billing:RetryCount = "10"
+  set in appsettings.json, overridden by environment variable BILLING_Billing__RetryCount from ConfigMap staging-billing-config-8tk4mh2b7c, set in overlays/staging/kustomization.yaml over base/kustomization.yaml
+  [overridden] appsettings.json (line 5) = "3"
+  [effective]  environment variable BILLING_Billing__RetryCount = "10"
+    <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Billing__RetryCount, kustomize-build.yaml:5) = "10"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [overridden] base/kustomization.yaml (line 3, configMapGenerator staging-billing-config) = "5"
+                      create (env file billing.properties:3)
+      <- [effective]  overlays/staging/kustomization.yaml (line 1, configMapGenerator staging-billing-config) = "10"
+                      merge (env file staging.properties:1)
+
+Logging:LogLevel:Default = "Debug"
+  set in appsettings.json, overridden by environment variable BILLING_Logging__LogLevel__Default from ConfigMap staging-billing-config-8tk4mh2b7c, set in overlays/staging/kustomization.yaml
+  [overridden] appsettings.json (line 16) = "Information"
+  [effective]  environment variable BILLING_Logging__LogLevel__Default = "Debug"
+    <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Logging__LogLevel__Default, kustomize-build.yaml:6) = "Debug"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [effective]  overlays/staging/kustomization.yaml (line 2, configMapGenerator staging-billing-config) = "Debug"
+                      merge (env file staging.properties:2)
+
+Smtp:Host = "smtp.staging.internal"
+  set in appsettings.json, overridden by environment variable BILLING_Smtp__Host from ConfigMap staging-billing-config-8tk4mh2b7c, set in overlays/staging/kustomization.yaml over base/kustomization.yaml
+  [overridden] appsettings.json (line 8) = "localhost"
+  [effective]  environment variable BILLING_Smtp__Host = "smtp.staging.internal"
+    <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Smtp__Host, kustomize-build.yaml:7) = "smtp.staging.internal"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [overridden] base/kustomization.yaml (line 9, configMapGenerator staging-billing-config) = "smtp.internal"
+                      create (literal)
+      <- [effective]  overlays/staging/kustomization.yaml (line 10, configMapGenerator staging-billing-config) = "smtp.staging.internal"
+                      merge (literal)
+
+Smtp:Port = "25"
+  set in appsettings.json, overridden by environment variable BILLING_Smtp__Port from ConfigMap staging-billing-config-8tk4mh2b7c, set in base/kustomization.yaml
+  [overridden] appsettings.json (line 9) = "1025"
+  [effective]  environment variable BILLING_Smtp__Port = "25"
+    <- [effective]  ConfigMap staging-billing-config-8tk4mh2b7c (key BILLING_Smtp__Port, kustomize-build.yaml:8) = "25"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [effective]  base/kustomization.yaml (line 10, configMapGenerator staging-billing-config) = "25"
+                      create (literal)
+
+Stripe:ApiKey = "***"
+  set in appsettings.json, overridden by environment variable BILLING_Stripe__ApiKey from Secret staging-billing-secrets-m6f9g2d5h8, set in overlays/staging/kustomization.yaml over base/kustomization.yaml
+  [overridden] appsettings.json (line 12) = "***"
+  [effective]  environment variable BILLING_Stripe__ApiKey = "***"
+    <- [effective]  Secret staging-billing-secrets-m6f9g2d5h8 (key BILLING_Stripe__ApiKey, kustomize-build.yaml:15) = "***"
+                    envFrom on Deployment/staging-billing, container billing
+      <- [overridden] base/kustomization.yaml (line 16, secretGenerator staging-billing-secrets) = "***"
+                      create (literal)
+      <- [removed]    overlays/staging/kustomization.yaml (line 14, secretGenerator staging-billing-secrets)
+                      replace
+      <- [effective]  overlays/staging/kustomization.yaml (line 17, secretGenerator staging-billing-secrets) = "***"
+                      replace (literal)
+
