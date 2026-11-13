@@ -40,11 +40,11 @@ public sealed class UnusedReport
         SkippedEnvironmentKeys = skippedEnvironmentKeys;
     }
 
-    /// <summary>Values that are always overridden or removed by a later layer in this trace, sorted by key.</summary>
+    /// <summary>Values that are always overridden or removed by a later layer in this trace, in the order of <see cref="ProvenanceReport.Settings"/>.</summary>
     public IReadOnlyList<OverriddenValue> NeverWinning { get; }
 
     /// <summary>
-    /// Configured keys the app did not read, sorted by key, each with every layer that sets it.
+    /// Configured keys the app did not read, in the order of <see cref="ProvenanceReport.Settings"/>, each with every layer that sets it.
     /// Null when no reads were given.
     /// </summary>
     public IReadOnlyList<TracedSetting>? NotRead { get; }
