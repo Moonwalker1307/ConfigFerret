@@ -6,8 +6,6 @@ namespace ConfigFerret.Octopus;
 /// </summary>
 public sealed class OctopusTraceOptions
 {
-    private readonly Dictionary<string, string> _mappings = new(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>The environment deployed to, for example <c>Production</c>.</summary>
     public string? Environment { get; set; }
 
@@ -46,11 +44,17 @@ public sealed class OctopusTraceOptions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(variableName);
-        _mappings[name] = variableName;
+        Links[name] = variableName;
         return this;
     }
 
-    internal string? FindMapping(string name) => _mappings.GetValueOrDefault(name);
+    /// <summary>
+    /// The explicit links, from layer name (environment variable, env entry, ConfigMap/Secret key or configuration key)
+    /// to Octopus variable name. <see cref="Map"/> adds to it, and it can be bound from a <c>Links</c> configuration section.
+    /// </summary>
+    public IDictionary<string, string> Links { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    internal string? FindMapping(string name) => Links.TryGetValue(name, out var variable) && !string.IsNullOrWhiteSpace(variable) ? variable : null;
 
     /// <summary>The context values for one Octopus scope dimension, or null when the dimension was not given.</summary>
     internal IReadOnlyCollection<string>? Context(string dimension) => dimension switch

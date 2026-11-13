@@ -102,6 +102,24 @@ var report = ConfigTracer.For(builder.Configuration)
     .Trace();
 ```
 
+Both packages can also be set up from configuration with dependency injection:
+
+```csharp
+builder.Services.AddConfigFerretGitHub(builder.Configuration.GetSection("ConfigFerret:GitHub"));
+builder.Services.AddConfigFerretOctopus(builder.Configuration.GetSection("ConfigFerret:Octopus"));
+var app = builder.Build();
+
+var tracer = ConfigTracer.For(builder.Configuration);
+await tracer.WithGitHubAsync(app.Services);
+await tracer.WithOctopusAsync(app.Services);
+var report = tracer.Trace();
+```
+
+Put the owner, repository, server address, project and environment in appsettings.json. Put the token and API key in
+user secrets (`dotnet user-secrets set "ConfigFerret:Octopus:ApiKey" "API-..."`), an environment variable
+(`ConfigFerret__Octopus__ApiKey`) or a key vault, never in a committed appsettings file: startup fails if either is in
+an `appsettings*.json` file. See each package's readme for the settings.
+
 Tokens and API keys go only in request headers, only over HTTPS, and never into a report. Secret values cannot be read
 from either API, so secrets and sensitive variables appear by name and are redacted like any other secret.
 

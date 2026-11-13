@@ -3,10 +3,11 @@ using System.Text.RegularExpressions;
 
 namespace ConfigFerret.GitHub;
 
-/// <summary>How to link configuration layers to GitHub Actions variables.</summary>
+/// <summary>How to link configuration layers to GitHub Actions variables. Can be bound from a configuration section.</summary>
 public sealed partial class GitHubTraceOptions
 {
     private readonly Dictionary<string, GitHubMapping> _mappings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _readWorkflows = new(StringComparer.Ordinal);
 
     /// <summary>
     /// When true (the default), an environment variable, Kubernetes env entry or ConfigMap/Secret key is linked to a
@@ -14,8 +15,21 @@ public sealed partial class GitHubTraceOptions
     /// </summary>
     public bool MatchByName { get; set; } = true;
 
-    /// <summary>The explicit links, from <see cref="Map"/> and the workflow files read with <see cref="AddWorkflow"/>.</summary>
+    /// <summary>The links from the workflow files read with <see cref="AddWorkflow"/>, <see cref="AddWorkflowText"/> or <see cref="Workflows"/>.</summary>
     public IReadOnlyCollection<GitHubMapping> Mappings => _mappings.Values;
+
+    /// <summary>
+    /// Explicit links, from layer name (environment variable, env entry or ConfigMap/Secret key) to GitHub variable name.
+    /// Prefix the value with <c>secrets.</c> for a secret (<c>vars.</c> is optional). <see cref="Map"/> adds to it, and it
+    /// can be bound from a <c>Links</c> configuration section. These win over links from workflow files.
+    /// </summary>
+    public IDictionary<string, string> Links { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Workflow files to read for links, relative to the current directory. Bindable from a <c>Workflows</c> configuration
+    /// section. A file that cannot be read becomes a trace warning instead of an error.
+    /// </summary>
+    public IList<string> Workflows { get; } = [];
 
     /// <summary>
     /// Links the environment variable, Kubernetes env entry or ConfigMap/Secret key <paramref name="name"/> to the GitHub
@@ -25,7 +39,7 @@ public sealed partial class GitHubTraceOptions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(variableName);
-        _mappings[name] = new GitHubMapping(name, variableName, kind, null);
+        Links[name] = kind == GitHubVariableKind.Secret ? "secrets." + variableName : variableName;
         return this;
     }
 
@@ -66,7 +80,44 @@ public sealed partial class GitHubTraceOptions
         return this;
     }
 
-    internal GitHubMapping? FindMapping(string name) => _mappings.GetValueOrDefault(name);
+    internal GitHubMapping? FindMapping(string name)
+    {
+        if (Links.TryGetValue(name, out var link) && !string.IsNullOrWhiteSpace(link))
+        {
+            link = link.Trim();
+            if (link.StartsWith("secrets.", StringComparison.OrdinalIgnoreCase))
+            {
+                return new GitHubMapping(name, link["secrets.".Length..], GitHubVariableKind.Secret, null);
+            }
+
+            return new GitHubMapping(name, link.StartsWith("vars.", StringComparison.OrdinalIgnoreCase) ? link["vars.".Length..] : link, GitHubVariableKind.Variable, null);
+        }
+
+        return _mappings.GetValueOrDefault(name);
+    }
+
+    /// <summary>Reads the files in <see cref="Workflows"/> once, and returns a warning for each one that cannot be read.</summary>
+    internal List<string> ReadConfiguredWorkflows()
+    {
+        var warnings = new List<string>();
+        lock (_readWorkflows)
+        {
+            foreach (var path in Workflows.Where(p => !string.IsNullOrWhiteSpace(p) && !_readWorkflows.Contains(p)))
+            {
+                try
+                {
+                    AddWorkflow(path);
+                    _readWorkflows.Add(path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                {
+                    warnings.Add($"Could not read GitHub workflow {path}: {ex.Message}");
+                }
+            }
+        }
+
+        return warnings;
+    }
 
     // NAME: ${{ vars.X }}, name and value optionally quoted, optionally a "- " list item, optionally a trailing comment.
     [GeneratedRegex(
@@ -75,9 +126,9 @@ public sealed partial class GitHubTraceOptions
     private static partial Regex EnvFromExpression();
 }
 
-/// <summary>An explicit link from a layer name to a GitHub variable or secret.</summary>
+/// <summary>A link from a layer name to a GitHub variable or secret.</summary>
 /// <param name="Name">The environment variable, env entry or ConfigMap/Secret key name.</param>
 /// <param name="VariableName">The GitHub variable or secret name.</param>
 /// <param name="Kind">Variable or secret.</param>
-/// <param name="Where">The workflow file and line that made the link, or null when it was set with <see cref="GitHubTraceOptions.Map"/>.</param>
+/// <param name="Where">The workflow file and line that made the link, or null for an explicit link (<see cref="GitHubTraceOptions.Links"/>).</param>
 public sealed record GitHubMapping(string Name, string VariableName, GitHubVariableKind Kind, string? Where);

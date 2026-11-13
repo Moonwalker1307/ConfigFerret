@@ -32,6 +32,56 @@ Console.WriteLine(report.Explain("Db:Timeout"));
 // set in appsettings.json from Octopus variable Db:Timeout
 ```
 
+## Configure from appsettings and dependency injection
+
+Put everything except the API key in configuration, and register the source:
+
+```json
+// appsettings.json: no API key here
+{
+  "ConfigFerret": {
+    "Octopus": {
+      "ServerUri": "https://contoso.octopus.app/",
+      "Space": "Default",
+      "Project": "billing-api",
+      "Environment": "Production",
+      "Roles": [ "web" ],
+      "Links": { "DB__TIMEOUT": "Db:Timeout" }
+    }
+  }
+}
+```
+
+```csharp
+builder.Services.AddConfigFerretOctopus(builder.Configuration.GetSection("ConfigFerret:Octopus"));
+var app = builder.Build();
+
+var tracer = ConfigTracer.For(builder.Configuration);
+await tracer.WithOctopusAsync(app.Services);
+Console.WriteLine(tracer.Trace().Explain("Db:Timeout"));
+```
+
+Supply the API key from somewhere that is not committed:
+
+```
+dotnet user-secrets set "ConfigFerret:Octopus:ApiKey" "API-..."    # development
+export ConfigFerret__Octopus__ApiKey="API-..."                     # CI, containers
+```
+
+or from a key vault configuration provider.
+
+Every property of `OctopusVariablesOptions` and `OctopusTraceOptions` binds from the section (`Machine`, `Channel`,
+`Step`, `TenantTags`, `IncludeLibraryVariableSets`, `MatchConfigurationKeys`, `MatchByName` and so on).
+
+When the host starts, the options are checked, and startup fails with a message naming the key when:
+
+- `ServerUri`, `Project` or `ApiKey` is missing,
+- `ServerUri` is not HTTPS (plain HTTP only to localhost or with `AllowUnencryptedHttp`) or holds credentials,
+- the API key is in any `appsettings*.json` file, even one that another source overrides, since that file is usually
+  committed. User secrets (`secrets.json`), environment variables and key vaults are fine.
+
+The messages never include the API key. Without a host, the same checks run the first time the options are read.
+
 ## How layers are linked
 
 - **JSON keys** (on by default, `MatchConfigurationKeys`): a key in a JSON file is linked to the Octopus variable with
