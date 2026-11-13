@@ -219,4 +219,30 @@ public class ConfigTracerTests
             Environment.SetEnvironmentVariable(variable, null);
         }
     }
+
+    [Theory]
+    [InlineData("Db:Password", true)]
+    [InlineData("Db:Pass", true)]
+    [InlineData("DB_PASS", true)]
+    [InlineData("Cert:Passphrase", true)]
+    [InlineData("Jwt:Key", true)]
+    [InlineData("Jwt:SigningKey", true)]
+    [InlineData("DataProtection:EncryptionKey", true)]
+    [InlineData("Storage:AccountKey", true)]
+    [InlineData("ServiceBus:SharedAccessKey", true)]
+    [InlineData("Blob:Sas", true)]
+    [InlineData("Sentry:Dsn", true)]
+    [InlineData("Webhook:HmacKey", true)]
+    [InlineData("Api:Bearer", true)]
+    [InlineData("CUSTOMCONNSTR_Db", true)]
+    [InlineData("Cache:KeyPrefix", false)]
+    [InlineData("Proxy:PassThrough", false)]
+    [InlineData("Logging:LogLevel:Default", false)]
+    [InlineData("Kestrel:Certificates:Default:Path", false)]
+    [InlineData("Ui:Keyboard", false)]
+    [InlineData("Db:Timeout", false)]
+    public void Default_pattern_catches_common_secret_names_only(string key, bool sensitive)
+    {
+        Assert.Equal(sensitive, new TraceOptions().SensitiveKeyPattern!.IsMatch(key));
+    }
 }

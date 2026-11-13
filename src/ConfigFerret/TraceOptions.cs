@@ -5,9 +5,15 @@ namespace ConfigFerret;
 /// <summary>Options for a trace.</summary>
 public sealed class TraceOptions
 {
-    /// <summary>The default pattern for keys whose values are treated as secret.</summary>
+    /// <summary>
+    /// The default pattern for keys whose values are treated as secret. Short words such as <c>pass</c>, <c>key</c>,
+    /// <c>sas</c> and <c>dsn</c> count only as a whole key segment (<c>Db:Pass</c>, <c>Jwt:Key</c>, <c>DB_PASS</c>), so
+    /// <c>Cache:KeyPrefix</c> and <c>PassThrough</c> stay visible.
+    /// </summary>
     public const string DefaultSensitiveKeyPattern =
-        @"(password|passwd|pwd|secret|token|apikey|api_key|api-key|connectionstring|credential|privatekey|private_key|accesskey|access_key)";
+        @"(password|passwd|pwd|passphrase|secret|token|apikey|api_key|api-key|connectionstring|connstr|credential|privatekey|private_key|accesskey|access_key"
+        + @"|sharedaccess|(signing|encryption|master|shared|account|storage|hmac|subscription)_?key|bearer"
+        + @"|(^|[^a-z])(pass|key|sas|dsn)($|[^a-z]))";
 
     /// <summary>
     /// When false (the default), values that come from Secrets, user secrets or key-per-file mounts,

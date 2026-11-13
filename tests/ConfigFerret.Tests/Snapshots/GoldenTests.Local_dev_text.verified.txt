@@ -14,7 +14,7 @@ Jwt:Issuer = "https://dev.localhost:5001"
 
 Jwt:SigningKey = "***"
   set in appsettings.json, overridden by user secrets (secrets.json)
-  [overridden] appsettings.json (line 7) = "dev-signing-key"
+  [overridden] appsettings.json (line 7) = "***"
   [effective]  user secrets (secrets.json) (line 3) = "***"
 
 Paging:MaxPageSize = "50"
