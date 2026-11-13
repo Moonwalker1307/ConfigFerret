@@ -29,4 +29,25 @@ public static class OctopusTracerExtensions
         configure?.Invoke(options);
         return tracer.WithResolver(new OctopusResolver(variables, options));
     }
+
+    /// <summary>
+    /// Loads the Octopus variables with the <see cref="OctopusVariablesSource"/> registered by
+    /// <c>AddConfigFerretOctopus</c>, and matches them against the deployment bound from configuration.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var tracer = ConfigTracer.For(builder.Configuration);
+    /// await tracer.WithOctopusAsync(app.Services);
+    /// Console.WriteLine(tracer.Trace().Explain("Db:Timeout"));
+    /// </code>
+    /// </example>
+    public static async Task<ConfigTracer> WithOctopusAsync(this ConfigTracer tracer, IServiceProvider services, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tracer);
+        ArgumentNullException.ThrowIfNull(services);
+        var source = (OctopusVariablesSource?)services.GetService(typeof(OctopusVariablesSource))
+            ?? throw new InvalidOperationException("OctopusVariablesSource is not registered. Call services.AddConfigFerretOctopus(configuration.GetSection(\"ConfigFerret:Octopus\")) first.");
+        var variables = await source.LoadAsync(cancellationToken).ConfigureAwait(false);
+        return tracer.WithResolver(new OctopusResolver(variables, source.TraceOptions));
+    }
 }

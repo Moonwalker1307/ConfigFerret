@@ -3,6 +3,7 @@ namespace ConfigFerret.GitHub;
 /// <summary>Links environment variables, Kubernetes env entries and ConfigMap/Secret keys to GitHub Actions variables.</summary>
 internal sealed class GitHubResolver(GitHubVariables variables, GitHubTraceOptions options) : IOriginResolver
 {
+    private readonly List<string> _workflowWarnings = options.ReadConfiguredWorkflows();
     private bool _warned;
 
     public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
@@ -12,7 +13,7 @@ internal sealed class GitHubResolver(GitHubVariables variables, GitHubTraceOptio
         if (!_warned)
         {
             _warned = true;
-            foreach (var warning in variables.Warnings)
+            foreach (var warning in variables.Warnings.Concat(_workflowWarnings))
             {
                 diagnostics.Warn(warning);
             }
