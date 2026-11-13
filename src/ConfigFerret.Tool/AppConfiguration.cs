@@ -39,13 +39,10 @@ internal static partial class AppConfiguration
         var baseFile = Path.Join(directory, "appsettings.json");
         var environmentFile = Path.Join(directory, $"appsettings.{environmentName}.json");
         var foundAny = false;
-        foreach (var file in new[] { baseFile, environmentFile }.Distinct(StringComparer.Ordinal))
+        foreach (var file in new[] { baseFile, environmentFile }.Distinct(StringComparer.Ordinal).Where(File.Exists))
         {
-            if (File.Exists(file))
-            {
-                builder.AddJsonFile(file, optional: false);
-                foundAny = true;
-            }
+            builder.AddJsonFile(file, optional: false);
+            foundAny = true;
         }
 
         foreach (var file in inputs.ConfigFiles)

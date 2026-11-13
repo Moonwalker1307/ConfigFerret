@@ -11,7 +11,7 @@ internal sealed class ToolRunner
 
     public FakeHttpHandler? Http { get; set; }
 
-    public static string Golden(params string[] parts) => Path.Combine([AppContext.BaseDirectory, "TestData", "golden", .. parts]);
+    public static string Golden(params string[] parts) => Path.Join([AppContext.BaseDirectory, "TestData", "golden", .. parts]);
 
     public async Task<ToolResult> RunAsync(params string[] args)
     {

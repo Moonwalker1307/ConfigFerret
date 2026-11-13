@@ -32,32 +32,32 @@ internal sealed class InputReader(CliHost host)
     public KubernetesManifests ReadManifests(IReadOnlyList<string> paths)
     {
         KubernetesManifests? manifests = null;
-        foreach (var path in paths)
+        foreach (var file in paths.SelectMany(ExpandFolder))
         {
-            IEnumerable<string> files = path != StandardInput && Directory.Exists(path)
-                ? Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories)
-                    .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
-                        || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
-                        || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-                    .Order(StringComparer.Ordinal)
-                : [path];
-            foreach (var file in files)
+            var text = ReadText(file);
+            var name = file == StandardInput ? "stdin" : Path.GetFileName(file);
+            if (manifests is null)
             {
-                var text = ReadText(file);
-                var name = file == StandardInput ? "stdin" : Path.GetFileName(file);
-                if (manifests is null)
-                {
-                    manifests = KubernetesManifests.Parse(text, name);
-                }
-                else
-                {
-                    manifests.Add(text, name);
-                }
+                manifests = KubernetesManifests.Parse(text, name);
+            }
+            else
+            {
+                manifests.Add(text, name);
             }
         }
 
         return manifests ?? throw new UsageException("No manifest files found in " + string.Join(", ", paths) + ".");
     }
+
+    // A folder stands for every manifest file below it, in a stable order.
+    private static IEnumerable<string> ExpandFolder(string path) =>
+        path != StandardInput && Directory.Exists(path)
+            ? Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories)
+                .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
+                    || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
+                    || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                .Order(StringComparer.Ordinal)
+            : [path];
 
     public static string RequireFile(string path)
     {
