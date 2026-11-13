@@ -18,8 +18,12 @@ internal static partial class Targets
         var reads = (parts.ElementAtOrDefault(4) ?? string.Empty).Split('\n').Take(200).ToList();
 
         var builder = new ConfigurationBuilder();
-        AddJson(builder, parts.ElementAtOrDefault(0));
-        AddJson(builder, parts.ElementAtOrDefault(1));
+        using var appsettings = JsonStream(parts.ElementAtOrDefault(0));
+        using var production = JsonStream(parts.ElementAtOrDefault(1));
+        foreach (var stream in new[] { appsettings, production }.OfType<MemoryStream>())
+        {
+            builder.AddJsonStream(stream);
+        }
         var memory = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in (parts.ElementAtOrDefault(2) ?? string.Empty).Split('\n').Take(200))
         {
@@ -91,13 +95,7 @@ internal static partial class Targets
         CheckUnused(container, container.FindUnused(reads), reads);
     }
 
-    private static void AddJson(ConfigurationBuilder builder, string? json)
-    {
-        if (json is not null)
-        {
-            builder.AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json)));
-        }
-    }
+    private static MemoryStream? JsonStream(string? json) => json is null ? null : new MemoryStream(Encoding.UTF8.GetBytes(json));
 
     private static void CheckUnused(ProvenanceReport report, UnusedReport unused, IReadOnlyCollection<string>? reads)
     {

@@ -243,26 +243,19 @@ public class GitHubVariablesTests
     [Fact]
     public async Task Stops_after_100_pages_from_a_server_that_never_ends()
     {
-        var handler = new EndlessPages();
-        using var client = new HttpClient(handler);
+        var page = JsonSerializer.Serialize(new { total_count = 1_000_000, variables = Enumerable.Range(1, 30).Select(i => new { name = $"V{i}", value = "x" }) });
+        var handler = new FakeHttpHandler();
+        for (var n = 1; n <= 101; n++)
+        {
+            handler.Respond($"{Repo}/actions/variables?per_page=30&page={n}", page);
+        }
+
+        using var client = handler.Client();
 
         var github = await GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken);
 
-        Assert.Equal(100, handler.Count);
+        Assert.Equal(100, handler.Requests.Count);
         Assert.Equal(3000, github.Entries.Count);
-    }
-
-    private sealed class EndlessPages : HttpMessageHandler
-    {
-        private static readonly string Page = JsonSerializer.Serialize(new { total_count = 1_000_000, variables = Enumerable.Range(1, 30).Select(i => new { name = $"V{i}", value = "x" }) });
-
-        public int Count { get; private set; }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Count++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Page) });
-        }
     }
 
     [Fact]

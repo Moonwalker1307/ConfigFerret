@@ -256,6 +256,7 @@ internal static partial class Targets
     /// <summary>Answers each request with the next scripted response, then with a fallback once they run out.</summary>
     private sealed class ScriptedServer(List<(HttpStatusCode Status, string Body)> responses, string fallback) : HttpMessageHandler
     {
+        private readonly List<HttpResponseMessage> _sent = [];
         private int _next;
 
         public List<string> Requests { get; } = [];
@@ -268,7 +269,23 @@ internal static partial class Targets
             var (status, body) = _next < responses.Count ? responses[_next] : (HttpStatusCode.OK, fallback);
             _next++;
             Echoed |= body.Contains(Token, StringComparison.Ordinal);
-            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+            var response = new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            _sent.Add(response);
+            return Task.FromResult(response);
+        }
+
+        // The loaders dispose what they read, but the server owns what it sent, so it disposes it too.
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                foreach (var response in _sent)
+                {
+                    response.Dispose();
+                }
+            }
+
+            base.Dispose(disposing);
         }
     }
 }
