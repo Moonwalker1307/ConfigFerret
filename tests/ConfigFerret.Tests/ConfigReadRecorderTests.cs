@@ -123,6 +123,7 @@ public class ConfigReadRecorderTests
         var builder = new ConfigurationBuilder().AddInMemoryCollection(Settings);
         builder.RecordReads();
         var config = builder.Build();
+        using var disposeConfig = (IDisposable)config;
 
         config["Db:Timeout"] = "99";
         Assert.Equal("99", config["Db:Timeout"]);
@@ -131,7 +132,6 @@ public class ConfigReadRecorderTests
         var provider = Assert.IsType<RecordingConfigurationProvider>(Assert.Single(config.Providers));
         Assert.Equal(provider.Inner.ToString(), provider.ToString());
         config.Reload();
-        (config as IDisposable)?.Dispose();
     }
 
     [Fact]

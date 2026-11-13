@@ -39,12 +39,9 @@ public sealed class ConfigReadRecorder
     public void Add(IEnumerable<string> keys)
     {
         ArgumentNullException.ThrowIfNull(keys);
-        foreach (var key in keys)
+        foreach (var key in keys.Where(k => !string.IsNullOrEmpty(k)))
         {
-            if (!string.IsNullOrEmpty(key))
-            {
-                _keys.TryAdd(key, 0);
-            }
+            _keys.TryAdd(key, 0);
         }
     }
 
