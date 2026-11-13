@@ -118,6 +118,45 @@ if (KubernetesInCluster.IsInCluster)
 This reads the pod (`POD_NAME` or `HOSTNAME`) and the ConfigMaps it references with the pod's service account.
 Grant it `get` on `pods` and `configmaps` in its namespace. Secrets are never read through the API.
 
+### From outside the app: a container in the cluster
+
+A tool that only sees the cluster, such as a cluster browser, has the manifests but not the app's own
+configuration. `ForContainer` traces what one container gets: every environment variable, then every file a
+ConfigMap or Secret volume mounts, each followed back to the ConfigMap, Secret or env entry and from there to Helm
+or Kustomize.
+
+```csharp
+using ConfigFerret;
+using ConfigFerret.Helm;
+using ConfigFerret.Kubernetes;
+
+var manifests = KubernetesManifests.Parse(podYaml, "pod api-7d9f");
+manifests.Add(configMapYaml, "configmap api-config");   // each ConfigMap and Secret the pod uses
+
+// What the Helm release holds: the chart's values, the release's own values and the templates.
+var chart = HelmChart.FromText(
+    [("values.yaml (chart default)", chartValuesYaml), ("release values", releaseValuesYaml)],
+    chartTemplates);                                     // (path, text) pairs
+
+var report = ConfigTracer.ForContainer(manifests, workload: "api-7d9f", container: "api")
+    .WithHelm(chart)
+    .Trace();
+
+Console.WriteLine(report.Explain("DB__Timeout"));
+Console.WriteLine(report.Explain("/app/appsettings.Production.json"));
+```
+
+- Keys are the environment variable names, matched case-sensitively, and the files' absolute paths. A file's value
+  is its full content; text output shortens it to one line.
+- A variable that Kubernetes sets at run time (`fieldRef`) shows `(set at run time)`. One whose ConfigMap or Secret
+  is not in the manifests shows `(unknown)`, and its value is `null` in JSON. An `envFrom` source or a volume without
+  `items` that is not in the manifests gives a warning, since the names it adds can't be listed.
+- Helm stores only the merged values a release was installed with, so a trace built from a release shows one
+  "release values" layer rather than the separate `-f` files and `--set` flags.
+- Nothing is read from the caller's own process environment, so the tool's own variables never reach the report.
+  Leave Secrets out of the manifests if the tool shouldn't read them: a `secretKeyRef` to one then shows `(unknown)`.
+- `WithKubernetes` throws on a container trace, since the manifests are already passed to `ForContainer`.
+
 ### Find possibly unused configuration
 
 ```csharp
@@ -197,6 +236,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 - Helm links are found by scanning templates for `.Values.x.y` on lines that set an env `value:` or a data key,
   so they are marked `[inferred]`. Values used through `with`, `range`, `include` or helpers are not linked yet.
   Subchart values are not traced yet.
+- Helm links match env entries and data keys by name, so an env entry that overrides a templated ConfigMap key of
+  the same name is linked to that ConfigMap's template too. The note then says the values and the manifest disagree.
 - Kustomize patches that edit env entries or ConfigMap data are not traced yet.
 - Like kustomize, a generator's `envs` files must be in or below the folder of the kustomization that names them.
   Pass `allowFilesOutsideFolder: true` to `Kustomization.Load` to lift this, like `--load-restrictor LoadRestrictionsNone`.

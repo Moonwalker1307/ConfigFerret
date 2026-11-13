@@ -4,7 +4,7 @@
     <RootNamespace>ConfigFerret.Octopus</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>ConfigFerret.Octopus</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Description>Octopus Deploy source for ConfigFerret: links configuration values to the Octopus project and library variable set variables that set them, read through the Octopus REST API with an API key, with scope matching for environment, target, role and channel.</Description>
     <PackageTags>configuration;provenance;octopus;octopus-deploy;variables;debugging</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

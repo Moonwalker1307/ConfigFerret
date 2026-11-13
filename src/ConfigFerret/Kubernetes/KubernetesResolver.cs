@@ -28,6 +28,132 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         };
     }
 
+    /// <summary>
+    /// The environment variables the selected container gets, in the order Kubernetes applies them: every key of each
+    /// loaded <c>envFrom</c> source with its prefix, then each <c>env</c> entry. A name set more than once is listed once.
+    /// </summary>
+    internal IReadOnlyList<string> EnvironmentVariableNames(TraceDiagnostics diagnostics)
+    {
+        if (Select(diagnostics) is not (var workload, var container))
+        {
+            return [];
+        }
+
+        var names = new List<string>();
+        foreach (var from in container.EnvFrom)
+        {
+            var store = from.IsSecret ? manifests.Secrets : manifests.ConfigMaps;
+            if (!store.TryGetValue(from.Name, out var data))
+            {
+                diagnostics.Warn($"envFrom {(from.IsSecret ? "Secret" : "ConfigMap")} {from.Name} on {workload.DisplayName}, container {container.Name} was not loaded, so the variables it adds are not listed.");
+                continue;
+            }
+
+            names.AddRange(data.Data.Keys.Order(StringComparer.Ordinal).Select(key => from.Prefix + key));
+        }
+
+        names.AddRange(container.Env.Select(e => e.Name));
+        return names.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Every layer that sets the environment variable <paramref name="name"/> on the selected container, lowest priority first.</summary>
+    internal IReadOnlyList<ProvenanceStep> ResolveEnvironmentVariable(string name, TraceDiagnostics diagnostics) =>
+        Select(diagnostics) is (var workload, var container) ? ResolveEnv(workload, container, name) : [];
+
+    /// <summary>
+    /// The files that ConfigMap and Secret volumes put into the selected container, as absolute paths: one per
+    /// <c>items</c> entry, one per key of a loaded source without <c>items</c>, and the mount path itself for a
+    /// <c>subPath</c> mount. A path mounted more than once is listed once. Other volume types are skipped.
+    /// </summary>
+    internal IReadOnlyList<string> MountedFilePaths(TraceDiagnostics diagnostics)
+    {
+        if (Select(diagnostics) is not (var workload, var container))
+        {
+            return [];
+        }
+
+        var paths = new List<string>();
+        foreach (var mount in container.VolumeMounts)
+        {
+            var volume = workload.Volumes.FirstOrDefault(v => string.Equals(v.Name, mount.Name, StringComparison.Ordinal));
+            if (volume is null || volume.Projections.Count == 0)
+            {
+                continue;
+            }
+
+            var mountPath = mount.MountPath.TrimEnd('/');
+            if (mount.SubPath is { Length: > 0 })
+            {
+                paths.Add(mountPath);
+                continue;
+            }
+
+            foreach (var projection in volume.Projections)
+            {
+                IEnumerable<string> relative;
+                if (projection.Items.Count > 0)
+                {
+                    relative = projection.Items.Select(i => i.Value);
+                }
+                else if ((projection.IsSecret ? manifests.Secrets : manifests.ConfigMaps).TryGetValue(projection.SourceName, out var data))
+                {
+                    relative = data.Data.Keys.Order(StringComparer.Ordinal);
+                }
+                else
+                {
+                    diagnostics.Warn($"Volume {volume.Name} on {workload.DisplayName}, container {container.Name} mounts {(projection.IsSecret ? "Secret" : "ConfigMap")} {projection.SourceName} at {mount.MountPath}, which was not loaded, so the files it adds are not listed.");
+                    continue;
+                }
+
+                paths.AddRange(relative.Select(r => mountPath + "/" + r.TrimStart('/')));
+            }
+        }
+
+        return paths.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// The ConfigMap or Secret key behind the mounted file at <paramref name="path"/>, with the file's content as its
+    /// value when the source was loaded.
+    /// </summary>
+    internal IReadOnlyList<ProvenanceStep> ResolveMountedFile(string path, TraceDiagnostics diagnostics)
+    {
+        if (Select(diagnostics) is not (var workload, var container))
+        {
+            return [];
+        }
+
+        var steps = ResolveFile(workload, container, path);
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var (isSecret, name, key) = steps[i].Reference switch
+            {
+                SecretKeyRef s => (true, s.Name, s.Key),
+                ConfigMapKeyRef c => (false, c.Name, c.Key),
+                _ => (false, "", ""),
+            };
+            var store = isSecret ? manifests.Secrets : manifests.ConfigMaps;
+            if (key.Length == 0 || !store.TryGetValue(name, out var data))
+            {
+                steps[i] = steps[i] with { Note = steps[i].Note + "; its contents were not loaded" };
+            }
+            else if (data.Data.TryGetValue(key, out var value))
+            {
+                steps[i] = steps[i] with
+                {
+                    Value = value.Value,
+                    Location = value.Line > 0 ? $"key {key}, {data.SourceName}:{value.Line}" : steps[i].Location,
+                };
+            }
+            else
+            {
+                steps[i] = steps[i] with { Note = steps[i].Note + "; the key is missing from it" };
+            }
+        }
+
+        return steps;
+    }
+
     private (Workload, Container)? Select(TraceDiagnostics diagnostics)
     {
         if (_selected)

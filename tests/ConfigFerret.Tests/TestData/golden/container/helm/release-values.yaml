@@ -1,0 +1,3 @@
+db:
+  host: db.prod.svc
+  timeout: 60

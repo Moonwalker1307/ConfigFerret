@@ -14,6 +14,7 @@ that touch `src/` or `fuzz/`. Each night starts from the corpus the previous nig
 | `helm-set` | `HelmChart.Load` with one `--set` expression per line | any exception |
 | `helm-template` | template scanning for `.Values` references | any exception |
 | `kubernetes` | `KubernetesManifests.Parse`, then the env and volume resolver for every container | anything other than `FormatException` |
+| `container` | `KubernetesManifests.Parse`, then `ConfigTracer.ForContainer(...).Trace()` for the default pick and every container, rendered as text and JSON | anything other than `FormatException`, a key listed twice or not found by `Find`, or a Secret value that is not redacted |
 | `kustomize` | `Kustomization.Load` on `overlay/kustomization.yaml %% overlay/app.properties %% base/kustomization.yaml` | anything other than `FormatException`, a missing kustomization or a cycle |
 | `env-names` | environment variable to configuration key matching: prefix, key and value lines, then `NAME=VALUE` lines | any exception, or a match that is not in the environment |
 

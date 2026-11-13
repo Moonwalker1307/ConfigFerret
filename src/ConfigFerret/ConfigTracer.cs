@@ -20,10 +20,14 @@ namespace ConfigFerret;
 /// </example>
 public sealed class ConfigTracer
 {
-    private readonly IConfigurationRoot _root;
+    // Exactly one of these is set: the app's own configuration (For), or a container seen from outside (ForContainer).
+    private readonly IConfigurationRoot? _root;
+    private readonly KubernetesResolver? _container;
     private readonly List<IOriginResolver> _resolvers = [];
 
     private ConfigTracer(IConfigurationRoot root) => _root = root;
+
+    private ConfigTracer(KubernetesResolver container) => _container = container;
 
     /// <summary>The trace options.</summary>
     public TraceOptions Options { get; private set; } = new();
@@ -33,6 +37,35 @@ public sealed class ConfigTracer
     {
         ArgumentNullException.ThrowIfNull(configuration);
         return new ConfigTracer(configuration);
+    }
+
+    /// <summary>
+    /// Starts a trace of the environment variables and mounted files a Kubernetes container gets, seen from outside
+    /// the app: from the workload spec, its ConfigMaps and Secrets, and (with <see cref="WithHelm"/> or
+    /// <see cref="WithKustomize"/>) the Helm values or Kustomize generators behind them. Use this when you have the
+    /// manifests but not the app's own configuration, for example in a cluster browser.
+    /// </summary>
+    /// <remarks>
+    /// The report lists the environment variables first, sorted by name, then the files that ConfigMap and Secret
+    /// volumes mount, sorted by absolute path. Keys are matched case-sensitively. A file's value is its full content.
+    /// A variable whose value Kubernetes sets at run time (a downward API field), or whose source is not in the
+    /// manifests, is listed with a null value.
+    /// </remarks>
+    /// <param name="manifests">The workload and the ConfigMaps and Secrets it uses. Variables from an <c>envFrom</c> source, and files from a volume source without <c>items</c>, that is not in them are not listed.</param>
+    /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
+    /// <param name="container">The container name. Needed only when the workload has more than one.</param>
+    /// <example>
+    /// <code>
+    /// var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(podAndConfigMapsYaml), workload: "api-7d9f", container: "api")
+    ///     .WithHelm(HelmChart.FromText([("values.yaml (chart default)", chartValues), ("release values", userValues)], templates))
+    ///     .Trace();
+    /// Console.WriteLine(report.Explain("DB__Timeout"));
+    /// </code>
+    /// </example>
+    public static ConfigTracer ForContainer(KubernetesManifests manifests, string? workload = null, string? container = null)
+    {
+        ArgumentNullException.ThrowIfNull(manifests);
+        return new ConfigTracer(new KubernetesResolver(manifests, workload, container));
     }
 
     /// <summary>Sets the trace options.</summary>
@@ -56,9 +89,15 @@ public sealed class ConfigTracer
     /// <param name="manifests">Rendered manifests (<c>helm template</c>, <c>kustomize build</c>, <c>kubectl get -o yaml</c>) or the live pod.</param>
     /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
     /// <param name="container">The container name. Needed only when the workload has more than one.</param>
+    /// <exception cref="InvalidOperationException">The trace was started with <see cref="ForContainer"/>, which already has its manifests.</exception>
     public ConfigTracer WithKubernetes(KubernetesManifests manifests, string? workload = null, string? container = null)
     {
         ArgumentNullException.ThrowIfNull(manifests);
+        if (_container is not null)
+        {
+            throw new InvalidOperationException("WithKubernetes links the app's configuration to Kubernetes. A trace started with ForContainer already reads the container from its manifests; add every ConfigMap and Secret to those instead.");
+        }
+
         _resolvers.Add(new KubernetesResolver(manifests, workload, container));
         return this;
     }
@@ -93,12 +132,40 @@ public sealed class ConfigTracer
         // Reading every key to trace it is not the app using it.
         using var paused = ConfigReadRecorder.Pause();
         var diagnostics = new TraceDiagnostics();
+        var layers = _root is not null ? ReadConfiguration(_root, diagnostics) : ReadContainer(_container!, diagnostics);
+
+        var settings = new List<TracedSetting>(layers.Count);
+        foreach (var (key, effectiveValue, steps) in layers)
+        {
+            var enriched = MarkEffective(steps.Select(s => Enrich(s, 1, diagnostics)).ToList());
+            var keySensitive = Options.SensitiveKeyPattern?.IsMatch(key) ?? false;
+            var effectiveSensitive = enriched.Count > 0 && IsSensitiveDeep(enriched[^1]);
+            var sensitive = keySensitive || effectiveSensitive;
+
+            var redacted = Options.RevealSensitiveValues
+                ? enriched
+                : enriched.Select(s => Redact(s, keySensitive, inherited: false)).ToList();
+
+            var value = effectiveValue;
+            if (sensitive && !Options.RevealSensitiveValues && value is not null)
+            {
+                value = Options.RedactedText;
+            }
+
+            settings.Add(new TracedSetting(key, value, redacted, sensitive));
+        }
+
+        return new ProvenanceReport(settings, diagnostics.Warnings, _root is null ? StringComparer.Ordinal : null);
+    }
+
+    private List<(string Key, string? Value, List<ProvenanceStep> Steps)> ReadConfiguration(IConfigurationRoot root, TraceDiagnostics diagnostics)
+    {
         var environment = Options.Environment ?? ReadProcessEnvironment();
         var describer = new ProviderDescriber(environment, diagnostics);
-        var providers = ProviderDescriber.Flatten(_root.Providers).ToList();
+        var providers = ProviderDescriber.Flatten(root.Providers).ToList();
 
         var keys = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pair in _root.AsEnumerable())
+        foreach (var pair in root.AsEnumerable())
         {
             if (pair.Value is not null)
             {
@@ -106,7 +173,7 @@ public sealed class ConfigTracer
             }
         }
 
-        var settings = new List<TracedSetting>(keys.Count);
+        var layers = new List<(string, string?, List<ProvenanceStep>)>(keys.Count);
         foreach (var key in keys)
         {
             var steps = new List<ProvenanceStep>();
@@ -118,25 +185,32 @@ public sealed class ConfigTracer
                 }
             }
 
-            var enriched = MarkEffective(steps.Select(s => Enrich(s, 1, diagnostics)).ToList());
-            var keySensitive = Options.SensitiveKeyPattern?.IsMatch(key) ?? false;
-            var effectiveSensitive = enriched.Count > 0 && IsSensitiveDeep(enriched[^1]);
-            var sensitive = keySensitive || effectiveSensitive;
-
-            var redacted = Options.RevealSensitiveValues
-                ? enriched
-                : enriched.Select(s => Redact(s, keySensitive, inherited: false)).ToList();
-
-            var value = _root[key];
-            if (sensitive && !Options.RevealSensitiveValues && value is not null)
-            {
-                value = Options.RedactedText;
-            }
-
-            settings.Add(new TracedSetting(key, value, redacted, sensitive));
+            layers.Add((key, root[key], steps));
         }
 
-        return new ProvenanceReport(settings, diagnostics.Warnings);
+        return layers;
+    }
+
+    // Seen from outside there is no .NET provider above the container, so each variable's or file's history starts at
+    // the workload layers themselves. A variable whose value Kubernetes fills in at run time (a downward API field) or
+    // whose source was not loaded is still listed, with no value.
+    private static List<(string Key, string? Value, List<ProvenanceStep> Steps)> ReadContainer(KubernetesResolver container, TraceDiagnostics diagnostics)
+    {
+        var layers = new List<(string, string?, List<ProvenanceStep>)>();
+        foreach (var name in container.EnvironmentVariableNames(diagnostics).Order(StringComparer.Ordinal))
+        {
+            var steps = container.ResolveEnvironmentVariable(name, diagnostics).ToList();
+            var value = steps.Count > 0 && !steps[^1].IsRemoval ? steps[^1].Value : null;
+            layers.Add((name, value, steps));
+        }
+
+        foreach (var path in container.MountedFilePaths(diagnostics).Order(StringComparer.Ordinal))
+        {
+            var steps = container.ResolveMountedFile(path, diagnostics).ToList();
+            layers.Add((path, steps.Count > 0 ? steps[^1].Value : null, steps));
+        }
+
+        return layers;
     }
 
     private ProvenanceStep Enrich(ProvenanceStep step, int depth, TraceDiagnostics diagnostics)
