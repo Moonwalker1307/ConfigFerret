@@ -102,7 +102,7 @@ Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and
 ## Secrets
 
 Values are redacted as `***` when they come from a Secret, user secrets, key-per-file or a `*CONNSTR_` environment
-variable, or when the key looks secret (`password`, `token`, `apikey`, `connectionstring` and so on). Turn this off
+variable, or when the key looks secret (`password`, `pass`, `token`, `apikey`, `key`, `signingkey`, `connectionstring`, `sas`, `dsn` and so on). Turn this off
 only on your own machine:
 
 ```csharp
