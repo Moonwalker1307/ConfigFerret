@@ -1,9 +1,13 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/ConfigFerret/ConfigFerret.csproj" />
+    <Project Path="src/ConfigFerret.GitHub/ConfigFerret.GitHub.csproj" />
+    <Project Path="src/ConfigFerret.Octopus/ConfigFerret.Octopus.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ConfigFerret.Tests/ConfigFerret.Tests.csproj" />
+    <Project Path="tests/ConfigFerret.GitHub.Tests/ConfigFerret.GitHub.Tests.csproj" />
+    <Project Path="tests/ConfigFerret.Octopus.Tests/ConfigFerret.Octopus.Tests.csproj" />
   </Folder>
   <Folder Name="/fuzz/">
     <Project Path="fuzz/ConfigFerret.Fuzz/ConfigFerret.Fuzz.csproj" />

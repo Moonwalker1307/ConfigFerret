@@ -23,6 +23,12 @@ public enum LayerKind
 
     /// <summary>A Kustomize kustomization (generator or overlay).</summary>
     Kustomize,
+
+    /// <summary>A GitHub Actions variable or secret (organization, repository or environment). Used by the ConfigFerret.GitHub package.</summary>
+    GitHubActions,
+
+    /// <summary>An Octopus Deploy project or library variable set variable. Used by the ConfigFerret.Octopus package.</summary>
+    OctopusDeploy,
 }
 
 /// <summary>A machine-readable pointer to where a step's value came from, used to look further upstream.</summary>
@@ -80,6 +86,12 @@ public sealed record ProvenanceStep
 
     /// <summary>An extra note, such as which workload or container an env entry is on.</summary>
     public string? Note { get; init; }
+
+    /// <summary>
+    /// The configuration key this step sets, for example <c>Db:Timeout</c>. Set on the .NET configuration layers
+    /// (the top-level steps of a <see cref="TracedSetting"/>), so resolvers can match on the key; null on upstream layers.
+    /// </summary>
+    public string? ConfigurationKey { get; init; }
 
     /// <summary>A pointer used to trace the value further upstream.</summary>
     public SourceRef? Reference { get; init; }

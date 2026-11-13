@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ConfigFerret.Octopus</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>ConfigFerret.Octopus</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Octopus Deploy source for ConfigFerret: links configuration values to the Octopus project and library variable set variables that set them, read through the Octopus REST API with an API key, with scope matching for environment, target, role and channel.</Description>
+    <PackageTags>configuration;provenance;octopus;octopus-deploy;variables;debugging</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/ConfigFerret</PackageProjectUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- No third-party dependencies: HttpClient and System.Text.Json come with the framework. -->
+    <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.404" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="ConfigFerret.Octopus.Tests" />
+  </ItemGroup>
+
+</Project>

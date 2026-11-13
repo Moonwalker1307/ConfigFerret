@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ConfigFerret.GitHub</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>ConfigFerret.GitHub</PackageId>
+    <Version>0.1.0</Version>
+    <Description>GitHub Actions source for ConfigFerret: links configuration values to the GitHub Actions organization, repository and environment variables (and secret names) that set them, read through the GitHub REST API.</Description>
+    <PackageTags>configuration;provenance;github;github-actions;variables;debugging</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/ConfigFerret</PackageProjectUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- No third-party dependencies: HttpClient and System.Text.Json come with the framework. -->
+    <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.404" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="ConfigFerret.GitHub.Tests" />
+  </ItemGroup>
+
+</Project>
