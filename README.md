@@ -101,8 +101,9 @@ Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and
 
 ## Secrets
 
-Values are redacted as `***` when they come from a Secret, user secrets or key-per-file, or when the key looks
-secret (`password`, `token`, `apikey`, `connectionstring` and so on). Turn this off only on your own machine:
+Values are redacted as `***` when they come from a Secret, user secrets, key-per-file or a `*CONNSTR_` environment
+variable, or when the key looks secret (`password`, `token`, `apikey`, `connectionstring` and so on). Turn this off
+only on your own machine:
 
 ```csharp
 ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
@@ -114,6 +115,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   so they are marked `[inferred]`. Values used through `with`, `range`, `include` or helpers are not linked yet.
   Subchart values are not traced yet.
 - Kustomize patches that edit env entries or ConfigMap data are not traced yet.
+- Like kustomize, a generator's `envs` files must be in or below the folder of the kustomization that names them.
+  Pass `allowFilesOutsideFolder: true` to `Kustomization.Load` to lift this, like `--load-restrictor LoadRestrictionsNone`.
+- YAML whose aliases expand to more than 10 million characters is rejected.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
   further upstream from them.
 
