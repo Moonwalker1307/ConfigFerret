@@ -40,6 +40,7 @@
     <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
     <InternalsVisibleTo Include="ConfigFerret.Tests" />
     <InternalsVisibleTo Include="ConfigFerret.Fuzz" />
+    <InternalsVisibleTo Include="ConfigFerret.Tool" />
   </ItemGroup>
 
 </Project>

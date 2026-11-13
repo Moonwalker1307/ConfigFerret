@@ -41,7 +41,34 @@ package stays offline and never handles credentials unless you add one:
 | `ConfigFerret.GitHub` | GitHub Actions organization, repository and environment variables, and secret names ([readme](src/ConfigFerret.GitHub/README.md)) |
 | `ConfigFerret.Octopus` | Octopus Deploy project and library variable set variables, matched by scope, read with an API key ([readme](src/ConfigFerret.Octopus/README.md)) |
 
+To trace from the command line without writing code, install the `configferret` command instead:
+
+```
+dotnet tool install -g ConfigFerret.Tool
+```
+
 ## Use
+
+### From the command line
+
+`configferret` builds the app's configuration from its folder the way the .NET host does (`appsettings.json`,
+`appsettings.{Environment}.json`, user secrets in Development, environment variables, the command line) and traces it
+through the manifests, chart or overlay it is deployed with. Nothing is read from your shell's environment, and secret
+values are shown as `***` unless you pass `--reveal-secrets`.
+
+```
+helm template orders charts/orders -f values-prod.yaml > rendered.yaml
+configferret trace Db:Timeout --app src/Orders.Api -m rendered.yaml -w orders --chart charts/orders -f values-prod.yaml
+
+configferret unused --app src/Orders.Api -m rendered.yaml --reads reads.txt --exit-code
+configferret container -m pod.yaml -c api --chart charts/api -f release-values.yaml --format json
+```
+
+`trace` explains the keys you name, or every key. `unused` lists values that never win and, with `--reads`, keys the
+app never read. `container` traces one container from outside the app. The container's environment variables come
+from `-m`, and `--env`, `--env-file` and `--env-prefix` add to or shape them. GitHub and Octopus variables are read with
+`--github-repo` and `--octopus-project`, with the token in `GITHUB_TOKEN` and the API key in `OCTOPUS_API_KEY`, never in
+an option. See the [tool's readme](src/ConfigFerret.Tool/README.md) for every command, option and exit code.
 
 ### Just .NET configuration
 
@@ -275,7 +302,11 @@ dotnet test
 dotnet pack src/ConfigFerret -c Release
 dotnet pack src/ConfigFerret.GitHub -c Release
 dotnet pack src/ConfigFerret.Octopus -c Release
+dotnet pack src/ConfigFerret.Tool -c Release
 ```
+
+To try the command from a local build: `dotnet tool install -g --add-source src/ConfigFerret.Tool/bin/Release ConfigFerret.Tool`
+after packing, or `dotnet run --project src/ConfigFerret.Tool -f net10.0 -- trace --help`.
 
 Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, pass `-p:TargetFrameworks=net10.0`.
 
@@ -285,7 +316,7 @@ in `tests/ConfigFerret.Tests/Snapshots/`, using [Verify](https://github.com/Veri
 the output on purpose, the failing test writes a `.received.` file next to the snapshot: check the diff, then
 rename it to `.verified.` (or accept it in your diff tool) and commit it.
 
-CI builds and tests both on Linux for pull requests, and on Windows, Linux and macOS after a merge to `main`, then packs the three NuGet packages, all with the same version. Pushing a `v*` tag publishes
+CI builds and tests both on Linux for pull requests, and on Windows, Linux and macOS after a merge to `main`, then packs the four NuGet packages (the three libraries and `ConfigFerret.Tool`), all with the same version, and installs and runs the tool from its package. Pushing a `v*` tag publishes
 them to nuget.org with [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing), so no API key
 is stored. It needs a trusted publishing policy on nuget.org for workflow `ci.yml` in this repository, owned by
 the nuget.org account `Moonwalker1307` (set the `NUGET_USER` repository variable to use another account).

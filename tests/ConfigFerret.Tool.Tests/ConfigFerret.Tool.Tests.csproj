@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- xunit.v3 test projects build as executables. -->
+    <OutputType>Exe</OutputType>
+    <!-- Test names read better with underscores. -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1861;CA2000</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/ConfigFerret.Tool/ConfigFerret.Tool.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The realistic setups the library's golden tests use: a Helm release, a Kustomize overlay, a developer machine and a container. -->
+    <None Include="../ConfigFerret.Tests/TestData/golden/**" LinkBase="TestData/golden" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

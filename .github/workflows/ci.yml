@@ -73,13 +73,14 @@ jobs:
             echo "version=0.1.0-ci.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Every package gets the same version, so ConfigFerret.GitHub and ConfigFerret.Octopus depend on the matching ConfigFerret.
+      # Every package gets the same version, so ConfigFerret.GitHub and ConfigFerret.Octopus depend on the matching
+      # ConfigFerret, and the ConfigFerret.Tool command bundles the same libraries.
       - name: Pack
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          for project in ConfigFerret ConfigFerret.GitHub ConfigFerret.Octopus; do
+          for project in ConfigFerret ConfigFerret.GitHub ConfigFerret.Octopus ConfigFerret.Tool; do
             dotnet pack "src/$project" -c Release -o artifacts -p:Version="$VERSION"
           done
 
@@ -99,6 +100,26 @@ jobs:
           for id in ConfigFerret.GitHub ConfigFerret.Octopus; do
             unzip -p "artifacts/$id.$VERSION.nupkg" "$id.nuspec" | grep -q "id=\"ConfigFerret\" version=\"$VERSION\""
           done
+          # The tool package carries the command and the libraries it traces with, for both target frameworks.
+          pkg="artifacts/ConfigFerret.Tool.$VERSION.nupkg"
+          unzip -l "$pkg" > contents.txt
+          cat contents.txt
+          unzip -p "$pkg" ConfigFerret.Tool.nuspec | grep -q '<packageType name="DotnetTool"'
+          for tfm in net10.0 net11.0; do
+            for dll in ConfigFerret.Tool ConfigFerret ConfigFerret.GitHub ConfigFerret.Octopus; do
+              grep -q "tools/$tfm/any/$dll.dll" contents.txt
+            done
+          done
+
+      - name: Install and run the tool from the package
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dotnet tool install --tool-path tools --add-source artifacts ConfigFerret.Tool --version "$VERSION"
+          tools/configferret --version
+          dir=tests/ConfigFerret.Tests/TestData/golden/container
+          tools/configferret container -m "$dir/cluster.yaml" -w api-7d9f8c-x2kqp -c api --chart "$dir/helm" -f "$dir/helm/release-values.yaml" DB__Timeout
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

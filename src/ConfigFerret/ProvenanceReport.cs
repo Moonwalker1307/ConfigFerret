@@ -4,6 +4,7 @@ namespace ConfigFerret;
 public sealed class ProvenanceReport
 {
     private readonly Dictionary<string, TracedSetting> _byKey;
+    private readonly StringComparer? _keyComparer;
 
     // .NET configuration keys ignore case, but a container's environment variable names do not, so a container trace
     // passes an ordinal comparer.
@@ -11,6 +12,7 @@ public sealed class ProvenanceReport
     {
         Settings = settings;
         Warnings = warnings;
+        _keyComparer = keyComparer;
         _byKey = new Dictionary<string, TracedSetting>(keyComparer ?? StringComparer.OrdinalIgnoreCase);
         foreach (var s in settings)
         {
@@ -68,6 +70,9 @@ public sealed class ProvenanceReport
         ArgumentNullException.ThrowIfNull(readKeys);
         return UnusedReport.Create(this, readKeys);
     }
+
+    /// <summary>A report that holds only <paramref name="settings"/>, with the same warnings and key matching.</summary>
+    internal ProvenanceReport Only(IReadOnlyList<TracedSetting> settings) => new(settings, Warnings, _keyComparer);
 
     /// <summary>Renders every setting as text.</summary>
     public string ToText() => TextRenderer.Render(this);

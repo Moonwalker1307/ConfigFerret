@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ConfigFerret.Tool</RootNamespace>
+    <!-- Not "configferret": assembly names ignore case, so it would clash with ConfigFerret.dll. -->
+    <AssemblyName>ConfigFerret.Tool</AssemblyName>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>configferret</ToolCommandName>
+    <!-- Run on a newer runtime when the one the tool was built for is missing. -->
+    <RollForward>Major</RollForward>
+    <PackageId>ConfigFerret.Tool</PackageId>
+    <Version>0.2.0</Version>
+    <Description>The configferret command: traces .NET configuration values from the command line, through appsettings files, environment variables, Kubernetes manifests, Helm charts, Kustomize overlays, GitHub Actions and Octopus Deploy variables, without writing code. Install with dotnet tool install -g ConfigFerret.Tool.</Description>
+    <PackageTags>configuration;provenance;kubernetes;helm;kustomize;appsettings;debugging;dotnet-tool;cli</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/ConfigFerret</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <MicrosoftExtensionsVersion>10.0.15</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0'">
+    <MicrosoftExtensionsVersion>11.0.0</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
+    <ProjectReference Include="../ConfigFerret.GitHub/ConfigFerret.GitHub.csproj" />
+    <ProjectReference Include="../ConfigFerret.Octopus/ConfigFerret.Octopus.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="System.CommandLine" Version="2.0.15" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.404" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="ConfigFerret.Tool.Tests" />
+  </ItemGroup>
+
+</Project>
