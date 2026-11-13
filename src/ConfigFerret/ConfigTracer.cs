@@ -112,7 +112,7 @@ public sealed class ConfigTracer
             {
                 if (provider.TryGet(key, out var providerValue))
                 {
-                    steps.Add(describer.Describe(provider, key, providerValue));
+                    steps.Add(describer.Describe(provider, key, providerValue) with { ConfigurationKey = key });
                 }
             }
 
