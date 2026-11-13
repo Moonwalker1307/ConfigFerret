@@ -33,7 +33,65 @@ internal static class Yaml
             throw new YamlException($"Malformed YAML: {ex.Message}", ex);
         }
 
-        return stream.Documents.Select(d => d.RootNode).ToList();
+        var roots = stream.Documents.Select(d => d.RootNode).ToList();
+        RejectAliasExpansion(roots, text.Length);
+        return roots;
+    }
+
+    /// <summary>The most text a document may expand to through aliases, unless the file itself is bigger.</summary>
+    internal const long MaxExpandedSize = 10_000_000;
+
+    /// <summary>
+    /// Rejects documents whose aliases expand to far more than the text holds (a "billion laughs" document).
+    /// Every reader of the nodes walks aliases as copies, so 330 bytes of nested aliases can turn into gigabytes.
+    /// The size counts each scalar's length plus one per node, as if every alias were written out in full.
+    /// </summary>
+    private static void RejectAliasExpansion(List<YamlNode> roots, int textLength)
+    {
+        var limit = Math.Max(MaxExpandedSize, 10L * textLength);
+        var sizes = new Dictionary<YamlNode, long>(ReferenceEqualityComparer.Instance);
+        long total = 0;
+        foreach (var root in roots)
+        {
+            total += ExpandedSize(root, sizes, limit);
+            if (total > limit)
+            {
+                throw new YamlException(root.Start, root.End, string.Create(CultureInfo.InvariantCulture, $"The aliases in this YAML expand to more than {limit:N0} characters."));
+            }
+        }
+    }
+
+    private static long ExpandedSize(YamlNode node, Dictionary<YamlNode, long> sizes, long limit)
+    {
+        if (sizes.TryGetValue(node, out var known))
+        {
+            return known;
+        }
+
+        long size = 1;
+        switch (node)
+        {
+            case YamlScalarNode scalar:
+                size += scalar.Value?.Length ?? 0;
+                break;
+            case YamlSequenceNode seq:
+                foreach (var child in seq.Children)
+                {
+                    size = Math.Min(size + ExpandedSize(child, sizes, limit), limit + 1);
+                }
+
+                break;
+            case YamlMappingNode map:
+                foreach (var (key, value) in map.Children)
+                {
+                    size = Math.Min(size + ExpandedSize(key, sizes, limit) + ExpandedSize(value, sizes, limit), limit + 1);
+                }
+
+                break;
+        }
+
+        sizes[node] = size;
+        return size;
     }
 
     /// <summary>

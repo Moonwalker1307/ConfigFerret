@@ -73,4 +73,23 @@ public class YamlTests
 
         Assert.Equal("f.yaml:2", Yaml.Location("f.yaml", doc.Get("b")!));
     }
+
+    [Fact]
+    public void Rejects_aliases_that_expand_to_a_huge_document()
+    {
+        // 330 bytes that expand to 10^7 scalars if every alias is copied out.
+        var text = "a0: &a0 [x,x,x,x,x,x,x,x,x,x]\n"
+            + string.Concat(Enumerable.Range(1, 7).Select(i => $"a{i}: &a{i} [{string.Join(",", Enumerable.Repeat($"*a{i - 1}", 10))}]\n"));
+
+        var ex = Assert.Throws<YamlDotNet.Core.YamlException>(() => Yaml.LoadDocuments(text));
+        Assert.Contains("expand to more than", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Accepts_ordinary_anchor_reuse()
+    {
+        var doc = Doc("base: &base { image: api, replicas: 2 }\nprod: *base\nstaging: *base\n");
+
+        Assert.Equal("{image: api, replicas: 2}", Yaml.Render(doc.Get("staging")));
+    }
 }
