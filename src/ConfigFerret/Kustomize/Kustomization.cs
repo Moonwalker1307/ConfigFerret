@@ -34,11 +34,18 @@ public sealed class Kustomization
     public IReadOnlyDictionary<string, GeneratedData> Secrets { get; }
 
     /// <summary>Loads the kustomization in <paramref name="directory"/> and all its bases.</summary>
-    public static Kustomization Load(string directory)
+    /// <param name="directory">The folder that holds the kustomization file.</param>
+    /// <param name="allowFilesOutsideFolder">
+    /// Like kustomize, a generator's env files must sit in or below the folder of the kustomization that names them,
+    /// after following symbolic links. Pass true to read them from anywhere, as
+    /// <c>kustomize build --load-restrictor LoadRestrictionsNone</c> does. Bases and resources may be anywhere either way.
+    /// </param>
+    /// <exception cref="InvalidOperationException">An env file is outside its kustomization's folder, or the bases form a cycle.</exception>
+    public static Kustomization Load(string directory, bool allowFilesOutsideFolder = false)
     {
         ArgumentNullException.ThrowIfNull(directory);
         var root = Path.GetFullPath(directory);
-        var state = LoadDirectory(root, root, []);
+        var state = LoadDirectory(root, allowFilesOutsideFolder, []);
 
         // Show kustomization files relative to the closest folder that holds all of them.
         var files = state.SelectMany(g => g.Keys.Values).SelectMany(h => h).Select(h => h.Kustomization).Distinct().ToList();
@@ -77,7 +84,7 @@ public sealed class Kustomization
         return null;
     }
 
-    private static List<GeneratedData> LoadDirectory(string directory, string root, HashSet<string> visiting)
+    private static List<GeneratedData> LoadDirectory(string directory, bool allowFilesOutsideFolder, HashSet<string> visiting)
     {
         if (!visiting.Add(directory))
         {
@@ -110,7 +117,7 @@ public sealed class Kustomization
             var child = Path.GetFullPath(Path.Combine(directory, rel));
             if (Directory.Exists(child))
             {
-                foreach (var generated in LoadDirectory(child, root, visiting))
+                foreach (var generated in LoadDirectory(child, allowFilesOutsideFolder, visiting))
                 {
                     state.RemoveAll(g => g.Name == generated.Name && g.IsSecret == generated.IsSecret);
                     state.Add(generated);
@@ -118,8 +125,8 @@ public sealed class Kustomization
             }
         }
 
-        ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, state);
-        ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, state);
+        ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, allowFilesOutsideFolder, state);
+        ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, allowFilesOutsideFolder, state);
 
         var prefix = doc.Str("namePrefix") ?? "";
         var suffix = doc.Str("nameSuffix") ?? "";
@@ -135,7 +142,7 @@ public sealed class Kustomization
         return state;
     }
 
-    private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, List<GeneratedData> state)
+    private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, bool allowFilesOutsideFolder, List<GeneratedData> state)
     {
         foreach (var generator in generators.Items())
         {
@@ -147,7 +154,7 @@ public sealed class Kustomization
             }
 
             var behavior = generator.Str("behavior") ?? "create";
-            var entries = ReadEntries(generator, directory);
+            var entries = ReadEntries(generator, directory, allowFilesOutsideFolder);
 
             var existing = state.FirstOrDefault(g => g.Name == name && g.IsSecret == isSecret);
             if (existing is null || behavior == "create")
@@ -183,7 +190,7 @@ public sealed class Kustomization
         }
     }
 
-    private static List<(string Key, string? Value, int Line, string Kind)> ReadEntries(YamlNode generator, string directory)
+    private static List<(string Key, string? Value, int Line, string Kind)> ReadEntries(YamlNode generator, string directory, bool allowFilesOutsideFolder)
     {
         var entries = new List<(string, string?, int, string)>();
         foreach (var literal in generator.Get("literals").Items())
@@ -206,6 +213,13 @@ public sealed class Kustomization
             if (!File.Exists(path))
             {
                 continue;
+            }
+
+            if (!allowFilesOutsideFolder && !IsInFolder(path, directory))
+            {
+                throw new InvalidOperationException(
+                    $"The env file {rel} named in {directory} is outside that folder. kustomize refuses this by default; " +
+                    "pass allowFilesOutsideFolder: true to read it anyway.");
             }
 
             var lineNo = 0;
@@ -241,6 +255,33 @@ public sealed class Kustomization
         }
 
         return entries;
+    }
+
+    /// <summary>True when <paramref name="path"/> is in or below <paramref name="folder"/>, after following symbolic links.</summary>
+    internal static bool IsInFolder(string path, string folder)
+    {
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var resolvedFolder = Path.TrimEndingDirectorySeparator(RealPath(folder)) + Path.DirectorySeparatorChar;
+        return RealPath(path).StartsWith(resolvedFolder, comparison);
+    }
+
+    /// <summary>The full path with every symbolic link along it followed.</summary>
+    private static string RealPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "";
+        var current = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Join(current, part);
+            FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+            if (info.LinkTarget is not null && info.ResolveLinkTarget(returnFinalTarget: true) is { } target)
+            {
+                current = Path.GetFullPath(target.FullName);
+            }
+        }
+
+        return current;
     }
 
     private static string CommonFolder(List<string> files)
