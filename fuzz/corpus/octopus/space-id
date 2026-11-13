@@ -1,0 +1,7 @@
+3[{"Id":"Projects-1","Name":"Api","Slug":"api","VariableSetId":"variableset-Projects-1","IncludedLibraryVariableSetIds":["LibraryVariableSets-1"]}]
+%%
+{"Id": "variableset-Projects-1", "ScopeValues": {"Environments": [{"Id": "Environments-1", "Name": "Production"}, {"Id": "Environments-2", "Name": "Test"}], "Machines": [{"Id": "Machines-1", "Name": "web-01"}], "Roles": [{"Id": "web", "Name": "web"}], "TenantTags": [{"Id": "Region/West", "Name": "West"}], "Channels": [{"Id": "Channels-1", "Name": "Default"}], "Actions": [{"Id": "Actions-1", "Name": "Deploy"}]}, "Variables": [{"Name": "Db:Timeout", "Value": "30", "Type": "String", "IsSensitive": false, "Scope": {}}, {"Name": "Db:Timeout", "Value": "60", "Type": "String", "IsSensitive": false, "Scope": {"Environment": ["Environments-1"]}}, {"Name": "Db:Timeout", "Value": "90", "Type": "String", "IsSensitive": false, "Scope": {"Environment": ["Environments-1"], "Machine": ["Machines-1"], "Role": ["web"]}}, {"Name": "DB_PASSWORD", "Value": null, "Type": "Sensitive", "IsSensitive": true, "Scope": {"TenantTag": ["Region/West"], "Channel": ["Channels-1"], "Action": ["Actions-1"]}}, {"Name": "Url", "Value": "https://#{Host}/", "Type": "String", "Scope": {"Environment": ["Environments-2"]}}, {"Name": "Cert", "Value": "Certificates-1", "Type": "Certificate", "Scope": {}}]}
+%%
+{"Id":"LibraryVariableSets-1","Name":"Shared","VariableSetId":"variableset-LibraryVariableSets-1"}
+%%
+{"ScopeValues":{},"Variables":[{"Name":"Db:Timeout","Value":"15","Type":"String","Scope":{}},{"Name":"LOG_LEVEL","Value":"Warning"}]}

@@ -1,0 +1,84 @@
+{"Db":{"Timeout":10,"Host":"localhost","Password":"dev"},"Logging":{"LogLevel":{"Default":"Information"}},"Features":["a","b"]}
+%%
+{"Db":{"Timeout":30,"Host":"localhost"},"Logging":{"LogLevel":{"Default":null}}}
+%%
+Db:Timeout=45
+Db__Host=db.internal
+UnusedFlag=true
+%%
+# What a cluster browser reads with the Kubernetes API: the pod, and the ConfigMaps and Secret it uses.
+# The Secret api-extra that envFrom also names was not readable, so it is left out. Features__Search in api-config
+# was added by hand after the release, so no template renders it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  DB__Host: "db.prod.svc"
+  DB__Timeout: "60"
+  Logging__LogLevel__Default: "Information"
+  Features__Search: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-files
+data:
+  appsettings.Production.json: |
+    { "Features": { "Search": true } }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-db
+type: Opaque
+data:
+  password: cHJvZC1zM2NyM3Q=
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-7d9f8c-x2kqp
+spec:
+  containers:
+    - name: api
+      image: ghcr.io/example/api:2.1.0
+      envFrom:
+        - configMapRef:
+            name: api-config
+        - secretRef:
+            name: api-extra
+          prefix: EXTRA_
+      env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: Features__Search
+          value: "true"
+        - name: DB__Password
+          valueFrom:
+            secretKeyRef:
+              name: api-db
+              key: password
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+      volumeMounts:
+        - name: files
+          mountPath: /app/appsettings.Production.json
+          subPath: appsettings.Production.json
+        - name: db
+          mountPath: /etc/db
+          readOnly: true
+    - name: metrics
+      image: ghcr.io/example/metrics-exporter:0.9.1
+  volumes:
+    - name: files
+      configMap:
+        name: api-files
+    - name: db
+      secret:
+        secretName: api-db
+        items:
+          - key: password
+            path: password.txt

@@ -23,7 +23,7 @@ internal sealed class InvariantException(string message) : Exception(message);
 /// (<see cref="FormatException"/> for YAML, <see cref="System.Text.Json.JsonException"/> for JSON).
 /// Inputs that hold several files separate them with a line holding only <c>%%</c>.
 /// </summary>
-internal static class Targets
+internal static partial class Targets
 {
     private static readonly string Scratch = Path.Join(Path.GetTempPath(), $"configferret-fuzz-{Environment.ProcessId}");
 
@@ -37,6 +37,9 @@ internal static class Targets
         ["container"] = new("Kubernetes manifests traced from outside with ConfigTracer.ForContainer, then rendered", Container),
         ["kustomize"] = new("Kustomization overlay %% env file %% base kustomization", KustomizeTarget),
         ["env-names"] = new("Environment variable name matching: prefix, key, value, then NAME=VALUE lines", EnvNames),
+        ["github"] = new("GitHub Actions variables API responses (split by %%), then the GitHub resolver", GitHubApi),
+        ["octopus"] = new("Octopus Deploy API responses (split by %%), then the Octopus resolver", OctopusApi),
+        ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 
     private static void Json(ReadOnlySpan<byte> data)

@@ -1,0 +1,10 @@
+{"total_count":2,"variables":[{"name":"DB_TIMEOUT","value":"30","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-02-01T10:00:00Z"},{"name":"LOG_LEVEL","value":"Information","updated_at":"2026-02-01T10:00:00Z"}]}
+%%
+{"total_count":1,"secrets":[{"name":"DB_PASSWORD","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}]}
+%%
+jobs:
+  deploy:
+    env:
+      DB__Timeout: ${{ vars.DB_TIMEOUT }}
+      "Db__Password": '${{ secrets.DB_PASSWORD }}' # from secrets
+      - LOG: ${{vars.LOG_LEVEL}}
