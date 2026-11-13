@@ -6,7 +6,7 @@ public class OctopusResolverTests
 {
     private static OctopusVariable Var(string name, string? value, string set = "api", bool project = true, bool sensitive = false, params (string Dimension, string Value)[] scope) =>
         new(name, value, sensitive, sensitive ? "Sensitive" : "String", set, project,
-            scope.GroupBy(s => s.Dimension).ToDictionary(g => g.Key, g => (IReadOnlyList<string>)[.. g.Select(s => s.Value)]));
+            scope.GroupBy(s => s.Dimension).ToDictionary<IGrouping<string, (string Dimension, string Value)>, string, IReadOnlyList<string>>(g => g.Key, g => g.Select(s => s.Value).ToList()));
 
     private static readonly OctopusVariables Variables = new(
     [
@@ -152,7 +152,7 @@ public class OctopusResolverTests
         var dir = Directory.CreateTempSubdirectory("configferret-octopus-");
         try
         {
-            var file = Path.Combine(dir.FullName, "appsettings.json");
+            var file = Path.Join(dir.FullName, "appsettings.json");
             File.WriteAllText(file, """{ "Db": { "Timeout": "30", "Password": "hunter2" } }""");
             var configuration = new ConfigurationBuilder().AddJsonFile(file).Build();
 
