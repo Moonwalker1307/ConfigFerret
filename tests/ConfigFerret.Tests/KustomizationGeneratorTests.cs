@@ -270,6 +270,53 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void Refuses_an_env_file_outside_the_kustomization_folder()
+    {
+        Write("secret.env", "TOKEN=hunter2\n");
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                envs: [../secret.env]
+            """);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Load());
+        Assert.Contains("../secret.env", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("hunter2", Kustomization.Load(Path.Join(_root, "app"), allowFilesOutsideFolder: true).ConfigMaps["cfg"].Keys["TOKEN"][0].Value);
+    }
+
+    [Fact]
+    public void Reads_an_env_file_below_the_kustomization_folder()
+    {
+        Write("app/config/app.env", "A=1\n");
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                envs: [config/../config/app.env]
+            """);
+
+        Assert.Equal("1", Load().ConfigMaps["cfg"].Keys["A"][0].Value);
+    }
+
+    [Fact]
+    public void Refuses_an_env_file_that_links_outside_the_kustomization_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var outside = Write("secret.env", "TOKEN=hunter2\n");
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                envs: [linked.env]
+            """);
+        File.CreateSymbolicLink(Path.Join(_root, "app", "linked.env"), outside);
+
+        Assert.Throws<InvalidOperationException>(() => Load());
+    }
+
+    [Fact]
     public void Env_file_entries_point_at_the_envs_line_in_the_kustomization()
     {
         Write("app/kustomization.yaml", """

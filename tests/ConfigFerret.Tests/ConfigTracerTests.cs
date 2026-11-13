@@ -193,4 +193,30 @@ public class ConfigTracerTests
         Assert.Equal("root", deep.EffectiveStep!.Source);
         Assert.Equal("set in root from s1 from s2 from s3 from s4 from s5 from s6 from s7", deep.Story);
     }
+
+    [Theory]
+    [InlineData("CFT1_", "CFT1_CUSTOMCONNSTR_Db", "CUSTOMCONNSTR_Db")]
+    [InlineData("CFT2_", "CFT2_POSTGRESQLCONNSTR_Db", "POSTGRESQLCONNSTR_Db")]
+    [InlineData("", "CUSTOMCONNSTR_CfTest3", "ConnectionStrings:CfTest3")]
+    public void Redacts_connection_string_variables_even_with_a_provider_prefix(string prefix, string variable, string key)
+    {
+        // With a prefix, .NET keeps the *CONNSTR_ part in the key, which the sensitive-key pattern doesn't catch.
+        Environment.SetEnvironmentVariable(variable, "Server=db;Password=hunter2");
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            var report = ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [variable] = "Server=db;Password=hunter2" })
+                .Trace();
+
+            var setting = Assert.Single(report.Settings, s => s.Key == key);
+            Assert.True(setting.IsSensitive);
+            Assert.Equal("***", setting.Value);
+            Assert.All(setting.Steps, step => Assert.NotEqual("Server=db;Password=hunter2", step.Value));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
 }
