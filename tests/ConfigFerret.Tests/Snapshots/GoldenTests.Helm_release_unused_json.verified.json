@@ -1,0 +1,364 @@
+﻿{
+  "caution": "Nothing here is proven safe to delete. A value that never wins here can win in another environment, and a key the app did not read may be read on a code path that did not run.",
+  "neverWinning": [
+    {
+      "key": "Api:BaseUrl",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 21",
+      "value": "http://localhost:5080",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Api__BaseUrl",
+        "value": "https://eu.api.example.test"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Api:BaseUrl",
+      "kind": "Helm",
+      "source": "values.yaml (chart default)",
+      "location": "line 14, api.baseUrl",
+      "value": "https://api.example.test",
+      "overriddenBy": {
+        "kind": "Helm",
+        "source": "values-eu.yaml",
+        "location": "line 4, api.baseUrl",
+        "value": "https://eu.api.example.test"
+      },
+      "upstreamOf": [
+        "environment variable ORDERS_Api__BaseUrl",
+        "ConfigMap orders-endpoints",
+        "Helm template templates/endpoints.yaml"
+      ],
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Cache:Ttl",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 9",
+      "value": "60",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Cache__Ttl",
+        "value": "900"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Cache:Ttl",
+      "kind": "Helm",
+      "source": "values.yaml (chart default)",
+      "location": "line 10, cache.ttl",
+      "value": "300",
+      "overriddenBy": {
+        "kind": "Helm",
+        "source": "--set cache.ttl",
+        "location": "cache.ttl",
+        "value": "900"
+      },
+      "upstreamOf": [
+        "environment variable ORDERS_Cache__Ttl",
+        "ConfigMap orders-config",
+        "Helm template templates/configmap.yaml"
+      ],
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Host",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 3",
+      "value": "localhost",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Db__Host",
+        "value": "orders-db.prod.svc"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Host",
+      "kind": "Helm",
+      "source": "values.yaml (chart default)",
+      "location": "line 6, db.host",
+      "value": "postgres.default.svc",
+      "overriddenBy": {
+        "kind": "Helm",
+        "source": "values-prod.yaml",
+        "location": "line 3, db.host",
+        "value": "orders-db.prod.svc"
+      },
+      "upstreamOf": [
+        "environment variable ORDERS_Db__Host",
+        "Deployment/orders env ORDERS_Db__Host",
+        "Helm template templates/deployment.yaml"
+      ],
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Password",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 6",
+      "value": "***",
+      "sensitive": true,
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Db__Password",
+        "value": "***",
+        "sensitive": true
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Port",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 4",
+      "value": "5432",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Db__Port",
+        "value": "5432"
+      },
+      "sameValueAsWinner": true
+    },
+    {
+      "key": "Db:Timeout",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 5",
+      "value": "15",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Db__Timeout",
+        "value": "60"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Timeout",
+      "kind": "DotNetProvider",
+      "source": "appsettings.Production.json",
+      "location": "line 3",
+      "value": "30",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Db__Timeout",
+        "value": "60"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Timeout",
+      "kind": "Helm",
+      "source": "values.yaml (chart default)",
+      "location": "line 8, db.timeout",
+      "value": "30",
+      "overriddenBy": {
+        "kind": "Helm",
+        "source": "values-eu.yaml",
+        "location": "line 2, db.timeout",
+        "value": "60"
+      },
+      "upstreamOf": [
+        "environment variable ORDERS_Db__Timeout",
+        "ConfigMap orders-config",
+        "Helm template templates/configmap.yaml"
+      ],
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Db:Timeout",
+      "kind": "Helm",
+      "source": "values-prod.yaml",
+      "location": "line 4, db.timeout",
+      "value": "45",
+      "overriddenBy": {
+        "kind": "Helm",
+        "source": "values-eu.yaml",
+        "location": "line 2, db.timeout",
+        "value": "60"
+      },
+      "upstreamOf": [
+        "environment variable ORDERS_Db__Timeout",
+        "ConfigMap orders-config",
+        "Helm template templates/configmap.yaml"
+      ],
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Features:Search",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 18",
+      "value": "True",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "command-line argument --Features:Search",
+        "value": "false"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Features:Search",
+      "kind": "DotNetProvider",
+      "source": "environment variable ORDERS_Features__Search",
+      "value": "true",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "command-line argument --Features:Search",
+        "value": "false"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Logging:LogLevel:Default",
+      "kind": "DotNetProvider",
+      "source": "appsettings.json",
+      "location": "line 13",
+      "value": "Debug",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Logging__LogLevel__Default",
+        "value": "Warning"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Logging:LogLevel:Default",
+      "kind": "DotNetProvider",
+      "source": "appsettings.Production.json",
+      "location": "line 7",
+      "value": "Information",
+      "overriddenBy": {
+        "kind": "DotNetProvider",
+        "source": "environment variable ORDERS_Logging__LogLevel__Default",
+        "value": "Warning"
+      },
+      "sameValueAsWinner": false
+    },
+    {
+      "key": "Logging:LogLevel:Default",
+      "kind": "Helm",
+      "source": "values.yaml (chart default)",
+      "location": "line 12, logging.level",
+      "value": "Information",
+      "overriddenBy": {
+        "kind": "Helm",
+        "source": "values-prod.yaml",
+        "location": "line 6, logging.level",
+        "value": "Warning"
+      },
+      "upstreamOf": [
+        "environment variable ORDERS_Logging__LogLevel__Default",
+        "ConfigMap orders-config",
+        "Helm template templates/configmap.yaml"
+      ],
+      "sameValueAsWinner": false
+    }
+  ],
+  "recordedReads": 9,
+  "skippedEnvironmentKeys": 0,
+  "notRead": [
+    {
+      "key": "AllowedHosts",
+      "value": "*",
+      "sensitive": false,
+      "story": "set in appsettings.json",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 23",
+          "value": "*",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Api:BaseUrl",
+      "value": "https://eu.api.example.test",
+      "sensitive": false,
+      "story": "set in appsettings.json, overridden by environment variable ORDERS_Api__BaseUrl from ConfigMap orders-endpoints, rendered by Helm template templates/endpoints.yaml from .Values.api.baseUrl, set in values-eu.yaml over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "appsettings.json",
+          "location": "line 21",
+          "value": "http://localhost:5080",
+          "effective": false
+        },
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Api__BaseUrl",
+          "value": "https://eu.api.example.test",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesConfigMap",
+              "source": "ConfigMap orders-endpoints",
+              "location": "key api-base-url, rendered.yaml:22",
+              "value": "https://eu.api.example.test",
+              "effective": true,
+              "note": "configMapKeyRef on Deployment/orders, container orders",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "Helm template templates/endpoints.yaml",
+                  "location": "line 6",
+                  "value": "https://eu.api.example.test",
+                  "effective": true,
+                  "inferred": true,
+                  "note": "renders .Values.api.baseUrl",
+                  "origins": [
+                    {
+                      "kind": "Helm",
+                      "source": "values.yaml (chart default)",
+                      "location": "line 14, api.baseUrl",
+                      "value": "https://api.example.test",
+                      "effective": false
+                    },
+                    {
+                      "kind": "Helm",
+                      "source": "values-eu.yaml",
+                      "location": "line 4, api.baseUrl",
+                      "value": "https://eu.api.example.test",
+                      "effective": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Pod:Name",
+      "value": "orders-7c9d8f6b5-x2kqp",
+      "sensitive": false,
+      "story": "set in environment variable ORDERS_Pod__Name from downward API metadata.name",
+      "layers": [
+        {
+          "kind": "DotNetProvider",
+          "source": "environment variable ORDERS_Pod__Name",
+          "value": "orders-7c9d8f6b5-x2kqp",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "KubernetesField",
+              "source": "downward API metadata.name",
+              "location": "rendered.yaml:62",
+              "value": null,
+              "effective": true,
+              "note": "fieldRef on Deployment/orders, container orders"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

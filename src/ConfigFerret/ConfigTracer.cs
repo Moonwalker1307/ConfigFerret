@@ -90,6 +90,8 @@ public sealed class ConfigTracer
     /// <summary>Runs the trace.</summary>
     public ProvenanceReport Trace()
     {
+        // Reading every key to trace it is not the app using it.
+        using var paused = ConfigReadRecorder.Pause();
         var diagnostics = new TraceDiagnostics();
         var environment = Options.Environment ?? ReadProcessEnvironment();
         var describer = new ProviderDescriber(environment, diagnostics);

@@ -118,6 +118,51 @@ if (KubernetesInCluster.IsInCluster)
 This reads the pod (`POD_NAME` or `HOSTNAME`) and the ConfigMaps it references with the pod's service account.
 Grant it `get` on `pods` and `configmaps` in its namespace. Secrets are never read through the API.
 
+### Find possibly unused configuration
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+// After the last configuration source is added:
+var reads = builder.Configuration.RecordReads();
+
+// ... later, once the app has run through the code paths you care about:
+var unused = builder.Configuration.TraceProvenance().FindUnused(reads);
+Console.WriteLine(unused.ToText());
+```
+
+`FindUnused` reports two things:
+
+- **Values that never win.** An appsettings key, env entry, ConfigMap key, Helm value or Kustomize literal that a
+  later layer always overrides or removes in this trace, with the layer that beats it. Overrides that set the same
+  value as the winner are called out, since they change nothing here. This needs no recorder: call `FindUnused()`.
+- **Keys the app did not read.** Configured keys that `RecordReads()` never saw the app read, with every layer
+  that sets them, so you can see where each one lives. Reads through `configuration["X"]`, `GetValue`, `GetSection`
+  and options binding are all recorded, since the recorder sits under every provider. Plain process environment
+  variables such as `PATH` are left out.
+
+```
+Values that never win (2)
+  Db:Port
+    appsettings.json (line 4) = "5432"
+      overridden by environment variable ORDERS_Db__Port
+      sets the same value as the layer that wins, so it changes nothing here
+  Db:Timeout
+    values.yaml (chart default) (line 8, db.timeout) = "30"
+      overridden by values-eu.yaml (line 2, db.timeout)
+      upstream of environment variable ORDERS_Db__Timeout <- ConfigMap orders-config <- Helm template templates/configmap.yaml
+
+Keys the app did not read (1, from 9 recorded reads)
+  Pod:Name = "orders-7c9d8f6b5-x2kqp"
+    set in environment variable ORDERS_Pod__Name from downward API metadata.name
+    ...
+```
+
+Everything it finds is **possibly** unused, never proven safe to delete. A value that never wins in production can
+still be the default in development, and a key can be read on a code path that did not run while reads were
+recorded. To cover more paths, save `reads.ReadKeys` from several runs or instances and pass them all to
+`FindUnused(IEnumerable<string>)`. Code that walks every key, such as `AsEnumerable()` or `GetDebugView()`, marks
+every key as read. ConfigFerret's own tracing is not recorded.
+
 ## What it traces
 
 | Layer | What ConfigFerret shows |
@@ -159,6 +204,7 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   `Map` makes a certain link. When a name is on both an environment variable and the Kubernetes env entry behind it,
   the GitHub or Octopus layer shows under both. Octopus `#{...}` references are not expanded.
 - YAML whose aliases expand to more than 10 million characters is rejected.
+- Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
   further upstream from them.
 
