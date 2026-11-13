@@ -46,8 +46,12 @@ public class OctopusServiceCollectionTests
         return services.BuildServiceProvider();
     }
 
+    // ValidateOnStart runs these same validators when the host starts. Reading the options runs them directly, and
+    // works on .NET 10 and 11 (IStartupValidator is obsolete on 11).
+    private static OctopusVariablesOptions Validate(ServiceProvider provider) => provider.GetRequiredService<IOptions<OctopusVariablesOptions>>().Value;
+
     private static OptionsValidationException StartupFailure(ServiceProvider provider) =>
-        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IStartupValidator>().Validate());
+        Assert.Throws<OptionsValidationException>(() => Validate(provider));
 
     [Fact]
     public void Binds_the_connection_options_and_the_deployment_from_the_section()
@@ -71,7 +75,7 @@ public class OctopusServiceCollectionTests
         Assert.False(trace.MatchByName);
         Assert.Equal("Db:Timeout", trace.FindMapping("db__timeout"));
 
-        provider.GetRequiredService<IStartupValidator>().Validate();
+        Validate(provider);
     }
 
     [Fact]

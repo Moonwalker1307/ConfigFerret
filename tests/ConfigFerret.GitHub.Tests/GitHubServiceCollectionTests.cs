@@ -44,8 +44,12 @@ public class GitHubServiceCollectionTests
         return services.BuildServiceProvider();
     }
 
+    // ValidateOnStart runs these same validators when the host starts. Reading the options runs them directly, and
+    // works on .NET 10 and 11 (IStartupValidator is obsolete on 11).
+    private static GitHubVariablesOptions Validate(ServiceProvider provider) => provider.GetRequiredService<IOptions<GitHubVariablesOptions>>().Value;
+
     private static OptionsValidationException StartupFailure(ServiceProvider provider) =>
-        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IStartupValidator>().Validate());
+        Assert.Throws<OptionsValidationException>(() => Validate(provider));
 
     [Fact]
     public void Binds_the_connection_and_trace_options_from_the_section()
@@ -67,7 +71,7 @@ public class GitHubServiceCollectionTests
         Assert.Equal(GitHubVariableKind.Secret, source.TraceOptions.FindMapping("Db__Password")!.Kind);
         Assert.Equal("DB_PASSWORD", source.TraceOptions.FindMapping("Db__Password")!.VariableName);
 
-        provider.GetRequiredService<IStartupValidator>().Validate();
+        Validate(provider);
     }
 
     [Fact]
@@ -104,7 +108,7 @@ public class GitHubServiceCollectionTests
         var file = folder.Write("secrets.json", $$"""{ "ConfigFerret": { "GitHub": { "Token": "{{Token}}" } } }""");
         using var provider = Services(Configuration(token: null, more: b => b.AddJsonFile(file)));
 
-        provider.GetRequiredService<IStartupValidator>().Validate();
+        Validate(provider);
     }
 
     [Fact]
