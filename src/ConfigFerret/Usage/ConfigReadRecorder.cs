@@ -22,14 +22,14 @@ public sealed class ConfigReadRecorder
 
     private readonly ConcurrentDictionary<string, byte> _keys = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Every key read so far, sorted, case-insensitive. Includes keys that had no value.</summary>
+    /// <summary>Every key read so far, sorted, case-insensitive, with <c>:</c> as the separator. Includes keys that had no value.</summary>
     public IReadOnlyList<string> ReadKeys => [.. _keys.Keys.Order(StringComparer.OrdinalIgnoreCase)];
 
     /// <summary>True when <paramref name="key"/> was read (case-insensitive). Accepts <c>:</c> or <c>__</c> as the separator.</summary>
     public bool WasRead(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        return _keys.ContainsKey(key.Replace("__", ":", StringComparison.Ordinal));
+        return _keys.ContainsKey(Normalize(key));
     }
 
     /// <summary>Forgets every recorded read, for example after startup to see only what a request reads.</summary>
@@ -41,7 +41,7 @@ public sealed class ConfigReadRecorder
         ArgumentNullException.ThrowIfNull(keys);
         foreach (var key in keys.Where(k => !string.IsNullOrEmpty(k)))
         {
-            _keys.TryAdd(key, 0);
+            _keys.TryAdd(Normalize(key), 0);
         }
     }
 
@@ -49,9 +49,12 @@ public sealed class ConfigReadRecorder
     {
         if (t_paused == 0)
         {
-            _keys.TryAdd(key, 0);
+            _keys.TryAdd(Normalize(key), 0);
         }
     }
+
+    // FindUnused and WasRead treat __ as the separator too, so store one spelling and every lookup agrees.
+    private static string Normalize(string key) => key.Replace("__", ":", StringComparison.Ordinal);
 
     /// <summary>Stops recording on this thread until the returned scope is disposed. Used while tracing.</summary>
     internal static PauseScope Pause()

@@ -184,4 +184,222 @@ public class OctopusVariablesTests
             Assert.Empty(handler.Requests);
         }
     }
+
+    private static async Task<OctopusVariables> LoadSet(string variables, string project = """{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1"}""")
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/api/Spaces-1/projects/all", $"[{project}]")
+            .Respond("/api/Spaces-1/variables/vs-1", variables);
+        using var client = handler.Client();
+        var options = Options("Api");
+        options.Space = "Spaces-1";
+        return await OctopusVariables.LoadAsync(options, client, TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData("""[]""")]
+    [InlineData("""{"Variables":{}}""")]
+    [InlineData("""{"ScopeValues":[],"Variables":[]}""")]
+    public async Task Warns_about_a_variable_set_without_a_variables_array(string variables)
+    {
+        // Found by fuzzing: a variable set that is not an object used to throw InvalidOperationException.
+        var octopus = await LoadSet(variables);
+
+        Assert.Empty(octopus.Entries);
+        Assert.Equal(["Octopus project Api has no variables the API key can see."], octopus.Warnings);
+    }
+
+    [Fact]
+    public async Task Skips_variables_and_ids_that_are_not_what_Octopus_sends()
+    {
+        // Found by fuzzing: ids that are not strings used to throw InvalidOperationException.
+        var octopus = await LoadSet("""
+            {
+              "ScopeValues": {
+                "Environments": [{"Id":"Environments-1","Name":"Production"},{"Id":"Environments-2"},{"Name":"no id"},7],
+                "Machines": {"Id":"Machines-1"},
+                "Unknown": [{"Id":"X","Name":"Y"}]
+              },
+              "Variables": [
+                1, {"Name":""}, {"Value":"no name"},
+                {"Name":"A","Value":"1","Scope":{"Environment":["Environments-1","Environments-2",7,"",null],"Machine":"Machines-1","Role":[]}},
+                {"Name":"B","Value":2,"Type":7,"Scope":[]},
+                {"Name":"C","Value":"secret","IsSensitive":true},
+                {"Name":"D","Value":"secret","IsSensitive":"true","Type":"sensitive"},
+                {"Name":"E","Value":"x","IsSensitive":false,"Type":"Certificate","Scope":{"Machine":["Machines-1"],"Process":["Runbooks-1"]}}
+              ]
+            }
+            """, """{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1","IncludedLibraryVariableSetIds":[7,null,""]}""");
+
+        Assert.Equal(["A", "B", "C", "D", "E"], octopus.Entries.Select(e => e.Name));
+        var a = octopus.Entries[0];
+        Assert.Equal(["Production", "Environments-2"], a.Scope["Environment"]);
+        Assert.Single(a.Scope);
+        var b = octopus.Entries[1];
+        Assert.Null(b.Value);
+        Assert.Equal("String", b.Type);
+        Assert.Empty(b.Scope);
+        Assert.True(octopus.Entries[2].IsSensitive);
+        Assert.Null(octopus.Entries[2].Value);
+        Assert.True(octopus.Entries[3].IsSensitive);
+        Assert.Null(octopus.Entries[3].Value);
+        var e = octopus.Entries[4];
+        Assert.False(e.IsSensitive);
+        Assert.Equal("x", e.Value);
+        Assert.Equal(["Machines-1"], e.Scope["Machine"]);
+        Assert.Equal(["Runbooks-1"], e.Scope["Process"]);
+        Assert.Empty(octopus.Warnings);
+    }
+
+    [Fact]
+    public async Task Maps_every_scope_list_to_its_dimension()
+    {
+        var octopus = await LoadSet("""
+            {
+              "ScopeValues": {
+                "Environments": [{"Id":"e","Name":"Env"}], "Machines": [{"Id":"m","Name":"Machine"}], "Roles": [{"Id":"r","Name":"Role"}],
+                "Actions": [{"Id":"a","Name":"Action"}], "Channels": [{"Id":"c","Name":"Channel"}],
+                "TenantTags": [{"Id":"t","Name":"Tag"}], "Processes": [{"Id":"p","Name":"Process"}]
+              },
+              "Variables": [{"Name":"A","Value":"1","Scope":{
+                "Environment":["e"],"Machine":["m"],"Role":["r"],"Action":["a"],"Channel":["c"],"TenantTag":["t"],"ProcessOwner":["p"]}}]
+            }
+            """);
+
+        var scope = Assert.Single(octopus.Entries).Scope;
+        Assert.Equal(["Env", "Machine", "Role", "Action", "Channel", "Tag", "Process"], scope.Values.Select(v => Assert.Single(v)));
+    }
+
+    [Fact]
+    public async Task Skips_a_project_without_a_variable_set()
+    {
+        var octopus = await LoadSet("{}", """{"Id":"Projects-1","Name":"Api"}""");
+
+        Assert.Empty(octopus.Entries);
+        Assert.Single(octopus.Warnings);
+    }
+
+    [Theory]
+    [InlineData("""[{"Id":"Spaces-1","Name":"Default","IsDefault":false},{"Id":"Spaces-2","Name":"Other","IsDefault":"true"},5]""")]
+    [InlineData("""{"Items":"x"}""")]
+    [InlineData("""{"Items":[{"Name":"Default","IsDefault":true}]}""")]
+    public async Task Says_when_there_is_no_default_space(string spaces)
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", spaces);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => OctopusVariables.LoadAsync(Options(), client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Octopus has no default space the API key can see. Set Space.", ex.Message);
+    }
+
+    [Fact]
+    public async Task Says_when_a_named_space_is_missing()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", Spaces);
+        using var client = handler.Client();
+        var options = Options();
+        options.Space = "Nope";
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => OctopusVariables.LoadAsync(options, client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Octopus space 'Nope' was not found, or the API key cannot see it.", ex.Message);
+    }
+
+    [Fact]
+    public async Task Reads_spaces_and_projects_from_a_paged_Items_list()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/api/spaces/all", """{"Items":[{"Id":"Spaces-1","Name":"Default","IsDefault":true}]}""")
+            .Respond("/api/Spaces-1/projects/all", """{"Items":[{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1"}]}""")
+            .Respond("/api/Spaces-1/variables/vs-1", """{"Variables":[{"Name":"A","Value":"1"}]}""");
+        using var client = handler.Client();
+
+        var octopus = await OctopusVariables.LoadAsync(Options("api"), client, TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(octopus.Entries);
+        Assert.Equal("Api", entry.SetName);
+        Assert.True(entry.IsProjectVariable);
+        Assert.Equal("String", entry.Type);
+    }
+
+    [Fact]
+    public async Task Prefers_an_id_match_over_a_slug_and_a_slug_over_a_name()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/api/Spaces-1/projects/all", """
+                [{"Id":"Projects-1","Name":"s","VariableSetId":"vs-name"},
+                 {"Id":"Projects-2","Name":"q","Slug":"s","VariableSetId":"vs-slug"},
+                 {"Id":"x","Name":"w","VariableSetId":"vs-id"},
+                 {"Id":"Projects-3","Name":"x","Slug":"x","VariableSetId":"vs-name"}]
+                """)
+            .Respond("/api/Spaces-1/variables/vs-id", """{"Variables":[{"Name":"FromId"}]}""")
+            .Respond("/api/Spaces-1/variables/vs-slug", """{"Variables":[{"Name":"FromSlug"}]}""")
+            .Respond("/api/Spaces-1/variables/vs-name", """{"Variables":[{"Name":"FromName"}]}""");
+        using var client = handler.Client();
+        var options = Options("x");
+        options.Space = "Spaces-1";
+
+        Assert.Equal("FromId", Assert.Single((await OctopusVariables.LoadAsync(options, client, TestContext.Current.CancellationToken)).Entries).Name);
+
+        options.Project = "S";
+        Assert.Equal("FromSlug", Assert.Single((await OctopusVariables.LoadAsync(options, client, TestContext.Current.CancellationToken)).Entries).Name);
+    }
+
+    [Fact]
+    public async Task Names_a_library_set_by_id_when_it_has_no_name()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/api/Spaces-1/projects/all", """[{"Id":"Projects-1","Name":"Api","IncludedLibraryVariableSetIds":["Lib-1"]}]""")
+            .Respond("/api/Spaces-1/libraryvariablesets/Lib-1", """{"VariableSetId":"vs-lib"}""")
+            .Respond("/api/Spaces-1/variables/vs-lib", """{"Variables":[{"Name":"A","Value":"1"}]}""");
+        using var client = handler.Client();
+        var options = Options("Api");
+        options.Space = "Spaces-1";
+
+        var entry = Assert.Single((await OctopusVariables.LoadAsync(options, client, TestContext.Current.CancellationToken)).Entries);
+
+        Assert.Equal("library variable set Lib-1", entry.SetName);
+        Assert.False(entry.IsProjectVariable);
+    }
+
+    [Fact]
+    public async Task Checks_its_arguments()
+    {
+        using var client = new FakeHttpHandler().Client();
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.Throws<ArgumentNullException>(() => new OctopusVariables(null!));
+        Assert.Empty(new OctopusVariables([]).Warnings);
+        Assert.Equal(["w"], new OctopusVariables([], ["w"]).Warnings);
+        await Assert.ThrowsAsync<ArgumentNullException>(() => OctopusVariables.LoadAsync(null!, client, ct));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => OctopusVariables.LoadAsync(Options(), null!, ct));
+        var noKey = Options();
+        noKey.ApiKey = " ";
+        await Assert.ThrowsAsync<ArgumentException>(() => OctopusVariables.LoadAsync(noKey, client, ct));
+        var noProject = Options();
+        noProject.Project = "";
+        await Assert.ThrowsAsync<ArgumentException>(() => OctopusVariables.LoadAsync(noProject, client, ct));
+    }
+
+    [Fact]
+    public async Task Loads_through_its_own_client()
+    {
+        // An http address that is not loopback is refused before anything is sent.
+        var options = Options();
+        options.ServerUri = new Uri("http://octopus.example.com/");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => OctopusVariables.LoadAsync(options, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Names_Octopus_in_errors()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", "{}", HttpStatusCode.InternalServerError);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => OctopusVariables.LoadAsync(Options(), client, TestContext.Current.CancellationToken));
+
+        Assert.StartsWith("Octopus returned 500", ex.Message, StringComparison.Ordinal);
+    }
 }

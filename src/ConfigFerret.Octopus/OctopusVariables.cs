@@ -89,7 +89,7 @@ public sealed partial class OctopusVariables
 
         if (options.IncludeLibraryVariableSets && project.TryGetProperty("IncludedLibraryVariableSetIds", out var included) && included.ValueKind == JsonValueKind.Array)
         {
-            foreach (var id in included.EnumerateArray().Select(e => e.GetString()).Where(s => !string.IsNullOrEmpty(s)))
+            foreach (var id in included.EnumerateArray().Select(AsString).Where(s => !string.IsNullOrEmpty(s)))
             {
                 using var set = await api.GetAsync($"{space}/libraryvariablesets/{Uri.EscapeDataString(id!)}", cancellationToken).ConfigureAwait(false);
                 var setName = GetString(set.RootElement, "Name") ?? id!;
@@ -116,7 +116,7 @@ public sealed partial class OctopusVariables
         foreach (var item in Items(spaces.RootElement))
         {
             var matches = space is null
-                ? item.TryGetProperty("IsDefault", out var d) && d.ValueKind == JsonValueKind.True
+                ? item.ValueKind == JsonValueKind.Object && item.TryGetProperty("IsDefault", out var d) && d.ValueKind == JsonValueKind.True
                 : string.Equals(GetString(item, "Name"), space, StringComparison.OrdinalIgnoreCase);
             if (matches && GetString(item, "Id") is { } id)
             {
@@ -138,6 +138,11 @@ public sealed partial class OctopusVariables
 
         using var doc = await api.GetAsync($"{space}/variables/{Uri.EscapeDataString(variableSetId)}", cancellationToken).ConfigureAwait(false);
         var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
         var names = ReadScopeNames(root);
         if (!root.TryGetProperty("Variables", out var variables) || variables.ValueKind != JsonValueKind.Array)
         {
@@ -206,7 +211,7 @@ public sealed partial class OctopusVariables
 
             var lookup = names.GetValueOrDefault(dimension.Name);
             var values = dimension.Value.EnumerateArray()
-                .Select(e => e.GetString())
+                .Select(AsString)
                 .Where(id => !string.IsNullOrEmpty(id))
                 .Select(id => lookup is not null && lookup.TryGetValue(id!, out var display) ? display : id!)
                 .ToList();
@@ -242,6 +247,9 @@ public sealed partial class OctopusVariables
         JsonValueKind.Object when root.TryGetProperty("Items", out var items) && items.ValueKind == JsonValueKind.Array => [.. items.EnumerateArray()],
         _ => [],
     };
+
+    // Ids that are not strings are skipped rather than failing the whole trace.
+    private static string? AsString(JsonElement element) => element.ValueKind == JsonValueKind.String ? element.GetString() : null;
 
     private static string? GetString(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

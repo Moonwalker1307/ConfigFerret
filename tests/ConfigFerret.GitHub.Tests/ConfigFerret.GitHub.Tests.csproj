@@ -27,6 +27,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <!-- Tests for src/Shared, which is compiled into this package. -->
+    <Compile Include="../SharedApiTests/*.cs" Link="SharedApiTests/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

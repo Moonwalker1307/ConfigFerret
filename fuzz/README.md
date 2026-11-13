@@ -17,6 +17,9 @@ that touch `src/` or `fuzz/`. Each night starts from the corpus the previous nig
 | `container` | `KubernetesManifests.Parse`, then `ConfigTracer.ForContainer(...).Trace()` for the default pick and every container, rendered as text and JSON | anything other than `FormatException`, a key listed twice or not found by `Find`, or a Secret value that is not redacted |
 | `kustomize` | `Kustomization.Load` on `overlay/kustomization.yaml %% overlay/app.properties %% base/kustomization.yaml` | anything other than `FormatException`, a missing kustomization or a cycle |
 | `env-names` | environment variable to configuration key matching: prefix, key and value lines, then `NAME=VALUE` lines | any exception, or a match that is not in the environment |
+| `github` | `GitHubVariables.LoadAsync` against a scripted server (first byte picks the options, then one response per request, split by `%%`, each optionally starting with `HTTP <status>`), then the GitHub resolver with links read from the same text as workflows | anything other than `HttpRequestException`, a secret with a value, or the token or the layer's value in a message or note |
+| `octopus` | `OctopusVariables.LoadAsync` against a scripted server, the same way, then the Octopus resolver with scope context picked by the first byte | anything other than `HttpRequestException` or the documented not-found `InvalidOperationException`, a sensitive value, or the API key or the layer's value in a message or note |
+| `unused` | `FindUnused` and `RecordReads` over `appsettings.json %% appsettings.Production.json %% KEY=VALUE lines %% Kubernetes manifests %% keys read` | a never-winning step that wins, a winner that does not win, a read key listed as unread, counts that do not add up, an unredacted sensitive value, or lists out of the report's order |
 
 Seeds are in `corpus/<target>/` and libFuzzer dictionaries in `dictionaries/`.
 
@@ -28,7 +31,7 @@ Needs Linux, the .NET 10 SDK, and clang with the libFuzzer runtime (`apt-get ins
 fuzz/run.sh kubernetes 300
 ```
 
-The script builds the harness, instruments `ConfigFerret.dll` and `YamlDotNet.dll`, and runs one target for the
+The script builds the harness, instruments the ConfigFerret assemblies and `YamlDotNet.dll`, and runs one target for the
 given number of seconds. It grows the corpus in `fuzz/work/<target>/corpus/` and writes crashes to
 `fuzz/findings/<target>/`. Delete `fuzz/out/` to rebuild after changing the code.
 

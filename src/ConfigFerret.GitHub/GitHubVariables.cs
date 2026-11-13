@@ -152,12 +152,16 @@ public sealed class GitHubVariables
                     throw new HttpRequestException($"GitHub returned an unexpected response for {uri.AbsolutePath}: no '{arrayName}' array.");
                 }
 
-                var total = root.TryGetProperty("total_count", out var t) && t.TryGetInt32(out var n) ? n : (int?)null;
+                var total = root.TryGetProperty("total_count", out var t) && t.ValueKind == JsonValueKind.Number && t.TryGetInt32(out var n) ? n : (int?)null;
                 var count = 0;
                 foreach (var item in items.EnumerateArray())
                 {
                     count++;
-                    var name = item.TryGetProperty("name", out var nameValue) ? nameValue.GetString() : null;
+
+                    // Skip anything that is not an entry with a name, rather than fail the whole trace on it.
+                    var name = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("name", out var nameValue) && nameValue.ValueKind == JsonValueKind.String
+                        ? nameValue.GetString()
+                        : null;
                     if (string.IsNullOrEmpty(name))
                     {
                         continue;

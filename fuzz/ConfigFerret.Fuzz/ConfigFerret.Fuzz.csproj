@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/ConfigFerret/ConfigFerret.csproj" />
+    <ProjectReference Include="../../src/ConfigFerret.GitHub/ConfigFerret.GitHub.csproj" />
+    <ProjectReference Include="../../src/ConfigFerret.Octopus/ConfigFerret.Octopus.csproj" />
   </ItemGroup>
 
 </Project>

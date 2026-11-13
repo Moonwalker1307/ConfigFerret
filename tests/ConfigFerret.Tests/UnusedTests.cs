@@ -177,4 +177,67 @@ public class UnusedTests
         Assert.Equal(["Plain"], unused.NotRead!.Select(s => s.Key));
         Assert.Equal(0, unused.SkippedEnvironmentKeys);
     }
+
+    [Fact]
+    public void Marks_the_removing_layer_in_JSON()
+    {
+        var config = Layer(new() { ["K"] = "42" });
+
+        var json = ConfigTracer.For(config)
+            .WithResolver(new Fixed(Step("base.yaml", "1"), Step("overlay.yaml", null, removal: true), Step("overlay.yaml", "42")))
+            .Trace().FindUnused().ToJson();
+
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var removedBy = doc.RootElement.GetProperty("neverWinning")[0].GetProperty("removedBy");
+        Assert.True(removedBy.GetProperty("removal").GetBoolean());
+        Assert.False(removedBy.TryGetProperty("value", out _));
+    }
+
+    [Fact]
+    public void Says_how_many_plain_environment_variables_it_left_out()
+    {
+        Environment.SetEnvironmentVariable("CFUNUSEDCOUNTTEST", "y");
+        try
+        {
+            var unused = new ConfigurationBuilder().AddEnvironmentVariables().Build().TraceProvenance().FindUnused([]);
+
+            Assert.Contains($"  ({unused.SkippedEnvironmentKeys} plain process environment variables such as PATH are left out)", unused.ToText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CFUNUSEDCOUNTTEST", null);
+        }
+    }
+
+    [Fact]
+    public void Follows_the_report_order_for_a_container()
+    {
+        // A container report lists environment variables before files, so FindUnused does too rather than sorting.
+        var manifests = ConfigFerret.Kubernetes.KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: Pod
+            metadata: { name: api }
+            spec:
+              containers:
+                - name: app
+                  env:
+                    - { name: Z_LAST, value: "1" }
+                  volumeMounts:
+                    - { name: cfg, mountPath: /app/a }
+              volumes:
+                - name: cfg
+                  configMap: { name: cfg }
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: { name: cfg }
+            data: { settings.json: "{}" }
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+        var unused = report.FindUnused([]);
+
+        Assert.Equal(report.Settings.Select(s => s.Key), unused.NotRead!.Select(s => s.Key));
+        Assert.Equal(["Z_LAST", "/app/a/settings.json"], unused.NotRead!.Select(s => s.Key));
+    }
 }

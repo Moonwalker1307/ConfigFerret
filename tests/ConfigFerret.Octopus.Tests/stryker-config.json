@@ -1,0 +1,10 @@
+{
+  "stryker-config": {
+    "project": "ConfigFerret.Octopus.csproj",
+    "test-projects": [ "ConfigFerret.Octopus.Tests.csproj" ],
+    "target-framework": "net10.0",
+    "test-runner": "mtp",
+    "reporters": [ "html", "json", "progress", "cleartext" ],
+    "thresholds": { "high": 80, "low": 60, "break": 0 }
+  }
+}
