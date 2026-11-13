@@ -201,4 +201,44 @@ public class EndToEndTests
                 Assert.True(o.IsEffective);
             });
     }
+
+    [Fact]
+    public void Redacts_helm_values_that_render_a_secret()
+    {
+        var environment = new Dictionary<string, string?> { ["CFT_Redact__Db"] = "s3cret" };
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Redact:Db"] = "s3cret" })
+            .Build();
+        var chart = HelmChart.FromText(
+            [("values.yaml", "db:\n  key: s3cret\n")],
+            [("templates/secret.yaml", "stringData:\n  dbkey: {{ .Values.db.key }}\n")]);
+        var secretStep = new ProvenanceStep
+        {
+            Kind = LayerKind.KubernetesSecret,
+            Source = "Secret db",
+            Value = "s3cret",
+            IsSensitive = true,
+            Reference = new SecretKeyRef("db", "dbkey"),
+        };
+
+        // A custom resolver links the in-memory value to the Secret, which Helm then links to its values.
+        var report = ConfigTracer.For(config)
+            .WithOptions(o => o.Environment = environment)
+            .WithResolver(new FixedResolver(secretStep))
+            .WithHelm(chart)
+            .Trace();
+
+        var text = report.ToText() + report.ToJson();
+        Assert.DoesNotContain("s3cret", text, StringComparison.Ordinal);
+        var secret = Assert.Single(report.Find("Redact:Db")!.EffectiveStep!.Origins);
+        var template = Assert.Single(secret.Origins);
+        Assert.True(template.IsSensitive);
+        Assert.True(Assert.Single(template.Origins).IsSensitive);
+    }
+
+    private sealed class FixedResolver(ProvenanceStep step) : IOriginResolver
+    {
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) =>
+            layer.Kind == LayerKind.DotNetProvider ? [step] : [];
+    }
 }

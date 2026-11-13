@@ -123,7 +123,7 @@ public sealed class ConfigTracer
 
             var redacted = Options.RevealSensitiveValues
                 ? enriched
-                : enriched.Select(s => Redact(s, keySensitive)).ToList();
+                : enriched.Select(s => Redact(s, keySensitive, inherited: false)).ToList();
 
             var value = _root[key];
             if (sensitive && !Options.RevealSensitiveValues && value is not null)
@@ -176,12 +176,15 @@ public sealed class ConfigTracer
     private static bool IsSensitiveDeep(ProvenanceStep step) =>
         step.IsSensitive || step.Origins.Any(o => o.IsEffective && IsSensitiveDeep(o));
 
-    private ProvenanceStep Redact(ProvenanceStep step, bool keySensitive)
+    // Everything upstream of a secret layer holds the secret too, for example the Helm values file that rendered a
+    // Secret key, so a sensitive step passes its sensitivity down to its origins.
+    private ProvenanceStep Redact(ProvenanceStep step, bool keySensitive, bool inherited)
     {
-        var sensitive = keySensitive || IsSensitiveDeep(step);
+        var secretSource = inherited || step.IsSensitive;
+        var sensitive = keySensitive || secretSource || IsSensitiveDeep(step);
         var origins = step.Origins.Count == 0
             ? step.Origins
-            : step.Origins.Select(o => Redact(o, keySensitive)).ToList();
+            : step.Origins.Select(o => Redact(o, keySensitive, secretSource)).ToList();
         return step with
         {
             IsSensitive = sensitive,

@@ -77,6 +77,19 @@ public class RendererTests
     }
 
     [Fact]
+    public void Json_keeps_text_readable_and_still_escapes_quotes_and_control_characters()
+    {
+        const string value = "it's <ü> & \"q\"\n";
+        var report = new ProvenanceReport([new TracedSetting("K", value, [], false)], []);
+
+        var json = report.ToJson();
+
+        Assert.Contains("it's <ü> & \\\"q\\\"\\n", json, StringComparison.Ordinal);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Equal(value, doc.RootElement.GetProperty("settings")[0].GetProperty("value").GetString());
+    }
+
+    [Fact]
     public void Text_leaves_out_the_warnings_header_when_there_are_none()
     {
         var report = new ProvenanceReport([], []);

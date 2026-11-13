@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace ConfigFerret;
@@ -11,7 +12,13 @@ public static class JsonRenderer
     {
         ArgumentNullException.ThrowIfNull(report);
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+        {
+            Indented = true,
+            // The report is a file for people and tools, not text embedded in HTML, so keep ' + < > & and
+            // non-ASCII text readable instead of writing \u0027 and the like. Quotes and control characters are still escaped.
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        }))
         {
             writer.WriteStartObject();
             writer.WriteStartArray("settings");

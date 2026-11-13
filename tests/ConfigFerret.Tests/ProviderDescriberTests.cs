@@ -62,6 +62,31 @@ public sealed class ProviderDescriberTests : IDisposable
     }
 
     [Fact]
+    public void Matches_a_prefix_written_with_a_colon()
+    {
+        var describer = Describer(new() { ["App__Db__T"] = "1" });
+
+        Assert.Equal("App__Db__T", describer.FindEnvironmentVariable("App:", "Db:T", "1"));
+    }
+
+    [Fact]
+    public void Maps_the_provider_name_of_a_connection_string()
+    {
+        var describer = Describer(new() { ["MYSQLCONNSTR_Main"] = "Server=x" });
+
+        Assert.Equal("MYSQLCONNSTR_Main", describer.FindEnvironmentVariable("", "ConnectionStrings:Main_ProviderName", "MySql.Data.MySqlClient"));
+        Assert.Equal("MYSQLCONNSTR_Main", describer.FindEnvironmentVariable("ConnectionStrings:", "Main", "Server=x"));
+    }
+
+    [Fact]
+    public void Names_the_variable_like_the_real_one_when_a_colon_prefix_is_not_seen()
+    {
+        var provider = Single(new ConfigurationBuilder().AddEnvironmentVariables("CFNOPE:"));
+
+        Assert.Equal("environment variable CFNOPE__A__B", Describer().Describe(provider, "A:B", "v").Source);
+    }
+
+    [Fact]
     public void Builds_the_variable_name_from_prefix_and_key_when_none_is_seen()
     {
         var provider = Single(new ConfigurationBuilder().AddEnvironmentVariables("CFNOPE_"));

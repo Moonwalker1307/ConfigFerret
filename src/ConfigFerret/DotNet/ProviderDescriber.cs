@@ -59,7 +59,8 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
     private ProvenanceStep DescribeEnvironment(EnvironmentVariablesConfigurationProvider provider, string key, string? value)
     {
         var prefix = ReadPrefix(provider);
-        var name = FindEnvironmentVariable(prefix, key, value) ?? prefix + key.Replace(":", "__", StringComparison.Ordinal);
+        var name = FindEnvironmentVariable(prefix, key, value)
+            ?? (prefix + key).Replace(":", "__", StringComparison.Ordinal);
         return new ProvenanceStep
         {
             Kind = LayerKind.DotNetProvider,
@@ -104,26 +105,41 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
 
     private static bool MapsTo(string name, string prefix, string key)
     {
-        if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        // .NET compares the prefix after turning "__" into ":", so a prefix of "App:" matches App__Key.
+        var normalizedPrefix = Normalize(prefix);
+        var normalized = Normalize(name);
+        if (Matches(normalized, normalizedPrefix, key))
         {
-            return false;
+            return true;
         }
 
-        var rest = name[prefix.Length..];
         foreach (var cs in ConnectionStringPrefixes)
         {
-            if (rest.StartsWith(cs, StringComparison.OrdinalIgnoreCase))
+            // Without a prefix, .NET maps SQLCONNSTR_Main to ConnectionStrings:Main, and most of these also add
+            // ConnectionStrings:Main_ProviderName.
+            if (name.StartsWith(cs, StringComparison.OrdinalIgnoreCase))
             {
-                var csKey = "ConnectionStrings:" + Normalize(rest[cs.Length..]);
-                if (string.Equals(csKey, key, StringComparison.OrdinalIgnoreCase))
+                var csKey = "ConnectionStrings:" + Normalize(name[cs.Length..]);
+                if (Matches(csKey, normalizedPrefix, key) || Matches(csKey + "_ProviderName", normalizedPrefix, key))
                 {
                     return true;
                 }
             }
+
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && name[prefix.Length..].StartsWith(cs, StringComparison.OrdinalIgnoreCase)
+                && string.Equals("ConnectionStrings:" + Normalize(name[(prefix.Length + cs.Length)..]), key, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
-        return string.Equals(Normalize(rest), key, StringComparison.OrdinalIgnoreCase);
+        return false;
     }
+
+    private static bool Matches(string normalizedName, string normalizedPrefix, string key) =>
+        normalizedName.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(normalizedName[normalizedPrefix.Length..], key, StringComparison.OrdinalIgnoreCase);
 
     private static string Normalize(string name) => name.Replace("__", ConfigurationPath.KeyDelimiter, StringComparison.Ordinal);
 

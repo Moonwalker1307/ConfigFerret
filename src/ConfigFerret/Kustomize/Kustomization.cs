@@ -235,7 +235,8 @@ public sealed class Kustomization
                 var eq = trimmed.IndexOf('=', StringComparison.Ordinal);
                 if (eq > 0)
                 {
-                    entries.Add((trimmed[..eq], Unquote(trimmed[(eq + 1)..]), lineNo, string.Create(CultureInfo.InvariantCulture, $"env file {rel}:{lineNo}")));
+                    // The step's line points into the kustomization file, at the envs entry; the env file's own line is in How.
+                    entries.Add((trimmed[..eq], Unquote(trimmed[(eq + 1)..]), env.Line(), string.Create(CultureInfo.InvariantCulture, $"env file {rel}:{lineNo}")));
                 }
             }
         }
@@ -318,7 +319,10 @@ public sealed record GeneratedData(string Name, bool IsSecret, Dictionary<string
 
 /// <summary>One kustomization that set or removed a generated key.</summary>
 /// <param name="Kustomization">The kustomization file, relative to the parent of the loaded directory.</param>
-/// <param name="Line">The line in the kustomization file (or env file).</param>
+/// <param name="Line">
+/// The line in the kustomization file. For an env file entry this is the line of the <c>envs</c> entry,
+/// and <paramref name="How"/> names the env file and the line in it.
+/// </param>
 /// <param name="Value">The value, or null for file entries and removals.</param>
 /// <param name="How">How it was set, for example <c>merge (literal)</c>.</param>
 /// <param name="IsRemoval">True when a <c>behavior: replace</c> generator dropped the key.</param>

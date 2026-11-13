@@ -208,6 +208,59 @@ public class KubernetesResolverTests
             diagnostics.Warnings);
     }
 
+    [Fact]
+    public void Picks_the_app_container_over_init_containers_without_a_warning()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Deployment
+            metadata: { name: api }
+            spec:
+              template:
+                spec:
+                  initContainers:
+                    - name: migrate
+                      env: [{ name: X, value: init }]
+                  containers:
+                    - name: app
+                      env: [{ name: X, value: app }]
+            """);
+        var diagnostics = new TraceDiagnostics();
+
+        var step = Assert.Single(new KubernetesResolver(manifests, null, null).Resolve(Env("X"), diagnostics));
+
+        Assert.Equal("app", step.Value);
+        Assert.Empty(diagnostics.Warnings);
+        Assert.Equal([false, true], manifests.Workloads[0].Containers.Select(c => c.IsInitContainer));
+    }
+
+    [Fact]
+    public void Uses_an_init_container_when_named_or_when_it_is_the_only_one()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Job
+            metadata: { name: once }
+            spec:
+              template:
+                spec:
+                  initContainers:
+                    - name: setup
+                      env: [{ name: X, value: init }]
+            """);
+
+        Assert.Equal("init", Assert.Single(new KubernetesResolver(manifests, null, null).Resolve(Env("X"), new TraceDiagnostics())).Value);
+        Assert.Equal("init", Assert.Single(new KubernetesResolver(manifests, null, "setup").Resolve(Env("X"), new TraceDiagnostics())).Value);
+    }
+
+    [Fact]
+    public void Warns_when_the_workload_has_no_containers()
+    {
+        var manifests = KubernetesManifests.Parse("kind: Pod\nmetadata: { name: empty }\nspec: {}\n");
+        var diagnostics = new TraceDiagnostics();
+
+        Assert.Empty(new KubernetesResolver(manifests, null, null).Resolve(Env("X"), diagnostics));
+        Assert.Equal(["Pod/empty has no containers."], diagnostics.Warnings);
+    }
+
     [Theory]
     [InlineData("nope", null, "No Kubernetes workload named 'nope' found in the manifests.")]
     [InlineData("api", "nope", "No container named 'nope' in Deployment/api.")]
