@@ -1,0 +1,235 @@
+﻿{
+  "settings": [
+    {
+      "key": "ASPNETCORE_ENVIRONMENT",
+      "value": "Production",
+      "sensitive": false,
+      "story": "set in Pod/api-7d9f8c-x2kqp env ASPNETCORE_ENVIRONMENT",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Pod/api-7d9f8c-x2kqp env ASPNETCORE_ENVIRONMENT",
+          "location": "cluster:45",
+          "value": "Production",
+          "effective": true,
+          "note": "container api"
+        }
+      ]
+    },
+    {
+      "key": "DB__Host",
+      "value": "db.prod.svc",
+      "sensitive": false,
+      "story": "set in ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.db.host, set in release values over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap api-config",
+          "location": "key DB__Host, cluster:9",
+          "value": "db.prod.svc",
+          "effective": true,
+          "note": "envFrom on Pod/api-7d9f8c-x2kqp, container api",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 6",
+              "value": "db.prod.svc",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.db.host",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 2, db.host",
+                  "value": "postgres.default.svc",
+                  "effective": false
+                },
+                {
+                  "kind": "Helm",
+                  "source": "release values",
+                  "location": "line 2, db.host",
+                  "value": "db.prod.svc",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "DB__Password",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in Secret api-db",
+      "layers": [
+        {
+          "kind": "KubernetesSecret",
+          "source": "Secret api-db",
+          "location": "key password, cluster:28",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "secretKeyRef on Pod/api-7d9f8c-x2kqp, container api"
+        }
+      ]
+    },
+    {
+      "key": "DB__Timeout",
+      "value": "60",
+      "sensitive": false,
+      "story": "set in ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.db.timeout, set in release values over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap api-config",
+          "location": "key DB__Timeout, cluster:10",
+          "value": "60",
+          "effective": true,
+          "note": "envFrom on Pod/api-7d9f8c-x2kqp, container api",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 7",
+              "value": "60",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.db.timeout",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 3, db.timeout",
+                  "value": "30",
+                  "effective": false
+                },
+                {
+                  "kind": "Helm",
+                  "source": "release values",
+                  "location": "line 3, db.timeout",
+                  "value": "60",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Features__Search",
+      "value": "true",
+      "sensitive": false,
+      "story": "set in ConfigMap api-config, overridden by Pod/api-7d9f8c-x2kqp env Features__Search",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap api-config",
+          "location": "key Features__Search, cluster:12",
+          "value": "false",
+          "effective": false,
+          "note": "envFrom on Pod/api-7d9f8c-x2kqp, container api"
+        },
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Pod/api-7d9f8c-x2kqp env Features__Search",
+          "location": "cluster:47",
+          "value": "true",
+          "effective": true,
+          "note": "container api"
+        }
+      ]
+    },
+    {
+      "key": "Logging__LogLevel__Default",
+      "value": "Information",
+      "sensitive": false,
+      "story": "set in ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.logging.level, set in values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap api-config",
+          "location": "key Logging__LogLevel__Default, cluster:11",
+          "value": "Information",
+          "effective": true,
+          "note": "envFrom on Pod/api-7d9f8c-x2kqp, container api",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 8",
+              "value": "Information",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.logging.level",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 5, logging.level",
+                  "value": "Information",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POD_NAME",
+      "value": null,
+      "sensitive": false,
+      "story": "set in downward API metadata.name",
+      "layers": [
+        {
+          "kind": "KubernetesField",
+          "source": "downward API metadata.name",
+          "location": "cluster:54",
+          "value": null,
+          "effective": true,
+          "note": "fieldRef on Pod/api-7d9f8c-x2kqp, container api"
+        }
+      ]
+    },
+    {
+      "key": "/app/appsettings.Production.json",
+      "value": "{ \"Features\": { \"Search\": true } }\n",
+      "sensitive": false,
+      "story": "set in ConfigMap api-files",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap api-files",
+          "location": "key appsettings.Production.json, cluster:19",
+          "value": "{ \"Features\": { \"Search\": true } }\n",
+          "effective": true,
+          "note": "mounted at /app/appsettings.Production.json by volume files on Pod/api-7d9f8c-x2kqp, container api"
+        }
+      ]
+    },
+    {
+      "key": "/etc/db/password.txt",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in Secret api-db",
+      "layers": [
+        {
+          "kind": "KubernetesSecret",
+          "source": "Secret api-db",
+          "location": "key password, cluster:28",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "mounted at /etc/db by volume db on Pod/api-7d9f8c-x2kqp, container api"
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    "envFrom Secret api-extra on Pod/api-7d9f8c-x2kqp, container api was not loaded, so the variables it adds are not listed."
+  ]
+}

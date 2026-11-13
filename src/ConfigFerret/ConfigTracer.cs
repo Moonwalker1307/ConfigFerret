@@ -40,12 +40,18 @@ public sealed class ConfigTracer
     }
 
     /// <summary>
-    /// Starts a trace of the environment variables a Kubernetes container gets, seen from outside the app: from the
-    /// workload spec, its ConfigMaps and Secrets, and (with <see cref="WithHelm"/> or <see cref="WithKustomize"/>) the
-    /// Helm values or Kustomize generators behind them. Use this when you have the manifests but not the app's own
-    /// configuration, for example in a cluster browser. The report's keys are the variable names, matched case-sensitively.
+    /// Starts a trace of the environment variables and mounted files a Kubernetes container gets, seen from outside
+    /// the app: from the workload spec, its ConfigMaps and Secrets, and (with <see cref="WithHelm"/> or
+    /// <see cref="WithKustomize"/>) the Helm values or Kustomize generators behind them. Use this when you have the
+    /// manifests but not the app's own configuration, for example in a cluster browser.
     /// </summary>
-    /// <param name="manifests">The workload and the ConfigMaps and Secrets it uses. Variables from an <c>envFrom</c> source that is not in them are not listed.</param>
+    /// <remarks>
+    /// The report lists the environment variables first, sorted by name, then the files that ConfigMap and Secret
+    /// volumes mount, sorted by absolute path. Keys are matched case-sensitively. A file's value is its full content.
+    /// A variable whose value Kubernetes sets at run time (a downward API field), or whose source is not in the
+    /// manifests, is listed with a null value.
+    /// </remarks>
+    /// <param name="manifests">The workload and the ConfigMaps and Secrets it uses. Variables from an <c>envFrom</c> source, and files from a volume source without <c>items</c>, that is not in them are not listed.</param>
     /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
     /// <param name="container">The container name. Needed only when the workload has more than one.</param>
     /// <example>
@@ -83,9 +89,15 @@ public sealed class ConfigTracer
     /// <param name="manifests">Rendered manifests (<c>helm template</c>, <c>kustomize build</c>, <c>kubectl get -o yaml</c>) or the live pod.</param>
     /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
     /// <param name="container">The container name. Needed only when the workload has more than one.</param>
+    /// <exception cref="InvalidOperationException">The trace was started with <see cref="ForContainer"/>, which already has its manifests.</exception>
     public ConfigTracer WithKubernetes(KubernetesManifests manifests, string? workload = null, string? container = null)
     {
         ArgumentNullException.ThrowIfNull(manifests);
+        if (_container is not null)
+        {
+            throw new InvalidOperationException("WithKubernetes links the app's configuration to Kubernetes. A trace started with ForContainer already reads the container from its manifests; add every ConfigMap and Secret to those instead.");
+        }
+
         _resolvers.Add(new KubernetesResolver(manifests, workload, container));
         return this;
     }
@@ -179,8 +191,8 @@ public sealed class ConfigTracer
         return layers;
     }
 
-    // Seen from outside there is no .NET provider above the container, so each variable's history starts at the
-    // workload layers themselves. A variable whose value Kubernetes fills in at run time (a downward API field) or
+    // Seen from outside there is no .NET provider above the container, so each variable's or file's history starts at
+    // the workload layers themselves. A variable whose value Kubernetes fills in at run time (a downward API field) or
     // whose source was not loaded is still listed, with no value.
     private static List<(string Key, string? Value, List<ProvenanceStep> Steps)> ReadContainer(KubernetesResolver container, TraceDiagnostics diagnostics)
     {
@@ -190,6 +202,12 @@ public sealed class ConfigTracer
             var steps = container.ResolveEnvironmentVariable(name, diagnostics).ToList();
             var value = steps.Count > 0 && !steps[^1].IsRemoval ? steps[^1].Value : null;
             layers.Add((name, value, steps));
+        }
+
+        foreach (var path in container.MountedFilePaths(diagnostics).Order(StringComparer.Ordinal))
+        {
+            var steps = container.ResolveMountedFile(path, diagnostics).ToList();
+            layers.Add((path, steps.Count > 0 ? steps[^1].Value : null, steps));
         }
 
         return layers;

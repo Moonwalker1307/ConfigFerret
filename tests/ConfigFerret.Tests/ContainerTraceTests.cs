@@ -152,6 +152,151 @@ public class ContainerTraceTests
         Assert.Equal("No Kubernetes workload named 'other' found in the manifests.", Assert.Single(report.Warnings));
     }
 
+    // ConfigMap and Secret volumes: a whole ConfigMap, a Secret with items, a projected volume and a subPath mount.
+    private const string PodWithVolumes = """
+        apiVersion: v1
+        kind: ConfigMap
+        metadata: { name: app-files }
+        data:
+          appsettings.json: '{ "Db": { "Timeout": 42 } }'
+          logging.json: '{}'
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata: { name: tls }
+        data:
+          tls.key: c2VjcmV0LWtleQ==
+          tls.crt: Y2VydA==
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata: { name: api-7d9f }
+        spec:
+          containers:
+            - name: api
+              env:
+                - name: A
+                  value: "1"
+              volumeMounts:
+                - { name: files, mountPath: /app/config }
+                - { name: tls, mountPath: /etc/tls/ }
+                - { name: files, mountPath: /app/appsettings.json, subPath: appsettings.json }
+                - { name: merged, mountPath: /etc/merged }
+                - { name: scratch, mountPath: /tmp }
+          volumes:
+            - name: files
+              configMap: { name: app-files }
+            - name: tls
+              secret:
+                secretName: tls
+                items:
+                  - { key: tls.key, path: private/key.pem }
+            - name: merged
+              projected:
+                sources:
+                  - configMap: { name: unread }
+            - name: scratch
+              emptyDir: {}
+        """;
+
+    [Fact]
+    public void Lists_mounted_files_after_the_variables()
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(PodWithVolumes)).Trace();
+
+        Assert.Equal(
+            ["A", "/app/appsettings.json", "/app/config/appsettings.json", "/app/config/logging.json", "/etc/tls/private/key.pem"],
+            report.Settings.Select(s => s.Key));
+        Assert.Contains("Volume merged on Pod/api-7d9f, container api mounts ConfigMap unread at /etc/merged, which was not loaded", Assert.Single(report.Warnings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_mounted_file_has_its_content_as_value()
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(PodWithVolumes)).Trace();
+
+        var file = report.Find("/app/appsettings.json")!;
+        var step = Assert.Single(file.Steps);
+
+        Assert.Equal("""{ "Db": { "Timeout": 42 } }""", file.Value);
+        Assert.Equal("ConfigMap app-files", step.Source);
+        Assert.Equal(new ConfigMapKeyRef("app-files", "appsettings.json"), step.Reference);
+        Assert.StartsWith("mounted at /app/appsettings.json by volume files", step.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_mounted_secret_file_is_redacted()
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(PodWithVolumes)).Trace();
+
+        var key = report.Find("/etc/tls/private/key.pem")!;
+
+        Assert.True(key.IsSensitive);
+        Assert.Equal("***", key.Value);
+        Assert.Equal(new SecretKeyRef("tls", "tls.key"), Assert.Single(key.Steps).Reference);
+        Assert.DoesNotContain("secret-key", report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-key", report.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_mounted_file_from_a_source_that_was_not_loaded_has_no_value()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: p }
+            spec:
+              containers:
+                - name: c
+                  volumeMounts:
+                    - { name: cfg, mountPath: /cfg }
+              volumes:
+                - name: cfg
+                  configMap:
+                    name: unread
+                    items:
+                      - { key: app.json, path: app.json }
+            """);
+
+        var file = ConfigTracer.ForContainer(manifests).Trace().Find("/cfg/app.json")!;
+
+        Assert.Null(file.Value);
+        Assert.EndsWith("its contents were not loaded", Assert.Single(file.Steps).Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Text_says_why_a_value_is_missing()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: p }
+            spec:
+              containers:
+                - name: c
+                  env:
+                    - name: POD_IP
+                      valueFrom:
+                        fieldRef: { fieldPath: status.podIP }
+                    - name: TOKEN
+                      valueFrom:
+                        secretKeyRef: { name: unread, key: token }
+            """);
+
+        var text = ConfigTracer.ForContainer(manifests).Trace().ToText();
+
+        Assert.Contains("POD_IP = (set at run time)", text, StringComparison.Ordinal);
+        Assert.Contains("TOKEN = (unknown)", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WithKubernetes_is_rejected_on_a_container_trace()
+    {
+        var manifests = KubernetesManifests.Parse(Pod);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ConfigTracer.ForContainer(manifests).WithKubernetes(manifests));
+
+        Assert.Contains("ForContainer", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ForContainer_rejects_null_manifests() =>
         Assert.Throws<ArgumentNullException>(() => ConfigTracer.ForContainer(null!));

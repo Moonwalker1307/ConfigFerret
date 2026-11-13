@@ -4,7 +4,7 @@
     <RootNamespace>ConfigFerret</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>ConfigFerret</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Description>Config provenance tracer: answers "why is this value 42?" by tracing every effective .NET configuration value back through appsettings files, environment variables, Kubernetes ConfigMaps and Secrets, Helm values files and Kustomize overlays.</Description>
     <PackageTags>configuration;provenance;kubernetes;helm;kustomize;appsettings;debugging</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

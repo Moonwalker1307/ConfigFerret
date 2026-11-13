@@ -1,0 +1,60 @@
+﻿ASPNETCORE_ENVIRONMENT = "Production"
+  set in Pod/api-7d9f8c-x2kqp env ASPNETCORE_ENVIRONMENT
+  [effective]  Pod/api-7d9f8c-x2kqp env ASPNETCORE_ENVIRONMENT (cluster:45) = "Production"
+               container api
+
+DB__Host = "db.prod.svc"
+  set in ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.db.host, set in release values over values.yaml (chart default)
+  [effective]  ConfigMap api-config (key DB__Host, cluster:9) = "db.prod.svc"
+               envFrom on Pod/api-7d9f8c-x2kqp, container api
+    <- [effective]  Helm template templates/configmap.yaml (line 6) = "db.prod.svc" [inferred]
+                    renders .Values.db.host
+      <- [overridden] values.yaml (chart default) (line 2, db.host) = "postgres.default.svc"
+      <- [effective]  release values (line 2, db.host) = "db.prod.svc"
+
+DB__Password = "***"
+  set in Secret api-db
+  [effective]  Secret api-db (key password, cluster:28) = "***"
+               secretKeyRef on Pod/api-7d9f8c-x2kqp, container api
+
+DB__Timeout = "60"
+  set in ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.db.timeout, set in release values over values.yaml (chart default)
+  [effective]  ConfigMap api-config (key DB__Timeout, cluster:10) = "60"
+               envFrom on Pod/api-7d9f8c-x2kqp, container api
+    <- [effective]  Helm template templates/configmap.yaml (line 7) = "60" [inferred]
+                    renders .Values.db.timeout
+      <- [overridden] values.yaml (chart default) (line 3, db.timeout) = "30"
+      <- [effective]  release values (line 3, db.timeout) = "60"
+
+Features__Search = "true"
+  set in ConfigMap api-config, overridden by Pod/api-7d9f8c-x2kqp env Features__Search
+  [overridden] ConfigMap api-config (key Features__Search, cluster:12) = "false"
+               envFrom on Pod/api-7d9f8c-x2kqp, container api
+  [effective]  Pod/api-7d9f8c-x2kqp env Features__Search (cluster:47) = "true"
+               container api
+
+Logging__LogLevel__Default = "Information"
+  set in ConfigMap api-config, rendered by Helm template templates/configmap.yaml from .Values.logging.level, set in values.yaml (chart default)
+  [effective]  ConfigMap api-config (key Logging__LogLevel__Default, cluster:11) = "Information"
+               envFrom on Pod/api-7d9f8c-x2kqp, container api
+    <- [effective]  Helm template templates/configmap.yaml (line 8) = "Information" [inferred]
+                    renders .Values.logging.level
+      <- [effective]  values.yaml (chart default) (line 5, logging.level) = "Information"
+
+POD_NAME = (set at run time)
+  set in downward API metadata.name
+  [effective]  downward API metadata.name (cluster:54)
+               fieldRef on Pod/api-7d9f8c-x2kqp, container api
+
+/app/appsettings.Production.json = "{ "Features": { "Search": true } }\n"
+  set in ConfigMap api-files
+  [effective]  ConfigMap api-files (key appsettings.Production.json, cluster:19) = "{ "Features": { "Search": true } }\n"
+               mounted at /app/appsettings.Production.json by volume files on Pod/api-7d9f8c-x2kqp, container api
+
+/etc/db/password.txt = "***"
+  set in Secret api-db
+  [effective]  Secret api-db (key password, cluster:28) = "***"
+               mounted at /etc/db by volume db on Pod/api-7d9f8c-x2kqp, container api
+
+Warnings:
+  - envFrom Secret api-extra on Pod/api-7d9f8c-x2kqp, container api was not loaded, so the variables it adds are not listed.

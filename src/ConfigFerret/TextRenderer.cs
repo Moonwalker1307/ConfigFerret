@@ -39,7 +39,7 @@ public static class TextRenderer
 
     private static void Write(StringBuilder sb, TracedSetting setting)
     {
-        sb.Append(setting.Key).Append(" = ").AppendLine(Show(setting.Value));
+        sb.Append(setting.Key).Append(" = ").AppendLine(ShowValue(setting));
         sb.Append("  ").AppendLine(setting.Story);
         foreach (var step in setting.Steps)
         {
@@ -78,6 +78,22 @@ public static class TextRenderer
         {
             WriteStep(sb, origin, depth + 1);
         }
+    }
+
+    // A container trace lists what the manifests can't tell, so say why the value is missing rather than "(null)".
+    private static string ShowValue(TracedSetting setting)
+    {
+        if (setting.Value is not null || setting.Steps.Count == 0)
+        {
+            return Show(setting.Value);
+        }
+
+        return setting.Steps[^1].Kind switch
+        {
+            LayerKind.KubernetesField => "(set at run time)",
+            LayerKind.KubernetesConfigMap or LayerKind.KubernetesSecret or LayerKind.KubernetesWorkload => "(unknown)",
+            _ => Show(setting.Value),
+        };
     }
 
     internal static string Show(string? value)

@@ -1,0 +1,5 @@
+db:
+  host: postgres.default.svc
+  timeout: 30
+logging:
+  level: Information

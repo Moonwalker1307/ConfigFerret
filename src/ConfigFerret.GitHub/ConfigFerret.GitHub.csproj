@@ -4,7 +4,7 @@
     <RootNamespace>ConfigFerret.GitHub</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>ConfigFerret.GitHub</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Description>GitHub Actions source for ConfigFerret: links configuration values to the GitHub Actions organization, repository and environment variables (and secret names) that set them, read through the GitHub REST API.</Description>
     <PackageTags>configuration;provenance;github;github-actions;variables;debugging</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -34,6 +34,7 @@ internal static class Targets
         ["helm-set"] = new("Helm --set expressions, one per line", HelmSet),
         ["helm-template"] = new("Helm template scanning for .Values references", HelmTemplate),
         ["kubernetes"] = new("Kubernetes manifests and the env/volume resolver", KubernetesManifestsTarget),
+        ["container"] = new("Kubernetes manifests traced from outside with ConfigTracer.ForContainer, then rendered", Container),
         ["kustomize"] = new("Kustomization overlay %% env file %% base kustomization", KustomizeTarget),
         ["env-names"] = new("Environment variable name matching: prefix, key, value, then NAME=VALUE lines", EnvNames),
     };
@@ -220,6 +221,50 @@ internal static class Targets
                     }
                 }
             }
+        }
+    }
+
+    private static void Container(ReadOnlySpan<byte> data)
+    {
+        KubernetesManifests manifests;
+        try
+        {
+            manifests = KubernetesManifests.Parse(Text(data), "fuzz.yaml");
+        }
+        catch (FormatException)
+        {
+            return;
+        }
+
+        // The default pick (no names) and every named container, the way a cluster browser would ask.
+        var targets = new List<(string?, string?)> { (null, null) };
+        targets.AddRange(manifests.Workloads.Take(10).SelectMany(w => w.Containers.Take(10).Select(c => ((string?)w.Name, (string?)c.Name))));
+        foreach (var (workload, container) in targets)
+        {
+            var report = ConfigTracer.ForContainer(manifests, workload, container).Trace();
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var setting in report.Settings)
+            {
+                if (!keys.Add(setting.Key))
+                {
+                    throw new InvariantException($"ForContainer listed '{setting.Key}' twice.");
+                }
+
+                if (!ReferenceEquals(report.Find(setting.Key), setting))
+                {
+                    throw new InvariantException($"Find('{setting.Key}') did not return the listed setting.");
+                }
+
+                // A Secret's value must never reach the report unredacted.
+                if (setting.Steps.Count > 0 && setting.Steps[^1].Kind == LayerKind.KubernetesSecret
+                    && setting.Value is not null && setting.Value != new TraceOptions().RedactedText)
+                {
+                    throw new InvariantException($"'{setting.Key}' comes from a Secret but its value is not redacted.");
+                }
+            }
+
+            _ = report.ToText();
+            _ = report.ToJson();
         }
     }
 

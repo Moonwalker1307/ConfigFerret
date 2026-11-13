@@ -70,6 +70,12 @@ public class GoldenTests
     [Fact]
     public Task Local_dev_json() => VerifyJson(TraceLocalDev().ToJson());
 
+    [Fact]
+    public Task Container_text() => VerifyText(TraceContainer().ToText());
+
+    [Fact]
+    public Task Container_json() => VerifyJson(TraceContainer().ToJson());
+
     // What the orders service was seen reading: everything except Api:BaseUrl and Pod:Name.
     private static readonly string[] OrdersReads =
     [
@@ -141,6 +147,24 @@ public class GoldenTests
 
         return ConfigTracer.For(config)
             .WithOptions(o => o.Environment = DeveloperShell)
+            .Trace();
+    }
+
+    // A container seen from outside, the way a cluster browser traces it: the pod and its ConfigMaps and Secret from
+    // the API, and the chart values, release values and templates from the Helm release, all passed as text.
+    private static ProvenanceReport TraceContainer()
+    {
+        var dir = Fixture("container");
+        var helm = Path.Join(dir, "helm");
+        var chart = HelmChart.FromText(
+            [
+                ("values.yaml (chart default)", File.ReadAllText(Path.Join(helm, "values.yaml"))),
+                ("release values", File.ReadAllText(Path.Join(helm, "release-values.yaml"))),
+            ],
+            [("templates/configmap.yaml", File.ReadAllText(Path.Join(helm, "templates", "configmap.yaml")))]);
+
+        return ConfigTracer.ForContainer(KubernetesManifests.Parse(File.ReadAllText(Path.Join(dir, "cluster.yaml")), "cluster"), "api-7d9f8c-x2kqp", "api")
+            .WithHelm(chart)
             .Trace();
     }
 
