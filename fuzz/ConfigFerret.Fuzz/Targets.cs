@@ -237,11 +237,18 @@ internal static class Targets
         }
 
         // The default pick (no names) and every named container, the way a cluster browser would ask.
-        var targets = new List<(string?, string?)> { (null, null) };
-        targets.AddRange(manifests.Workloads.Take(10).SelectMany(w => w.Containers.Take(10).Select(c => ((string?)w.Name, (string?)c.Name))));
-        foreach (var (workload, container) in targets)
+        var targets = new List<(string? Workload, string? Container)> { (null, null) };
+        foreach (var workload in manifests.Workloads.Take(10))
         {
-            var report = ConfigTracer.ForContainer(manifests, workload, container).Trace();
+            foreach (var container in workload.Containers.Take(10))
+            {
+                targets.Add((workload.Name, container.Name));
+            }
+        }
+
+        foreach (var (workloadName, containerName) in targets)
+        {
+            var report = ConfigTracer.ForContainer(manifests, workloadName, containerName).Trace();
             var keys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var setting in report.Settings)
             {

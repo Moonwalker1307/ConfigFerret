@@ -40,7 +40,6 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         }
 
         var names = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var from in container.EnvFrom)
         {
             var store = from.IsSecret ? manifests.Secrets : manifests.ConfigMaps;
@@ -50,24 +49,11 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                 continue;
             }
 
-            foreach (var key in data.Data.Keys.Order(StringComparer.Ordinal))
-            {
-                if (seen.Add(from.Prefix + key))
-                {
-                    names.Add(from.Prefix + key);
-                }
-            }
+            names.AddRange(data.Data.Keys.Order(StringComparer.Ordinal).Select(key => from.Prefix + key));
         }
 
-        foreach (var entry in container.Env)
-        {
-            if (seen.Add(entry.Name))
-            {
-                names.Add(entry.Name);
-            }
-        }
-
-        return names;
+        names.AddRange(container.Env.Select(e => e.Name));
+        return names.Distinct(StringComparer.Ordinal).ToList();
     }
 
     /// <summary>Every layer that sets the environment variable <paramref name="name"/> on the selected container, lowest priority first.</summary>
@@ -87,7 +73,6 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         }
 
         var paths = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var mount in container.VolumeMounts)
         {
             var volume = workload.Volumes.FirstOrDefault(v => string.Equals(v.Name, mount.Name, StringComparison.Ordinal));
@@ -99,11 +84,7 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
             var mountPath = mount.MountPath.TrimEnd('/');
             if (mount.SubPath is { Length: > 0 })
             {
-                if (seen.Add(mountPath))
-                {
-                    paths.Add(mountPath);
-                }
-
+                paths.Add(mountPath);
                 continue;
             }
 
@@ -124,17 +105,11 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                     continue;
                 }
 
-                foreach (var path in relative.Select(r => mountPath + "/" + r.TrimStart('/')))
-                {
-                    if (seen.Add(path))
-                    {
-                        paths.Add(path);
-                    }
-                }
+                paths.AddRange(relative.Select(r => mountPath + "/" + r.TrimStart('/')));
             }
         }
 
-        return paths;
+        return paths.Distinct(StringComparer.Ordinal).ToList();
     }
 
     /// <summary>
