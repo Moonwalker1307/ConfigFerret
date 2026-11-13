@@ -104,7 +104,7 @@ public class KubernetesTests
         using var handler = new FakeApi();
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://k8s.test/") };
 
-        var manifests = await KubernetesInCluster.LoadPodAsync(client, "prod", "api-7d9f");
+        var manifests = await KubernetesInCluster.LoadPodAsync(client, "prod", "api-7d9f", TestContext.Current.CancellationToken);
 
         Assert.Equal("Pod/api-7d9f", manifests.Workloads[0].DisplayName);
         Assert.Equal("42", manifests.ConfigMaps["api-config"].Data["Db__Timeout"].Value);
@@ -118,7 +118,7 @@ public class KubernetesTests
         using var handler = new FakeApi();
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://k8s.test/") };
 
-        var manifests = await KubernetesInCluster.LoadPodAsync(client, "prod", "worker");
+        var manifests = await KubernetesInCluster.LoadPodAsync(client, "prod", "worker", TestContext.Current.CancellationToken);
 
         Assert.Equal("pod worker", manifests.Workloads[0].SourceName);
         Assert.Equal("configmap api-config", manifests.ConfigMaps["api-config"].SourceName);
@@ -134,14 +134,14 @@ public class KubernetesTests
 
     [Fact]
     public async Task LoadPodAsync_rejects_a_null_client() =>
-        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(null!, "ns", "pod"));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(null!, "ns", "pod", TestContext.Current.CancellationToken));
 
     [Fact]
     public async Task LoadPodAsync_rejects_a_null_namespace_or_pod_name()
     {
         using var client = new HttpClient();
-        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(client, null!, "pod"));
-        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(client, "ns", null!));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(client, null!, "pod", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => KubernetesInCluster.LoadPodAsync(client, "ns", null!, TestContext.Current.CancellationToken));
     }
 
     private sealed class FakeApi : HttpMessageHandler
