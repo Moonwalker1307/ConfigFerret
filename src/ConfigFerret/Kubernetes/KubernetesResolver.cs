@@ -28,6 +28,52 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         };
     }
 
+    /// <summary>
+    /// The environment variables the selected container gets, in the order Kubernetes applies them: every key of each
+    /// loaded <c>envFrom</c> source with its prefix, then each <c>env</c> entry. A name set more than once is listed once.
+    /// </summary>
+    internal IReadOnlyList<string> EnvironmentVariableNames(TraceDiagnostics diagnostics)
+    {
+        if (Select(diagnostics) is not (var workload, var container))
+        {
+            return [];
+        }
+
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var from in container.EnvFrom)
+        {
+            var store = from.IsSecret ? manifests.Secrets : manifests.ConfigMaps;
+            if (!store.TryGetValue(from.Name, out var data))
+            {
+                diagnostics.Warn($"envFrom {(from.IsSecret ? "Secret" : "ConfigMap")} {from.Name} on {workload.DisplayName}, container {container.Name} was not loaded, so the variables it adds are not listed.");
+                continue;
+            }
+
+            foreach (var key in data.Data.Keys.Order(StringComparer.Ordinal))
+            {
+                if (seen.Add(from.Prefix + key))
+                {
+                    names.Add(from.Prefix + key);
+                }
+            }
+        }
+
+        foreach (var entry in container.Env)
+        {
+            if (seen.Add(entry.Name))
+            {
+                names.Add(entry.Name);
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>Every layer that sets the environment variable <paramref name="name"/> on the selected container, lowest priority first.</summary>
+    internal IReadOnlyList<ProvenanceStep> ResolveEnvironmentVariable(string name, TraceDiagnostics diagnostics) =>
+        Select(diagnostics) is (var workload, var container) ? ResolveEnv(workload, container, name) : [];
+
     private (Workload, Container)? Select(TraceDiagnostics diagnostics)
     {
         if (_selected)

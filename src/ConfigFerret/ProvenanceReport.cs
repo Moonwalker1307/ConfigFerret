@@ -5,11 +5,13 @@ public sealed class ProvenanceReport
 {
     private readonly Dictionary<string, TracedSetting> _byKey;
 
-    internal ProvenanceReport(IReadOnlyList<TracedSetting> settings, IReadOnlyList<string> warnings)
+    // .NET configuration keys ignore case, but a container's environment variable names do not, so a container trace
+    // passes an ordinal comparer.
+    internal ProvenanceReport(IReadOnlyList<TracedSetting> settings, IReadOnlyList<string> warnings, StringComparer? keyComparer = null)
     {
         Settings = settings;
         Warnings = warnings;
-        _byKey = new Dictionary<string, TracedSetting>(StringComparer.OrdinalIgnoreCase);
+        _byKey = new Dictionary<string, TracedSetting>(keyComparer ?? StringComparer.OrdinalIgnoreCase);
         foreach (var s in settings)
         {
             _byKey[s.Key] = s;
@@ -22,11 +24,14 @@ public sealed class ProvenanceReport
     /// <summary>Warnings found while tracing.</summary>
     public IReadOnlyList<string> Warnings { get; }
 
-    /// <summary>Finds a setting by key (case-insensitive). Accepts <c>:</c> or <c>__</c> as the separator.</summary>
+    /// <summary>
+    /// Finds a setting by key. Accepts <c>:</c> or <c>__</c> as the separator. Keys are case-insensitive, except in a
+    /// trace started with <see cref="ConfigTracer.ForContainer"/>, whose keys are environment variable names.
+    /// </summary>
     public TracedSetting? Find(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        return _byKey.GetValueOrDefault(key.Replace("__", ":", StringComparison.Ordinal));
+        return _byKey.GetValueOrDefault(key) ?? _byKey.GetValueOrDefault(key.Replace("__", ":", StringComparison.Ordinal));
     }
 
     /// <summary>Answers "why is this value what it is?" for one key, as text.</summary>
