@@ -76,4 +76,45 @@ public class FuzzRegressionTests
         Assert.Equal("30", chart.GetValue("defaults.timeout"));
         Assert.Equal("db.internal", chart.GetValue("copy.host"));
     }
+
+    [Theory]
+    [InlineData("a: &a\n  b: *a\n")]
+    [InlineData("a: &a\n  <<: *a\n")]
+    [InlineData("a: &a [1, *a]\n")]
+    [InlineData("a: &a\n  *a : 1\n")]
+    public void An_alias_inside_its_own_anchor_throws_FormatException(string yaml)
+    {
+        // Found by fuzzing: a node that contains itself overflowed the stack, which ends the process.
+        Assert.Throws<FormatException>(() => HelmChart.FromText([("values.yaml", yaml)]));
+        Assert.Throws<FormatException>(() => KubernetesManifests.Parse(yaml));
+    }
+
+    [Fact]
+    public void An_anchor_redefined_inside_its_node_can_still_be_used()
+    {
+        // The alias refers to the inner scalar, which is complete, so the node does not contain itself.
+        const string yaml = "a: &x\n  b: &x 5\n  c: *x\n";
+
+        Assert.Equal("5", HelmChart.FromText([("values.yaml", yaml)]).GetValue("a.c"));
+    }
+
+    [Fact]
+    public void Yaml_of_exactly_1024_characters_does_not_stall_the_scanner()
+    {
+        // Found by fuzzing: YamlDotNet's scanner spun for over 10 seconds on this 1024-character input.
+        var yaml = Read("helm-values-1024-chars-slow.yaml");
+        Assert.Equal(1024, yaml.Length);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            HelmChart.FromText([("values.yaml", yaml)]);
+        }
+        catch (FormatException)
+        {
+            // Rejecting it is fine; taking seconds is not.
+        }
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"Parsing took {watch.Elapsed}.");
+    }
 }

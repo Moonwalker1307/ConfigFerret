@@ -18,10 +18,20 @@ public sealed class Kustomization
 {
     private static readonly string[] FileNames = ["kustomization.yaml", "kustomization.yml", "Kustomization"];
 
-    private Kustomization(Dictionary<string, GeneratedData> generated) => Generated = generated;
+    private Kustomization(List<GeneratedData> generated)
+    {
+        ConfigMaps = generated.Where(g => !g.IsSecret).ToDictionary(g => g.Name, StringComparer.Ordinal);
+        Secrets = generated.Where(g => g.IsSecret).ToDictionary(g => g.Name, StringComparer.Ordinal);
+    }
 
-    /// <summary>The generated ConfigMaps and Secrets, by final name (without the hash suffix).</summary>
-    public IReadOnlyDictionary<string, GeneratedData> Generated { get; }
+    /// <summary>The generated ConfigMaps, by final name (without the hash suffix).</summary>
+    public IReadOnlyDictionary<string, GeneratedData> ConfigMaps { get; }
+
+    /// <summary>
+    /// The generated Secrets, by final name (without the hash suffix).
+    /// A Secret can share its name with a ConfigMap, as in Kubernetes.
+    /// </summary>
+    public IReadOnlyDictionary<string, GeneratedData> Secrets { get; }
 
     /// <summary>Loads the kustomization in <paramref name="directory"/> and all its bases.</summary>
     public static Kustomization Load(string directory)
@@ -44,21 +54,22 @@ public sealed class Kustomization
             }
         }
 
-        return new Kustomization(state.ToDictionary(g => g.Name, StringComparer.Ordinal));
+        return new Kustomization(state);
     }
 
     /// <summary>Finds a generated ConfigMap or Secret by the name a manifest uses, which may carry a hash suffix.</summary>
     public GeneratedData? Find(string name, bool isSecret)
     {
         ArgumentNullException.ThrowIfNull(name);
-        if (Generated.TryGetValue(name, out var exact) && exact.IsSecret == isSecret)
+        var generated = isSecret ? Secrets : ConfigMaps;
+        if (generated.TryGetValue(name, out var exact))
         {
             return exact;
         }
 
         // kustomize appends "-" and a 10-character hash.
         var dash = name.LastIndexOf('-');
-        if (dash > 0 && name.Length - dash - 1 == 10 && Generated.TryGetValue(name[..dash], out var hashed) && hashed.IsSecret == isSecret)
+        if (dash > 0 && name.Length - dash - 1 == 10 && generated.TryGetValue(name[..dash], out var hashed))
         {
             return hashed;
         }
@@ -129,8 +140,9 @@ public sealed class Kustomization
         foreach (var generator in generators.Items())
         {
             var name = generator.Str("name");
-            if (name is null)
+            if (string.IsNullOrEmpty(name))
             {
+                // kustomize rejects a generator without a name (found by fuzzing: name: '').
                 continue;
             }
 

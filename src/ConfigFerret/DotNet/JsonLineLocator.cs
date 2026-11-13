@@ -136,7 +136,15 @@ internal static class JsonLineLocator
             lenient.CopyTo(quoted, 1);
             var inner = new Utf8JsonReader(quoted);
             inner.Read();
-            return inner.GetString();
+            try
+            {
+                return inner.GetString();
+            }
+            catch (InvalidOperationException ex)
+            {
+                // An escaped lone surrogate such as \uDDDD. The .NET JSON provider rejects these too.
+                throw new JsonException(ex.Message, ex);
+            }
         }
     }
 }

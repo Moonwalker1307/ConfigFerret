@@ -96,6 +96,11 @@ internal static class Targets
         {
             throw new FormatException(ex.Message, ex);
         }
+        catch (InvalidOperationException ex)
+        {
+            // The provider throws this for an escaped lone surrogate in a property name.
+            throw new FormatException(ex.Message, ex);
+        }
 
         var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in AllKeys(provider, null))
@@ -252,7 +257,7 @@ internal static class Targets
 
         var resolver = new KustomizeResolver(kustomization);
         var diagnostics = new TraceDiagnostics();
-        foreach (var (name, generated) in kustomization.Generated)
+        foreach (var (name, generated) in kustomization.ConfigMaps.Concat(kustomization.Secrets))
         {
             if (kustomization.Find(name, generated.IsSecret) is null || kustomization.Find(name + "-0123456789", generated.IsSecret) is null)
             {
