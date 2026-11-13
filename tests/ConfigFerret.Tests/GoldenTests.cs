@@ -70,6 +70,25 @@ public class GoldenTests
     [Fact]
     public Task Local_dev_json() => VerifyJson(TraceLocalDev().ToJson());
 
+    // What the orders service was seen reading: everything except Api:BaseUrl and Pod:Name.
+    private static readonly string[] OrdersReads =
+    [
+        "Cache:Ttl", "Db:Host", "Db:Password", "Db:Port", "Db:Timeout", "Features:Search",
+        "Logging:LogLevel:Default", "Logging:LogLevel:Microsoft.AspNetCore", "Orders:NotConfigured",
+    ];
+
+    [Fact]
+    public Task Helm_release_unused_text() => VerifyText(TraceHelmRelease().FindUnused(OrdersReads).ToText());
+
+    [Fact]
+    public Task Helm_release_unused_json() => VerifyJson(TraceHelmRelease().FindUnused(OrdersReads).ToJson());
+
+    [Fact]
+    public Task Kustomize_overlay_unused_text() => VerifyText(TraceKustomizeOverlay().FindUnused().ToText());
+
+    [Fact]
+    public Task Local_dev_unused_text() => VerifyText(TraceLocalDev().FindUnused(["Paging:PageSize", "ConnectionStrings:Default"]).ToText());
+
     private static ProvenanceReport TraceHelmRelease(bool reveal = false)
     {
         var dir = Fixture("helm-release");

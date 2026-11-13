@@ -38,6 +38,32 @@ public sealed class ProvenanceReport
             : TextRenderer.Render(setting);
     }
 
+    /// <summary>
+    /// Lists values that never win in this trace because a later layer always overrides or removes them.
+    /// The findings are possibly unused, not safe to delete.
+    /// </summary>
+    public UnusedReport FindUnused() => UnusedReport.Create(this, null);
+
+    /// <summary>
+    /// Lists values that never win, and the configured keys that <paramref name="reads"/> did not see the app read.
+    /// The findings are possibly unused, not safe to delete.
+    /// </summary>
+    public UnusedReport FindUnused(ConfigReadRecorder reads)
+    {
+        ArgumentNullException.ThrowIfNull(reads);
+        return UnusedReport.Create(this, reads.ReadKeys);
+    }
+
+    /// <summary>
+    /// Lists values that never win, and the configured keys missing from <paramref name="readKeys"/>, for example
+    /// keys saved from <see cref="ConfigReadRecorder.ReadKeys"/> over several runs. Accepts <c>:</c> or <c>__</c> as the separator.
+    /// </summary>
+    public UnusedReport FindUnused(IEnumerable<string> readKeys)
+    {
+        ArgumentNullException.ThrowIfNull(readKeys);
+        return UnusedReport.Create(this, readKeys);
+    }
+
     /// <summary>Renders every setting as text.</summary>
     public string ToText() => TextRenderer.Render(this);
 

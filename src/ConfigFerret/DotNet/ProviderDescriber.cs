@@ -16,11 +16,20 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
 
     private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, int>> _jsonLines = new(StringComparer.Ordinal);
 
-    /// <summary>Expands chained configurations so each real provider is seen in priority order.</summary>
+    /// <summary>
+    /// Expands chained configurations so each real provider is seen in priority order, and looks through the
+    /// providers that record reads.
+    /// </summary>
     public static IEnumerable<IConfigurationProvider> Flatten(IEnumerable<IConfigurationProvider> providers)
     {
-        foreach (var provider in providers)
+        foreach (var outer in providers)
         {
+            var provider = outer;
+            while (provider is RecordingConfigurationProvider recording)
+            {
+                provider = recording.Inner;
+            }
+
             if (provider is ChainedConfigurationProvider { Configuration: IConfigurationRoot inner })
             {
                 foreach (var nested in Flatten(inner.Providers))

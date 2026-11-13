@@ -7,18 +7,20 @@ namespace ConfigFerret;
 /// <summary>Renders a report as JSON.</summary>
 public static class JsonRenderer
 {
+    internal static readonly JsonWriterOptions WriterOptions = new()
+    {
+        Indented = true,
+        // The report is a file for people and tools, not text embedded in HTML, so keep ' + < > & and
+        // non-ASCII text readable instead of writing \u0027 and the like. Quotes and control characters are still escaped.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     /// <summary>Renders <paramref name="report"/> as indented JSON.</summary>
     public static string Render(ProvenanceReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
-        {
-            Indented = true,
-            // The report is a file for people and tools, not text embedded in HTML, so keep ' + < > & and
-            // non-ASCII text readable instead of writing \u0027 and the like. Quotes and control characters are still escaped.
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        }))
+        using (var writer = new Utf8JsonWriter(stream, WriterOptions))
         {
             writer.WriteStartObject();
             writer.WriteStartArray("settings");
@@ -47,7 +49,7 @@ public static class JsonRenderer
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private static void WriteSteps(Utf8JsonWriter writer, string name, IReadOnlyList<ProvenanceStep> steps)
+    internal static void WriteSteps(Utf8JsonWriter writer, string name, IReadOnlyList<ProvenanceStep> steps)
     {
         writer.WriteStartArray(name);
         foreach (var step in steps)

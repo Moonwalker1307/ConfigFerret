@@ -1,0 +1,38 @@
+﻿Possibly unused configuration
+Nothing here is proven safe to delete. A value that never wins here can win in another environment, and a key the app did not read may be read on a code path that did not run.
+
+Values that never win (6)
+  ConnectionStrings:Default
+    appsettings.json (line 3) = "***"
+      overridden by environment variable DEVAPP_ConnectionStrings__Default
+  Jwt:Issuer
+    appsettings.json (line 6) = "https://localhost:5001"
+      overridden by appsettings.Development.json (line 6)
+  Jwt:SigningKey
+    appsettings.json (line 7) = "***"
+      overridden by user secrets (secrets.json) (line 3)
+  Paging:MaxPageSize
+    appsettings.json (line 11) = "100"
+      overridden by command-line argument --Paging:MaxPageSize
+  Paging:PageSize
+    appsettings.json (line 10) = "20"
+      overridden by environment variable DEVAPP_Paging__PageSize
+    appsettings.Development.json (line 3) = "5"
+      overridden by environment variable DEVAPP_Paging__PageSize
+
+Keys the app did not read (4, from 2 recorded reads)
+  Banner = "Welcome\nto the dev build"
+    set in appsettings.json
+    [effective]  appsettings.json (line 13) = "Welcome\nto the dev build"
+  Jwt:Issuer = "https://dev.localhost:5001"
+    set in appsettings.json, overridden by appsettings.Development.json
+    [overridden] appsettings.json (line 6) = "https://localhost:5001"
+    [effective]  appsettings.Development.json (line 6) = "https://dev.localhost:5001"
+  Jwt:SigningKey = "***"
+    set in appsettings.json, overridden by user secrets (secrets.json)
+    [overridden] appsettings.json (line 7) = "***"
+    [effective]  user secrets (secrets.json) (line 3) = "***"
+  Paging:MaxPageSize = "50"
+    set in appsettings.json, overridden by command-line argument --Paging:MaxPageSize
+    [overridden] appsettings.json (line 11) = "100"
+    [effective]  command-line argument --Paging:MaxPageSize = "50"

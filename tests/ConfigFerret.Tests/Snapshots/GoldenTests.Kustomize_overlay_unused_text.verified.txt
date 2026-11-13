@@ -1,0 +1,36 @@
+﻿Possibly unused configuration
+Nothing here is proven safe to delete. A value that never wins here can win in another environment, and a key the app did not read may be read on a code path that did not run.
+
+Values that never win (10)
+  Billing:Currency
+    appsettings.json (line 3) = "USD"
+      overridden by environment variable BILLING_Billing__Currency
+  Billing:InvoiceDueDays
+    appsettings.json (line 4) = "30"
+      overridden by environment variable BILLING_Billing__InvoiceDueDays
+  Billing:RetryCount
+    appsettings.json (line 5) = "3"
+      overridden by environment variable BILLING_Billing__RetryCount
+    base/kustomization.yaml (line 12, configMapGenerator staging-billing-config) = "5"
+      overridden by overlays/staging/kustomization.yaml (line 12, configMapGenerator staging-billing-config)
+      upstream of environment variable BILLING_Billing__RetryCount <- ConfigMap staging-billing-config-8tk4mh2b7c
+  Logging:LogLevel:Default
+    appsettings.json (line 16) = "Information"
+      overridden by environment variable BILLING_Logging__LogLevel__Default
+  Smtp:Host
+    appsettings.json (line 8) = "localhost"
+      overridden by environment variable BILLING_Smtp__Host
+    base/kustomization.yaml (line 9, configMapGenerator staging-billing-config) = "smtp.internal"
+      overridden by overlays/staging/kustomization.yaml (line 10, configMapGenerator staging-billing-config)
+      upstream of environment variable BILLING_Smtp__Host <- ConfigMap staging-billing-config-8tk4mh2b7c
+  Smtp:Port
+    appsettings.json (line 9) = "1025"
+      overridden by environment variable BILLING_Smtp__Port
+  Stripe:ApiKey
+    appsettings.json (line 12) = "***"
+      overridden by environment variable BILLING_Stripe__ApiKey
+    base/kustomization.yaml (line 16, secretGenerator staging-billing-secrets) = "***"
+      removed by overlays/staging/kustomization.yaml (line 14, secretGenerator staging-billing-secrets)
+      upstream of environment variable BILLING_Stripe__ApiKey <- Secret staging-billing-secrets-m6f9g2d5h8
+
+Keys the app did not read: not checked. Record reads with RecordReads() to find them.
