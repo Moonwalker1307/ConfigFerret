@@ -65,8 +65,20 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
             Kind = LayerKind.DotNetProvider,
             Source = $"environment variable {name}",
             Value = value,
+            IsSensitive = IsConnectionStringVariable(name, prefix),
             Reference = new EnvironmentVariableRef(name),
         };
+    }
+
+    /// <summary>
+    /// True for a <c>*CONNSTR_</c> variable. With a provider prefix, .NET keeps <c>APP_CUSTOMCONNSTR_Db</c> as the
+    /// key <c>CUSTOMCONNSTR_Db</c>, which no sensitive-key pattern catches, so the variable name decides.
+    /// </summary>
+    internal static bool IsConnectionStringVariable(string name, string prefix)
+    {
+        var rest = name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? name[prefix.Length..] : name;
+        return ConnectionStringPrefixes.Any(cs =>
+            name.StartsWith(cs, StringComparison.OrdinalIgnoreCase) || rest.StartsWith(cs, StringComparison.OrdinalIgnoreCase));
     }
 
     internal string? FindEnvironmentVariable(string prefix, string key, string? value)
