@@ -23,6 +23,9 @@ public sealed partial class OctopusVariables
         ["Processes"] = "ProcessOwner",
     };
 
+    // A project can be named by id, slug or display name; an id match wins over a slug, a slug over a name.
+    private static readonly string[] ProjectLookupFields = ["Id", "Slug", "Name"];
+
     private readonly Dictionary<string, List<OctopusVariable>> _byName = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Creates a snapshot from entries you already have.</summary>
@@ -175,12 +178,9 @@ public sealed partial class OctopusVariables
             }
 
             var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var item in list.Value.EnumerateArray())
+            foreach (var (id, item) in list.Value.EnumerateArray().Select(i => (Id: GetString(i, "Id"), Item: i)).Where(x => x.Id is not null))
             {
-                if (GetString(item, "Id") is { } id)
-                {
-                    map[id] = GetString(item, "Name") ?? id;
-                }
+                map[id!] = GetString(item, "Name") ?? id!;
             }
 
             result[dimension] = map;
@@ -221,7 +221,7 @@ public sealed partial class OctopusVariables
 
     private static JsonElement? FindByIdSlugOrName(JsonElement list, string wanted)
     {
-        foreach (var field in (ReadOnlySpan<string>)["Id", "Slug", "Name"])
+        foreach (var field in ProjectLookupFields)
         {
             foreach (var item in Items(list))
             {

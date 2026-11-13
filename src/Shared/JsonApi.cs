@@ -12,6 +12,8 @@ internal static class JsonApi
 {
     private const int MaxErrorMessageLength = 200;
 
+    private static readonly string[] ErrorMessageFields = ["message", "ErrorMessage"];
+
     /// <summary>Checks that <paramref name="uri"/> is absolute and uses HTTPS, or plain HTTP only when allowed or on loopback.</summary>
     public static Uri RequireSafeBaseAddress(Uri? uri, bool allowUnencryptedHttp, string optionName)
     {
@@ -96,7 +98,7 @@ internal static class JsonApi
                 return null;
             }
 
-            foreach (var name in (ReadOnlySpan<string>)["message", "ErrorMessage"])
+            foreach (var name in ErrorMessageFields)
             {
                 if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
                 {
@@ -107,6 +109,8 @@ internal static class JsonApi
         }
         catch (JsonException)
         {
+            // Not JSON (for example an HTML error page from a proxy): report the status alone.
+            return null;
         }
 
         return null;
