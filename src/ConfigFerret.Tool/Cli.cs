@@ -20,10 +20,10 @@ internal static class Cli
         {
             foreach (var error in parse.Errors)
             {
-                await host.Error.WriteLineAsync(error.Message).ConfigureAwait(false);
+                host.Error.WriteLine(error.Message);
             }
 
-            await host.Error.WriteLineAsync("Run 'configferret --help' for usage.").ConfigureAwait(false);
+            host.Error.WriteLine("Run 'configferret --help' for usage.");
             return ExitCodes.Usage;
         }
 
@@ -36,7 +36,7 @@ internal static class Cli
             or InvalidOperationException or ArgumentException or HttpRequestException or JsonException)
         {
             // One line, no stack trace: these are problems with the input, not bugs.
-            await host.Error.WriteLineAsync("configferret: " + ex.Message).ConfigureAwait(false);
+            host.Error.WriteLine("configferret: " + ex.Message);
             return ExitCodes.Usage;
         }
     }
@@ -208,9 +208,9 @@ internal static class Cli
             var unknown = environment.Where(e => e.Value is null).Select(e => e.Key).Order(StringComparer.Ordinal).ToList();
             if (unknown.Count > 0)
             {
-                await host.Error.WriteLineAsync(
+                host.Error.WriteLine(
                     "configferret: the manifests don't hold the value of " + string.Join(", ", unknown)
-                    + " (set at run time, or from a ConfigMap or Secret that wasn't passed). Pass --env NAME=VALUE to include them.").ConfigureAwait(false);
+                    + " (set at run time, or from a ConfigMap or Secret that wasn't passed). Pass --env NAME=VALUE to include them.");
                 foreach (var name in unknown)
                 {
                     environment.Remove(name);
@@ -248,7 +248,7 @@ internal static class Cli
             await Upstream.AddOctopusAsync(tracer, upstream, result, host, cancellationToken).ConfigureAwait(false);
             if (Reveal)
             {
-                await host.Error.WriteLineAsync("configferret: secret values are shown. Don't paste this output anywhere shared.").ConfigureAwait(false);
+                host.Error.WriteLine("configferret: secret values are shown. Don't paste this output anywhere shared.");
             }
         }
 
@@ -277,7 +277,7 @@ internal static class Cli
                     }
                     else
                     {
-                        await host.Error.WriteLineAsync($"{key} is not set by any configuration provider.").ConfigureAwait(false);
+                        host.Error.WriteLine($"{key} is not set by any configuration provider.");
                         exitCode = ExitCodes.Findings;
                     }
                 }
