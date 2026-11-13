@@ -159,4 +159,50 @@ public class OctopusServiceCollectionTests
         Assert.Equal("30", origin.Value);
         Assert.All(handler.Requests, r => Assert.Equal(ApiKey, Assert.Single(r.Headers.GetValues("X-Octopus-ApiKey"))));
     }
+
+    [Fact]
+    public void Validator_checks_its_argument_and_passes_valid_options()
+    {
+        var validator = new OctopusOptionsValidator("ConfigFerret:Octopus", null);
+
+        Assert.Throws<ArgumentNullException>(() => validator.Validate(null, null!));
+        Assert.Same(ValidateOptionsResult.Success, validator.Validate(null, new OctopusVariablesOptions { ServerUri = new Uri("https://octopus.example.com/"), ApiKey = "k", Project = "Api" }));
+    }
+
+    [Fact]
+    public void Registration_checks_its_arguments()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        Assert.Throws<ArgumentNullException>(() => OctopusServiceCollectionExtensions.AddConfigFerretOctopus(null!, configuration));
+        Assert.Throws<ArgumentNullException>(() => new ServiceCollection().AddConfigFerretOctopus(null!));
+    }
+
+    [Fact]
+    public void Names_keys_without_a_prefix_when_bound_from_the_root()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var services = new ServiceCollection();
+        services.AddConfigFerretOctopus(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var failure = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<OctopusVariablesOptions>>().Value);
+
+        Assert.Contains(failure.Failures, f => f.StartsWith("ApiKey is not set.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Source_checks_its_arguments_and_loads_without_a_test_client()
+    {
+        var options = new OctopusVariablesOptions { ServerUri = new Uri("https://octopus.example.com/"), ApiKey = "k", Project = "Api" };
+        var source = new OctopusVariablesSource(Microsoft.Extensions.Options.Options.Create(options), Microsoft.Extensions.Options.Options.Create(new OctopusTraceOptions()));
+
+        Assert.Throws<ArgumentNullException>(() => new OctopusVariablesSource(null!, Microsoft.Extensions.Options.Options.Create(new OctopusTraceOptions())));
+        Assert.Throws<ArgumentNullException>(() => new OctopusVariablesSource(Microsoft.Extensions.Options.Options.Create(options), null!));
+
+        // Without a test client the source loads through its own, which refuses an http address before sending anything.
+        var o = options;
+        o.ServerUri = new Uri("http://octopus.example.com/");
+        await Assert.ThrowsAsync<ArgumentException>(() => source.LoadAsync(TestContext.Current.CancellationToken));
+    }
 }

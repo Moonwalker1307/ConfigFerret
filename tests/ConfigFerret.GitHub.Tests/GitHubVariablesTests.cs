@@ -172,4 +172,218 @@ public class GitHubVariablesTests
 
         Assert.Single(github.Entries);
     }
+
+    private static GitHubVariablesOptions RepositoryOnly()
+    {
+        var options = Options(environment: null);
+        options.IncludeOrganization = false;
+        options.IncludeSecrets = false;
+        return options;
+    }
+
+    [Fact]
+    public async Task Skips_entries_that_are_not_objects_or_have_no_string_name()
+    {
+        // Found by fuzzing: these used to throw InvalidOperationException out of the trace.
+        var handler = new FakeHttpHandler().Respond(
+            $"{Repo}/actions/variables?per_page=30&page=1",
+            """{"total_count":"five","variables":[1,"x",null,{"name":7,"value":"a"},{"name":"","value":"b"},{"value":"c"},{"name":"OK","value":5,"updated_at":12}]}""");
+        using var client = handler.Client();
+
+        var github = await GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(github.Entries);
+        Assert.Equal("OK", entry.Name);
+        Assert.Null(entry.Value);
+        Assert.Null(entry.UpdatedAt);
+    }
+
+    [Theory]
+    [InlineData("""{"total_count":1}""")]
+    [InlineData("""{"total_count":1,"variables":{}}""")]
+    [InlineData("""[]""")]
+    public async Task Fails_on_a_response_without_the_array(string body)
+    {
+        var handler = new FakeHttpHandler().Respond($"{Repo}/actions/variables?per_page=30&page=1", body);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("GitHub returned an unexpected response for /repos/contoso/api/actions/variables: no 'variables' array.", ex.Message);
+    }
+
+    [Fact]
+    public async Task Stops_at_a_full_page_when_the_total_is_read()
+    {
+        var page = JsonSerializer.Serialize(new { total_count = 30, variables = Enumerable.Range(1, 30).Select(i => new { name = $"V{i}", value = "x" }) });
+        var handler = new FakeHttpHandler().Respond($"{Repo}/actions/variables?per_page=30&page=1", page);
+        using var client = handler.Client();
+
+        var github = await GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken);
+
+        Assert.Equal(30, github.Entries.Count);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Asks_for_the_next_page_after_a_full_page_without_a_total()
+    {
+        var page = JsonSerializer.Serialize(new { variables = Enumerable.Range(1, 30).Select(i => new { name = $"V{i}", value = "x" }) });
+        var handler = new FakeHttpHandler()
+            .Respond($"{Repo}/actions/variables?per_page=30&page=1", page)
+            .Respond($"{Repo}/actions/variables?per_page=30&page=2", """{"variables":[]}""");
+        using var client = handler.Client();
+
+        var github = await GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken);
+
+        Assert.Equal(30, github.Entries.Count);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Stops_after_100_pages_from_a_server_that_never_ends()
+    {
+        var handler = new EndlessPages();
+        using var client = new HttpClient(handler);
+
+        var github = await GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken);
+
+        Assert.Equal(100, handler.Count);
+        Assert.Equal(3000, github.Entries.Count);
+    }
+
+    private sealed class EndlessPages : HttpMessageHandler
+    {
+        private static readonly string Page = JsonSerializer.Serialize(new { total_count = 1_000_000, variables = Enumerable.Range(1, 30).Select(i => new { name = $"V{i}", value = "x" }) });
+
+        public int Count { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Count++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Page) });
+        }
+    }
+
+    [Fact]
+    public async Task Names_the_scope_and_kind_of_entries_it_could_not_read()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond($"{Repo}/actions/variables?per_page=30&page=1", Variables(("A", "1")))
+            .Respond($"{Repo}/actions/secrets?per_page=100&page=1", """{"message":"Resource not accessible"}""", HttpStatusCode.Forbidden)
+            .Respond($"{Repo}/environments/production/variables?per_page=30&page=1", Variables());
+        using var client = handler.Client();
+        var options = Options();
+        options.IncludeOrganization = false;
+
+        var github = await GitHubVariables.LoadAsync(options, client, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "Skipped GitHub repository secrets: GitHub returned 403 Forbidden for /repos/contoso/api/actions/secrets. Resource not accessible",
+            "Skipped GitHub environment secrets: GitHub returned 404 NotFound for /repos/contoso/api/environments/production/secrets. Not Found",
+        ], github.Warnings);
+    }
+
+    [Fact]
+    public async Task Names_organization_variables_it_could_not_read()
+    {
+        var handler = new FakeHttpHandler().Respond($"{Repo}/actions/variables?per_page=30&page=1", Variables());
+        using var client = handler.Client();
+        var options = RepositoryOnly();
+        options.IncludeOrganization = true;
+
+        var github = await GitHubVariables.LoadAsync(options, client, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("Skipped GitHub organization variables: ", Assert.Single(github.Warnings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Fails_on_other_errors_from_entries_it_may_skip()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond($"{Repo}/actions/variables?per_page=30&page=1", Variables())
+            .Respond($"{Repo}/actions/secrets?per_page=100&page=1", "{}", HttpStatusCode.InternalServerError);
+        using var client = handler.Client();
+        var options = Options(environment: null);
+        options.IncludeOrganization = false;
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => GitHubVariables.LoadAsync(options, client, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task Escapes_and_trims_the_names_in_the_path()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/repos/my%20org/api/actions/variables?per_page=30&page=1", Variables())
+            .Respond("/repos/my%20org/api/environments/prod%2Feu/variables?per_page=30&page=1", Variables(("A", "1")));
+        using var client = handler.Client();
+        var options = RepositoryOnly();
+        options.Owner = "my org";
+        options.Repository = " api ";
+        options.Environment = "prod/eu";
+
+        var github = await GitHubVariables.LoadAsync(options, client, TestContext.Current.CancellationToken);
+
+        Assert.Equal("prod/eu", Assert.Single(github.Entries).Owner);
+    }
+
+    [Fact]
+    public async Task Sends_no_authorization_header_without_a_token()
+    {
+        var handler = new FakeHttpHandler().Respond($"{Repo}/actions/variables?per_page=30&page=1", Variables());
+        using var client = handler.Client();
+        var options = RepositoryOnly();
+        options.Token = "";
+
+        await GitHubVariables.LoadAsync(options, client, TestContext.Current.CancellationToken);
+
+        Assert.Null(Assert.Single(handler.Requests).Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task Checks_its_arguments()
+    {
+        using var client = new FakeHttpHandler().Client();
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.Throws<ArgumentNullException>(() => new GitHubVariables(null!));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => GitHubVariables.LoadAsync(null!, client, ct));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => GitHubVariables.LoadAsync(Options(), null!, ct));
+        var noOwner = Options();
+        noOwner.Owner = " ";
+        await Assert.ThrowsAsync<ArgumentException>(() => GitHubVariables.LoadAsync(noOwner, client, ct));
+        var noRepository = Options();
+        noRepository.Repository = "";
+        await Assert.ThrowsAsync<ArgumentException>(() => GitHubVariables.LoadAsync(noRepository, client, ct));
+    }
+
+    [Fact]
+    public async Task Loads_through_its_own_client()
+    {
+        // An http address that is not loopback is refused before anything is sent.
+        var options = Options();
+        options.ApiBaseAddress = new Uri("http://github.example.com/");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => GitHubVariables.LoadAsync(options, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void Orders_entries_by_scope_and_finds_them_by_kind()
+    {
+        var github = new GitHubVariables(
+        [
+            new("A", "env", GitHubVariableKind.Variable, GitHubVariableScope.Environment, "production"),
+            new("A", null, GitHubVariableKind.Secret, GitHubVariableScope.Repository, "contoso/api"),
+            new("a", "org", GitHubVariableKind.Variable, GitHubVariableScope.Organization, "contoso"),
+        ]);
+
+        Assert.Equal([GitHubVariableScope.Organization, GitHubVariableScope.Repository, GitHubVariableScope.Environment], github.Entries.Select(e => e.Scope));
+        Assert.Equal(["org", "env"], github.Find("A", GitHubVariableKind.Variable).Select(e => e.Value));
+        Assert.Single(github.Find("a", GitHubVariableKind.Secret));
+        Assert.Empty(github.Find("B", GitHubVariableKind.Variable));
+        Assert.Empty(github.Warnings);
+    }
 }

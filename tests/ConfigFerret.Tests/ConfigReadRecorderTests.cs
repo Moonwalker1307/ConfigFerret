@@ -145,4 +145,23 @@ public class ConfigReadRecorderTests
         Assert.Throws<ArgumentNullException>(() => report.FindUnused((ConfigReadRecorder)null!));
         Assert.Throws<ArgumentNullException>(() => report.FindUnused((IEnumerable<string>)null!));
     }
+
+    [Fact]
+    public void Agrees_with_FindUnused_on_double_underscore_keys()
+    {
+        // Found by fuzzing: keys read or added with __ were stored as spelled, so WasRead missed them.
+        var builder = new ConfigurationBuilder().AddInMemoryCollection(Settings);
+        var reads = builder.RecordReads();
+        var config = builder.Build();
+
+        _ = config["Db__Timeout"];
+        reads.Add(["Db__Host"]);
+
+        Assert.True(reads.WasRead("Db__Timeout"));
+        Assert.True(reads.WasRead("db:timeout"));
+        Assert.True(reads.WasRead("Db__Host"));
+        Assert.Equal(["Db:Host", "Db:Timeout"], reads.ReadKeys);
+        var unused = config.TraceProvenance().FindUnused(reads);
+        Assert.DoesNotContain(unused.NotRead!, s => s.Key is "Db:Host" or "Db:Timeout");
+    }
 }

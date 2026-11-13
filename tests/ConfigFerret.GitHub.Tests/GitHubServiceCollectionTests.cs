@@ -170,4 +170,50 @@ public class GitHubServiceCollectionTests
 
         Assert.Contains("AddConfigFerretGitHub", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Validator_checks_its_argument_and_passes_valid_options()
+    {
+        var validator = new GitHubOptionsValidator("ConfigFerret:GitHub", null);
+
+        Assert.Throws<ArgumentNullException>(() => validator.Validate(null, null!));
+        Assert.Same(ValidateOptionsResult.Success, validator.Validate(null, new GitHubVariablesOptions { Owner = "contoso", Repository = "api", Token = "t" }));
+    }
+
+    [Fact]
+    public void Registration_checks_its_arguments()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        Assert.Throws<ArgumentNullException>(() => GitHubServiceCollectionExtensions.AddConfigFerretGitHub(null!, configuration));
+        Assert.Throws<ArgumentNullException>(() => new ServiceCollection().AddConfigFerretGitHub(null!));
+    }
+
+    [Fact]
+    public void Names_keys_without_a_prefix_when_bound_from_the_root()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var services = new ServiceCollection();
+        services.AddConfigFerretGitHub(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var failure = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<GitHubVariablesOptions>>().Value);
+
+        Assert.Contains(failure.Failures, f => f.StartsWith("Token is not set.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Source_checks_its_arguments_and_loads_without_a_test_client()
+    {
+        var options = new GitHubVariablesOptions { Owner = "contoso", Repository = "api", Token = "t" };
+        var source = new GitHubVariablesSource(Microsoft.Extensions.Options.Options.Create(options), Microsoft.Extensions.Options.Options.Create(new GitHubTraceOptions()));
+
+        Assert.Throws<ArgumentNullException>(() => new GitHubVariablesSource(null!, Microsoft.Extensions.Options.Options.Create(new GitHubTraceOptions())));
+        Assert.Throws<ArgumentNullException>(() => new GitHubVariablesSource(Microsoft.Extensions.Options.Options.Create(options), null!));
+
+        // Without a test client the source loads through its own, which refuses an http address before sending anything.
+        var o = options;
+        o.ApiBaseAddress = new Uri("http://github.example.com/");
+        await Assert.ThrowsAsync<ArgumentException>(() => source.LoadAsync(TestContext.Current.CancellationToken));
+    }
 }
