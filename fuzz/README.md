@@ -29,6 +29,8 @@ that touch `src/` or `fuzz/`. Each night starts from the corpus the previous nig
 | `secret-audit` | `SecretAudit.LooksLikeCredential` and `IsPlaceholder` on each line and on the whole input | any exception, more than two seconds, or a placeholder rated as a credential |
 | `scanner` | `RepositoryScanner.Scan` over a temp folder written from `path` line then content, files split by `%%` | any exception, or a result that is not inside the folder |
 | `workspace` | `WorkspaceStore.Load` on workspace JSON, then save and load again | anything other than the exceptions the app catches (`JsonException`, `IOException`, `UnauthorizedAccessException`, `NotSupportedException`), a null member, or a save that does not load back the same |
+| `code-reads` | the desktop app's `CodeReadScanner.FromSources` over C# sources split by `%%`, then `Check` on string literals from the input and fixed keys, and `StripComments` | any exception, more than two seconds, a not-read verdict without a reason, or `StripComments` output longer than its input |
+| `helm-usage` | the desktop app's `HelmValueUsage.FindDead` on `templates %% values yaml` | anything other than `YamlException` from reading the values, more than two seconds, or a dead path that is not a leaf of the values |
 | `unused` | `FindUnused` and `RecordReads` over `appsettings.json %% appsettings.Production.json %% KEY=VALUE lines %% Kubernetes manifests %% keys read` | a never-winning step that wins, a winner that does not win, a read key listed as unread, counts that do not add up, an unredacted sensitive value, or lists out of the report's order |
 
 Seeds are in `corpus/<target>/` and libFuzzer dictionaries in `dictionaries/`.

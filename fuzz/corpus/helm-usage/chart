@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  replicas: {{ .Values.replicaCount }}
+  image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+  {{- with .Values.resources }}
+  resources: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  extra: {{ index .Values "config" "level" }}
+  {{ index .Values.ingress.hosts 0 }}
+%%
+replicaCount: 2
+image:
+  repository: nginx
+  tag: "1.25"
+  pullPolicy: IfNotPresent
+resources:
+  limits:
+    cpu: 100m
+config:
+  level: info
+  unusedKey: x
+ingress:
+  hosts: [a, b]
+global:
+  region: eu

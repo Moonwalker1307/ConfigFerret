@@ -49,6 +49,8 @@ internal static partial class Targets
         ["secret-audit"] = new("Desktop SecretAudit.LooksLikeCredential and IsPlaceholder, one value per line", SecretAuditTarget),
         ["scanner"] = new("Desktop RepositoryScanner over files (split by %%, first line of each is its path)", ScannerTarget),
         ["workspace"] = new("Desktop WorkspaceStore.Load on workspace JSON", WorkspaceTarget),
+        ["code-reads"] = new("Desktop CodeReadScanner over C# sources (split by %%), Check on literals and fixed keys, StripComments", CodeReads),
+        ["helm-usage"] = new("Desktop HelmValueUsage.FindDead: templates %% values yaml", HelmUsage),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

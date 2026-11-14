@@ -57,6 +57,7 @@ case "$target" in
 =======
   json|unused|workspace) dict=(-dict="$here/dictionaries/json.dict") ;;
   github|octopus) dict=(-dict="$here/dictionaries/api.dict") ;;
+  code-reads) dict=(-dict="$here/dictionaries/csharp.dict") ;;
   env-names|desktop-tar|dotenv|secret-audit) ;;
 >>>>>>> 92de2aa (Add desktop fuzz targets and fix null members in loaded workspaces)
   *) dict=(-dict="$here/dictionaries/yaml.dict") ;;
