@@ -29,6 +29,12 @@ public sealed class SettingRow
     /// <summary>The traced setting.</summary>
     public TracedSetting Setting { get; }
 
+    /// <summary>Why no code reads this setting, or null when code reads it or no code was scanned.</summary>
+    public string? DeadReason { get; init; }
+
+    /// <summary>True when the setting is configured but no code reads it.</summary>
+    public bool IsDead => DeadReason is not null;
+
     /// <summary>The configuration key or environment variable name.</summary>
     public string Key => Setting.Key;
 

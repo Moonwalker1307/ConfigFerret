@@ -247,10 +247,10 @@
                 <TextBlock Classes="muted" FontSize="12" Text="secrets exposed" />
               </StackPanel>
             </Border>
-            <Border Classes="tile" Margin="0,0,10,10">
+            <Border Classes="tile bad" Margin="0,0,10,10" ToolTip.Tip="Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses">
               <StackPanel>
-                <TextBlock Classes="number" Text="{Binding UnusedCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="possibly unused" />
+                <TextBlock Classes="number" Text="{Binding DeadCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="dead variables" />
               </StackPanel>
             </Border>
           </WrapPanel>
@@ -325,6 +325,7 @@
                   <ComboBox ItemsSource="{Binding LayerFilters}" SelectedItem="{Binding SelectedLayerFilter}" Margin="0,0,8,0" />
                   <ToggleButton Classes="pill" Content="Overridden" IsChecked="{Binding OnlyOverridden}" Margin="0,0,8,0" />
                   <ToggleButton Classes="pill" Content="Secrets" IsChecked="{Binding OnlySecrets}" Margin="0,0,8,0" />
+                  <ToggleButton Classes="pill" Content="Dead" IsChecked="{Binding OnlyDeadSettings}" Margin="0,0,8,0" ToolTip.Tip="Settings no code reads" />
                   <Button Classes="link" Content="Clear" Command="{Binding ClearFiltersCommand}" VerticalAlignment="Center" Margin="4,0,12,0" />
                   <TextBlock Classes="muted" Text="{Binding ShownText}" VerticalAlignment="Center" />
                 </WrapPanel>
@@ -336,7 +337,12 @@
                       <DataGridTemplateColumn Header="KEY" Width="1.7*" SortMemberPath="Key">
                         <DataGridTemplateColumn.CellTemplate>
                           <DataTemplate DataType="vm:SettingRow">
-                            <TextBlock Classes="mono" Text="{Binding Key}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="12,0" FontWeight="SemiBold" />
+                            <DockPanel Margin="12,0" VerticalAlignment="Center">
+                              <Border DockPanel.Dock="Right" Classes="chip bad" Margin="6,0,0,0" IsVisible="{Binding IsDead}" ToolTip.Tip="{Binding DeadReason}">
+                                <TextBlock Text="dead" />
+                              </Border>
+                              <TextBlock Classes="mono" Text="{Binding Key}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                            </DockPanel>
                           </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                       </DataGridTemplateColumn>
@@ -399,6 +405,14 @@
                         </StackPanel>
                       </Border>
                       <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding SelectedSecret.Reason, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                      <Border Classes="rating bad" IsVisible="{Binding SelectedRow.IsDead, FallbackValue=False}" HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <PathIcon Data="{StaticResource IconSleep}" Width="12" Height="12" />
+                          <TextBlock Text="Dead: not read by code" />
+                        </StackPanel>
+                      </Border>
+                      <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding SelectedRow.IsDead, FallbackValue=False}"
+                                 Text="{Binding SelectedRow.DeadReason, StringFormat='{}{0}. Safe to delete once no other environment or app reads it.', FallbackValue=''}" />
                       <TextBlock Classes="caption" Text="STORY" Margin="0,6,0,0" />
                       <TextBlock TextWrapping="Wrap" Text="{Binding SelectedRow.Story, FallbackValue=''}" LineHeight="20" />
                       <TextBlock Classes="caption" Text="LAYERS, LOWEST PRIORITY FIRST" Margin="0,6,0,0" />
@@ -497,25 +511,43 @@
                   <TextBlock MinWidth="30" Text="{Binding UnusedCount}" Foreground="{DynamicResource CfMuted}" />
                 </StackPanel>
               </TabItem.Header>
-              <Grid RowDefinitions="Auto,*" Margin="0,12,0,0">
+              <Grid RowDefinitions="Auto,Auto,*" Margin="0,12,0,0">
                 <TextBlock Classes="muted" TextWrapping="Wrap" Margin="2,0,0,10"
-                           Text="Values that a later layer always overrides, and GitHub or Octopus variables no setting picks up. Possibly unused in this environment: check other environments before deleting." />
-                <Border Grid.Row="1" Classes="card" Padding="6">
+                           Text="Dead variables are set but nothing reads them: settings no code reads, Helm values no template reads, and GitHub or Octopus variables no setting uses. Overridden values are set but a later layer always wins. Check other environments before deleting." />
+                <WrapPanel Grid.Row="1" Margin="0,0,0,10">
+                  <ToggleButton Classes="pill" IsChecked="{Binding OnlyDead}" Margin="0,0,10,0">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="Dead only" />
+                      <TextBlock Text="{Binding DeadCount}" Foreground="{DynamicResource CfBad}" FontWeight="SemiBold" />
+                    </StackPanel>
+                  </ToggleButton>
+                  <TextBlock Classes="muted" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <Run Text="{Binding NeverWinsCount}" /><Run Text=" overridden" />
+                  </TextBlock>
+                  <TextBlock Classes="muted" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding DeadScanText}" />
+                </WrapPanel>
+                <Border Grid.Row="2" Classes="card" Padding="6">
                   <Panel>
                     <ListBox Classes="plain" ItemsSource="{Binding Unused}">
                       <ListBox.ItemTemplate>
                         <DataTemplate DataType="vm:UnusedRow">
-                          <Grid ColumnDefinitions="120,*,Auto">
-                            <Border Classes="chip" ui:DynamicClasses.Classes="{Binding Css}" HorizontalAlignment="Left">
+                          <Grid ColumnDefinitions="96,120,*,Auto">
+                            <Border Classes="chip bad" HorizontalAlignment="Left" IsVisible="{Binding IsDead}">
+                              <TextBlock Text="DEAD" />
+                            </Border>
+                            <Border Classes="chip" HorizontalAlignment="Left" IsVisible="{Binding !IsDead}">
+                              <TextBlock Text="never wins" />
+                            </Border>
+                            <Border Grid.Column="1" Classes="chip" ui:DynamicClasses.Classes="{Binding Css}" HorizontalAlignment="Left">
                               <TextBlock Text="{Binding Kind}" />
                             </Border>
-                            <StackPanel Grid.Column="1" Spacing="3">
+                            <StackPanel Grid.Column="2" Spacing="3">
                               <TextBlock Classes="mono" FontWeight="SemiBold" Text="{Binding Name}" />
                               <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap">
                                 <Run Text="{Binding Where}" /><Run Text="  ·  " /><Run Text="{Binding Detail}" />
                               </TextBlock>
                             </StackPanel>
-                            <Button Grid.Column="2" Classes="link" Content="Show" VerticalAlignment="Center" Margin="12,0"
+                            <Button Grid.Column="3" Classes="link" Content="Show" VerticalAlignment="Center" Margin="12,0" IsVisible="{Binding CanShow}"
                                     Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowKeyCommand}" CommandParameter="{Binding Name}" />
                           </Grid>
                         </DataTemplate>

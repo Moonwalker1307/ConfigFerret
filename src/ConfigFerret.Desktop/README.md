@@ -11,11 +11,27 @@ it and scans it for `appsettings` files, Helm charts, Kustomize overlays, Kubern
 GitHub Actions variables and Octopus Deploy variables to what it finds, then shows:
 
 - the merged configuration, with the source of each value
-- values and variables that are possibly unused
+- dead variables, marked in red: settings no code reads, Helm values no template reads, and GitHub or Octopus
+  variables no setting uses
+- values that a later layer always overrides
 - a secrets audit: green means the value is kept in a secret store, orange means check it, red means a secret value
   sits in plain configuration
 
 You can also open a local folder instead of a GitHub repository.
+
+![Dead variables and values that never win](../../docs/desktop/unused.png)
+
+### How dead settings are found
+
+The app reads the C# code in the app's folder and in the projects it references (test projects, `bin` and `obj` are
+skipped) and collects the keys it reads: `config["A:B"]`, `GetValue<T>("A:B")`, `GetSection("A")`,
+`GetConnectionString("Db")`, and sections bound to an options class with `Configure<T>`, `Bind`, `Get<T>` or
+`BindConfiguration`. For a bound section only keys that match a property of the class count as read, so `Db:Timeout`
+is dead when `DbOptions` has no `Timeout`. Keys the host reads itself, such as `Logging` and `AllowedHosts`, always
+count as read, and commented-out code doesn't.
+
+The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are
+listed under the scan, and a dead setting may still be read there. Check other environments and apps before deleting.
 
 ## Download
 

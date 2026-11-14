@@ -294,6 +294,43 @@ public class TraceRunnerTests
         Assert.Contains("memory", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Finds_dead_settings_and_helm_values()
+    {
+        var result = await new TraceRunner(new InMemoryCredentialStore()).RunAsync(OrdersProfile(), revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, result.CodeFilesScanned);
+        Assert.Empty(result.DynamicReads);
+        var dead = result.DeadSettings.ToDictionary(d => d.Key, d => d.Reason);
+        // Payments:ApiKey is only read in commented-out code, and DbOptions has no Timeout property.
+        Assert.Equal("No code reads it", dead["Payments:ApiKey"]);
+        Assert.Equal("Db is bound to DbOptions, which has no property Timeout", dead["Db:Timeout"]);
+        Assert.Contains(result.DeadSettings.Single(d => d.Key == "Db:Timeout").SetBy, s => s.Contains("appsettings.json", StringComparison.Ordinal));
+        // Read by code, by binding or by the host.
+        foreach (var key in new[] { "Db:Host", "Db:Port", "Db:Password", "Smtp:Password", "Cache:Ttl", "Features:Search", "Api:BaseUrl", "Logging:LogLevel:Default", "AllowedHosts" })
+        {
+            Assert.False(dead.ContainsKey(key), key);
+        }
+
+        Assert.Equal(dead.Keys.Order(), result.Unused.NotRead!.Select(s => s.Key).Order());
+        Assert.Contains(result.DeadHelmValues, v => v.Path == "features.recommendations");
+    }
+
+    [Fact]
+    public async Task Without_code_no_setting_is_called_dead()
+    {
+        using var temp = new TempFolder();
+        temp.Write("app/appsettings.json", "{\"A\": {\"B\": 1}}");
+        var profile = new Profile { Name = "no code" };
+        profile.Sources.Add(new AppSettingsSource { Name = "app", Folder = temp.Full("app"), UseUserSecrets = false });
+
+        var result = await new TraceRunner(new InMemoryCredentialStore()).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.CodeFilesScanned);
+        Assert.Empty(result.DeadSettings);
+        Assert.Null(result.Unused.NotRead);
+    }
+
     private static Profile OrdersProfile()
     {
         var profile = new Profile { Name = "orders" };

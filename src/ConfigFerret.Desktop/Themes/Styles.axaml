@@ -85,6 +85,9 @@
     <Setter Property="FontSize" Value="11" />
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
+  <Style Selector="Border.chip.bad"><Setter Property="Background" Value="{DynamicResource CfBadSoft}" /></Style>
+  <Style Selector="Border.chip.bad TextBlock"><Setter Property="Foreground" Value="{DynamicResource CfBad}" /></Style>
+  <Style Selector="Border.rating.bad PathIcon"><Setter Property="Foreground" Value="{DynamicResource CfBad}" /></Style>
   <Style Selector="Border.chip.dotnet"><Setter Property="Background" Value="{DynamicResource CfKindDotnetSoft}" /></Style>
   <Style Selector="Border.chip.dotnet TextBlock"><Setter Property="Foreground" Value="{DynamicResource CfKindDotnet}" /></Style>
   <Style Selector="Border.chip.k8s"><Setter Property="Background" Value="{DynamicResource CfKindK8sSoft}" /></Style>

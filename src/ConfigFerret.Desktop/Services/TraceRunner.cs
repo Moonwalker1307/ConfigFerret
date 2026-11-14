@@ -30,7 +30,26 @@ public sealed record TraceResult(
     IReadOnlyList<SourceResult> Sources,
     IReadOnlyList<string> Notes,
     IReadOnlyList<SecretFinding> Secrets,
-    IReadOnlyList<UnusedVariable> UnusedVariables);
+    IReadOnlyList<UnusedVariable> UnusedVariables)
+{
+    /// <summary>Settings that no code reads: configured, but dead. Empty when there is no app code to read.</summary>
+    public IReadOnlyList<DeadSetting> DeadSettings { get; init; } = [];
+
+    /// <summary>Helm values that no template in the chart reads.</summary>
+    public IReadOnlyList<DeadHelmValue> DeadHelmValues { get; init; } = [];
+
+    /// <summary>How many C# files were read to find the keys the app reads, or null when no code was read.</summary>
+    public int? CodeFilesScanned { get; init; }
+
+    /// <summary>Places in the code that read a key the scan cannot work out, so a dead setting may still be read there.</summary>
+    public IReadOnlyList<string> DynamicReads { get; init; } = [];
+}
+
+/// <summary>A configured setting that no code reads.</summary>
+/// <param name="Key">The configuration key.</param>
+/// <param name="Reason">Why it counts as not read, for example "No code reads it".</param>
+/// <param name="SetBy">The layers that set it, outermost first.</param>
+public sealed record DeadSetting(string Key, string Reason, IReadOnlyList<string> SetBy);
 
 /// <summary>A variable in a deployment tool that no configuration setting picks up.</summary>
 /// <param name="Tool">GitHub Actions or Octopus Deploy.</param>
@@ -111,9 +130,9 @@ public sealed class TraceRunner
                 throw new TraceSetupException("Tracing a container needs a Kubernetes source with the workload and its ConfigMaps and Secrets.");
             }
 
-            foreach (var unused in sources.Where(s => s is AppSettingsSource or EnvironmentVariablesSource))
+            foreach (var appOnly in sources.Where(s => s is AppSettingsSource or EnvironmentVariablesSource))
             {
-                results[unused] = "Not used when tracing a container. Switch the profile to App to use it.";
+                results[appOnly] = "Not used when tracing a container. Switch the profile to App to use it.";
             }
 
             var k = kubernetes[0];
@@ -164,7 +183,41 @@ public sealed class TraceRunner
         var report = tracer.Trace();
 
         var sourceResults = sources.Select(s => new SourceResult(s, results.GetValueOrDefault(s))).ToList();
-        return new TraceResult(report, report.FindUnused(), sourceResults, notes, secrets, FindUnusedVariables(report, githubVariables, octopusVariables));
+
+        // Dead settings: configured keys that no code in the app reads. Only an app trace has code to read.
+        var app = profile.Mode == TraceMode.App ? sources.OfType<AppSettingsSource>().FirstOrDefault(a => Directory.Exists(a.Folder)) : null;
+        CodeReadScanner? code = app is null ? null : CodeReadScanner.Scan(app.Folder);
+        UnusedReport unused;
+        var dead = new List<DeadSetting>();
+        if (code is { FilesScanned: > 0 })
+        {
+            var verdicts = report.Settings.ToDictionary(s => s.Key, s => code.Check(s.Key), StringComparer.OrdinalIgnoreCase);
+            unused = report.FindUnused(verdicts.Where(v => v.Value.IsRead).Select(v => v.Key).ToList());
+            foreach (var setting in unused.NotRead ?? [])
+            {
+                dead.Add(new DeadSetting(setting.Key, verdicts[setting.Key].Reason, setting.Steps.Select(Where).Distinct(StringComparer.Ordinal).ToList()));
+            }
+        }
+        else
+        {
+            unused = report.FindUnused();
+        }
+
+        var deadHelm = new List<DeadHelmValue>();
+        foreach (var helm in sources.OfType<HelmSource>().Where(h => results.GetValueOrDefault(h) is null && Directory.Exists(h.ChartFolder)))
+        {
+            deadHelm.AddRange(HelmValueUsage.FindDead(helm.ChartFolder, helm.ValuesFiles));
+        }
+
+        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, githubVariables, octopusVariables))
+        {
+            DeadSettings = dead,
+            DeadHelmValues = deadHelm,
+            CodeFilesScanned = code?.FilesScanned,
+            DynamicReads = code?.DynamicReads ?? [],
+        };
+
+        static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
     }
 
     private static List<UnusedVariable> FindUnusedVariables(ProvenanceReport report, List<GitHubVariables> github, List<OctopusVariables> octopus)
