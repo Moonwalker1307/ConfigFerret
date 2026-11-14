@@ -253,6 +253,29 @@ recorded. To cover more paths, save `reads.ReadKeys` from several runs or instan
 `FindUnused(IEnumerable<string>)`. Code that walks every key, such as `AsEnumerable()` or `GetDebugView()`, marks
 every key as read. ConfigFerret's own tracing is not recorded.
 
+### Plugging in another source
+
+Every extension package implements `ConfigFerret.Sources.IConfigSource` (read the store once and return a
+`LoadedConfigSource`), and describes its settings with an `IConfigSourceProvider`, so the desktop app, the tool and your
+own code can list, configure and load each source the same way:
+
+```csharp
+using ConfigFerret.Sources;
+
+var tracer = ConfigTracer.For(builder.Configuration);
+var loaded = await tracer.WithSourceAsync(source);   // any IConfigSource
+var report = tracer.Trace();
+foreach (var entry in loaded.FindUnused(report))     // secrets or variables nothing links to
+{
+    Console.WriteLine($"{loaded.DisplayName}: {entry.Name} looks unused");
+}
+```
+
+An `IConfigSourceProvider` lists its settings (`SourceSetting`: name, label, kind, required, help). Settings of kind
+`Secret` are credentials: hosts keep them in a credential store or read them from an environment variable, and never
+save them with a profile. `LayerNames.Of(step)` and `LayerNames.ToConfigurationKey(name, separator)` help a resolver
+match environment variables, Kubernetes env entries and ConfigMap or Secret keys to entries in a store.
+
 ## What it traces
 
 | Layer | What ConfigFerret shows |
