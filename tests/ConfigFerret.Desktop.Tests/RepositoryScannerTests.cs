@@ -149,6 +149,253 @@ public class RepositoryScannerTests : IDisposable
         Assert.Throws<DirectoryNotFoundException>(() => RepositoryScanner.Scan(Path.Join(_temp.FullName, "missing")));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Needs_a_folder(string root)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => RepositoryScanner.Scan(root));
+    }
+
+    [Fact]
+    public void Names_the_folder_that_does_not_exist()
+    {
+        var missing = Path.Join(_temp.FullName, "missing");
+
+        var ex = Assert.Throws<DirectoryNotFoundException>(() => RepositoryScanner.Scan(missing));
+
+        Assert.Contains(missing, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Lists_values_files_from_everywhere_except_the_charts_own_values_templates_and_subcharts()
+    {
+        Write("deploy/chart/Chart.yaml", "name: demo\n");
+        Write("deploy/chart/values.yaml", "a: 1\n");
+        Write("deploy/chart/templates/values-test.yaml", "a: 1\n");
+        Write("deploy/chart/charts/sub/values-sub.yaml", "a: 1\n");
+        Write("deploy/values-b.yml", "a: 1\n");
+        Write("deploy/Values-a.yaml", "a: 1\n");
+        Write("deploy/values.txt", "a: 1\n");
+        Write("deploy/myvalues.yaml", "a: 1\n");
+
+        var chart = Assert.Single(RepositoryScanner.Scan(_temp.FullName).HelmCharts);
+
+        Assert.Equal("deploy/chart", chart.RelativePath);
+        Assert.Equal(Path.GetFullPath(Path.Join(_temp.FullName, "deploy", "chart")), chart.Folder);
+        Assert.Equal(["deploy/Values-a.yaml", "deploy/values-b.yml"], chart.ValuesFiles);
+        Assert.Equal("deploy/chart", chart.ToString());
+    }
+
+    [Fact]
+    public void Values_files_of_other_charts_count_as_release_values()
+    {
+        Write("a/Chart.yaml", "name: a\n");
+        Write("a/values.yaml", "x: 1\n");
+        Write("b/Chart.yaml", "name: b\n");
+        Write("b/values.yaml", "x: 1\n");
+
+        var charts = RepositoryScanner.Scan(_temp.FullName).HelmCharts;
+
+        Assert.Equal(["a", "b"], charts.Select(c => c.RelativePath));
+        Assert.Equal(["b/values.yaml"], charts[0].ValuesFiles);
+        Assert.Equal(["a/values.yaml"], charts[1].ValuesFiles);
+    }
+
+    [Fact]
+    public void Lists_charts_manifests_and_workflows_in_name_order()
+    {
+        Write("z/Chart.yaml", "name: z\n");
+        Write("m/Chart.yaml", "name: m\n");
+        Write("k8s/b.yml", Pod);
+        Write("k8s/A.YAML", Pod);
+        Write("k8s/c.yaml", Pod);
+        Write(".github/workflows/release.yml", "name: r\n");
+        Write(".github/workflows/Build.yaml", "name: b\n");
+        Write(".github/workflows/README.md", "docs\n");
+        Write(".github/workflows/nested/inner.yml", "name: n\n");
+
+        var scan = RepositoryScanner.Scan(_temp.FullName);
+
+        Assert.Equal(["m", "z"], scan.HelmCharts.Select(c => c.RelativePath));
+        Assert.Equal(["k8s/A.YAML", "k8s/b.yml", "k8s/c.yaml"], scan.Manifests);
+        Assert.Equal([".github/workflows/Build.yaml", ".github/workflows/release.yml"], scan.Workflows);
+        Assert.Equal(_temp.FullName, scan.Root);
+    }
+
+    [Fact]
+    public void Has_no_workflows_without_a_workflows_folder()
+    {
+        Write("src/Api/appsettings.json", "{}");
+
+        var scan = RepositoryScanner.Scan(_temp.FullName);
+
+        Assert.Empty(scan.Workflows);
+        Assert.False(scan.HasOctopusConfigAsCode);
+    }
+
+    [Fact]
+    public void Orders_apps_by_depth_then_name()
+    {
+        Write("b/appsettings.json", "{}");
+        Write("a/appsettings.json", "{}");
+        Write("a/x/appsettings.json", "{}");
+        Write("C/appsettings.json", "{}");
+
+        var scan = RepositoryScanner.Scan(_temp.FullName);
+
+        Assert.Equal(["a", "b", "C", "a/x"], scan.Apps.Select(a => a.RelativePath));
+        Assert.Equal("a", scan.Apps[0].ToString());
+    }
+
+    [Fact]
+    public void Lists_each_environment_once_in_name_order()
+    {
+        Write("app/appsettings.json", "{}");
+        Write("app/appsettings.Staging.json", "{}");
+        Write("app/appsettings.development.json", "{}");
+        Write("app/appsettings.Development.json.bak", "{}");
+        Write("app/appsettings.local.extra.json", "{}");
+        Write("app/appsettings.Production.json", "{}");
+
+        var app = Assert.Single(RepositoryScanner.Scan(_temp.FullName).Apps);
+
+        Assert.Equal(["development", "Production", "Staging"], app.Environments);
+    }
+
+    [Fact]
+    public void Lists_kustomizations_by_every_name_with_overlays_first_then_by_name()
+    {
+        Write("z/base/kustomization.yaml", "resources: []\n");
+        Write("a/base/kustomization.yml", "resources: []\n");
+        Write("m/Kustomization", "resources: []\n");
+        Write("z/Overlay/kustomization.yaml", "resources: []\n");
+        Write("a/overlays/dev/kustomization.yaml", "resources: []\n");
+
+        var scan = RepositoryScanner.Scan(_temp.FullName);
+
+        Assert.Equal(["a/overlays/dev", "z/Overlay", "a/base", "m", "z/base"], scan.Kustomizations);
+    }
+
+    [Theory]
+    [InlineData(".github")]
+    [InlineData(".octopus")]
+    [InlineData(".deploy")]
+    public void Scans_the_hidden_folders_that_can_hold_configuration(string folder)
+    {
+        Write($"{folder}/app/appsettings.json", "{}");
+
+        Assert.Equal([$"{folder}/app"], RepositoryScanner.Scan(_temp.FullName).Apps.Select(a => a.RelativePath));
+    }
+
+    [Theory]
+    [InlineData(".hidden")]
+    [InlineData(".vs")]
+    [InlineData("Bin")]
+    [InlineData("TestResults")]
+    [InlineData("artifacts")]
+    [InlineData("dist")]
+    [InlineData("vendor")]
+    [InlineData(".idea")]
+    public void Skips_other_hidden_and_build_folders(string folder)
+    {
+        Write($"{folder}/app/appsettings.json", "{}");
+        Write("src/appsettings.json", "{}");
+
+        Assert.Equal(["src"], RepositoryScanner.Scan(_temp.FullName).Apps.Select(a => a.RelativePath));
+    }
+
+    [Fact]
+    public void Looks_twelve_folders_deep_and_no_further()
+    {
+        var twelve = string.Join('/', Enumerable.Range(1, 12).Select(i => "d" + i));
+        Write($"{twelve}/appsettings.json", "{}");
+        Write($"{twelve}/d13/appsettings.json", "{}");
+
+        Assert.Equal([twelve], RepositoryScanner.Scan(_temp.FullName).Apps.Select(a => a.RelativePath));
+    }
+
+    [Fact]
+    public void Does_not_follow_folder_links()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var outside = new TempFolder();
+        File.WriteAllText(Path.Join(outside.Path, "appsettings.json"), "{}");
+        Write("src/appsettings.json", "{}");
+        Directory.CreateSymbolicLink(Path.Join(_temp.FullName, "link"), outside.Path);
+
+        Assert.Equal(["src"], RepositoryScanner.Scan(_temp.FullName).Apps.Select(a => a.RelativePath));
+    }
+
+    [Fact]
+    public void Does_not_take_a_linked_file_for_a_manifest()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var outside = new TempFolder();
+        var target = Path.Join(outside.Path, "pod.yaml");
+        File.WriteAllText(target, Pod);
+        Write("k8s/real.yaml", Pod);
+        File.CreateSymbolicLink(Path.Join(_temp.FullName, "k8s", "link.yaml"), target);
+
+        Assert.Equal(["k8s/real.yaml"], RepositoryScanner.Scan(_temp.FullName).Manifests);
+    }
+
+    [Fact]
+    public void Reads_manifests_up_to_two_megabytes()
+    {
+        const int limit = 2 * 1024 * 1024;
+        Write("k8s/exact.yaml", Pod + new string('#', limit - Pod.Length));
+        Write("k8s/over.yaml", Pod + new string('#', limit - Pod.Length + 1));
+
+        Assert.Equal(["k8s/exact.yaml"], RepositoryScanner.Scan(_temp.FullName).Manifests);
+    }
+
+    [Theory]
+    [InlineData("kind: Pod\nmetadata:\n  name: x\n")]
+    [InlineData("apiVersion: v1\nmetadata:\n  name: x\n")]
+    [InlineData("apiVersion: v1\nkind: Service\n")]
+    public void A_manifest_needs_an_api_version_and_a_workload_or_config_kind(string text)
+    {
+        Write("k8s/odd.yaml", text);
+
+        Assert.Empty(RepositoryScanner.Scan(_temp.FullName).Manifests);
+    }
+
+    [Theory]
+    [InlineData("Deployment")]
+    [InlineData("StatefulSet")]
+    [InlineData("DaemonSet")]
+    [InlineData("Job")]
+    [InlineData("CronJob")]
+    [InlineData("ReplicaSet")]
+    [InlineData("ConfigMap")]
+    [InlineData("Secret")]
+    [InlineData("List")]
+    public void Takes_these_kinds_for_manifests(string kind)
+    {
+        Write("k8s/x.yaml", $"apiVersion: v1\nkind: {kind}\nmetadata:\n  name: x\n");
+
+        Assert.Equal(["k8s/x.yaml"], RepositoryScanner.Scan(_temp.FullName).Manifests);
+    }
+
+    [Fact]
+    public void Keeps_manifests_inside_a_chart_out_of_the_manifest_list_but_not_its_neighbours()
+    {
+        Write("chart/Chart.yaml", "name: demo\n");
+        Write("chart/rendered.yaml", Pod);
+        Write("chart-extra/pod.yaml", Pod);
+
+        Assert.Equal(["chart-extra/pod.yaml"], RepositoryScanner.Scan(_temp.FullName).Manifests);
+    }
+
     private const string Pod = "apiVersion: v1\nkind: Pod\nmetadata:\n  name: x\nspec:\n";
 
     private void Write(string relativePath, string text)
