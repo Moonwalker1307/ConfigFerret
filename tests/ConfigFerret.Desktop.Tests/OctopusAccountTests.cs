@@ -195,6 +195,103 @@ public class OctopusAccountTests
         }
     }
 
+    [Fact]
+    public void Needs_a_client_a_server_and_an_api_key()
+    {
+        var server = new Uri("https://octopus.example.test/");
+
+        Assert.Throws<ArgumentNullException>(() => new OctopusAccount(null!, server, ApiKey, null));
+        Assert.Throws<ArgumentNullException>(() => new OctopusAccount(new HttpClient(), null!, ApiKey, null));
+        Assert.Throws<ArgumentException>(() => new OctopusAccount(new HttpClient(), server, " ", null));
+    }
+
+    [Fact]
+    public void Explains_why_a_server_without_https_is_refused()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new OctopusAccount(new HttpClient(), new Uri("http://octopus.example.test/"), ApiKey, null));
+
+        Assert.Contains("https", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("server", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task Keeps_the_path_of_a_server_address_without_a_trailing_slash()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/octopus/api/spaces/all", Spaces)
+            .Respond("/octopus/api/Spaces-1/environments/all", """[{"Name":"Dev"}]""");
+        var account = new OctopusAccount(handler.Client(), new Uri("https://octopus.example.test/octopus"), ApiKey, null);
+
+        Assert.Equal(["Dev"], await account.ListEnvironmentsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Says_so_when_there_is_no_default_space()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", """[{"Id":"Spaces-2","Name":"Platform","IsDefault":false},{"Id":"Spaces-3","Name":"Other"}]""");
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("no default space", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_space_without_an_id_is_not_a_match()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", """[{"Name":"Default","IsDefault":true}]""");
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Names_the_space_that_was_not_found_even_when_a_default_exists()
+    {
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(Handler(), "Nowhere").ListEnvironmentsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("Nowhere", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Lists_environments_in_the_order_octopus_gives_and_skips_unnamed_ones()
+    {
+        var handler = Handler().Respond("/api/Spaces-1/environments/all", """[{"Name":"Test"},{"Id":"x"},{"Name":"Dev"},{"Name":5}]""");
+
+        Assert.Equal(["Test", "Dev"], await Account(handler).ListEnvironmentsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("""{"Items":[{"Name":"Orders","Slug":"orders"}]}""")]
+    [InlineData("null")]
+    [InlineData("\"text\"")]
+    public async Task An_answer_that_is_not_a_list_has_no_projects(string body)
+    {
+        var handler = Handler().Respond("/api/Spaces-1/projects/all", body);
+
+        Assert.Empty(await Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_project_without_a_slug_gets_an_empty_one()
+    {
+        var handler = Handler().Respond("/api/Spaces-1/projects/all", """[{"Name":"Orders"}]""");
+
+        var project = Assert.Single(await Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(new OctopusProjectInfo("Orders", string.Empty), project);
+        Assert.Equal("Orders", project.ToString());
+    }
+
+    [Fact]
+    public async Task Error_messages_name_what_could_not_be_read()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", "{}", HttpStatusCode.InternalServerError);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("api/spaces/all", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+    }
+
     private static FakeHttpHandler Handler() => new FakeHttpHandler().Respond("/api/spaces/all", Spaces);
 
     private static OctopusAccount Account(FakeHttpHandler handler, string? space = null) =>
