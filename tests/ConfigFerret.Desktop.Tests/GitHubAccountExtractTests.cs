@@ -268,4 +268,14 @@ public class GitHubAccountExtractTests : IDisposable
         public void HardLink(string name, string target) =>
             writer.WriteEntry(new PaxTarEntry(TarEntryType.HardLink, name) { LinkName = target });
     }
+
+    [Fact]
+    public async Task A_corrupt_archive_is_an_InvalidOperationException_the_app_shows()
+    {
+        // Gzip with a reserved compression method: the reader throws InvalidDataException.
+        var corrupt = new byte[] { 0x1f, 0x8b, 0x09, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3 };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Extract(corrupt));
+        Assert.IsType<InvalidDataException>(ex.InnerException);
+    }
 }

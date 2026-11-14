@@ -168,7 +168,21 @@ public sealed class GitHubAccount
     /// Stops with an error once the unpacked files pass <paramref name="maxBytes"/>, the archive holds more than
     /// <paramref name="maxEntries"/> entries, or more is unpacked than those could need, skipped entries included.
     /// </summary>
+    /// <exception cref="InvalidOperationException">The data is not a valid tarball, or it is too large.</exception>
     internal static async Task ExtractAsync(Stream gzip, string target, CancellationToken cancellationToken, long maxBytes = MaxDownloadBytes, int maxEntries = MaxDownloadEntries)
+    {
+        try
+        {
+            await ExtractCoreAsync(gzip, target, maxBytes, maxEntries, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException ex)
+        {
+            // The gzip or tar reader's way of saying the download is corrupt. The app shows InvalidOperationException messages.
+            throw new InvalidOperationException($"GitHub sent a repository archive that could not be read: {ex.Message}", ex);
+        }
+    }
+
+    private static async Task ExtractCoreAsync(Stream gzip, string target, long maxBytes, int maxEntries, CancellationToken cancellationToken)
     {
         var root = Path.GetFullPath(target) + Path.DirectorySeparatorChar;
         var tooLarge = $"The repository is larger than {maxBytes / 1024 / 1024} MB unpacked or has more than {maxEntries} files. Clone it and open the folder instead.";
