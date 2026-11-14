@@ -33,13 +33,14 @@ dotnet package add ConfigFerret
 
 Targets `net10.0` and `net11.0`.
 
-Two optional packages read variables from deployment tools over their REST APIs. They are separate so the core
+Optional packages read variables and secrets from deployment tools and stores over their REST APIs. They are separate so the core
 package stays offline and never handles credentials unless you add one:
 
 | Package | Adds |
 | --- | --- |
 | `ConfigFerret.GitHub` | GitHub Actions organization, repository and environment variables, and secret names ([readme](src/ConfigFerret.GitHub/README.md)) |
 | `ConfigFerret.Octopus` | Octopus Deploy project and library variable set variables, matched by scope, read with an API key ([readme](src/ConfigFerret.Octopus/README.md)) |
+| `ConfigFerret.HashiCorp` | HashiCorp Vault KV secrets (names and metadata, values only when asked) and Consul KV keys, read with a token ([readme](src/ConfigFerret.HashiCorp/README.md)) |
 
 To trace from the command line without writing code, install the `configferret` command instead:
 
@@ -155,6 +156,36 @@ an `appsettings*.json` file. See each package's readme for the settings.
 
 Tokens and API keys go only in request headers, only over HTTPS, and never into a report. Secret values cannot be read
 from either API, so secrets and sensitive variables appear by name and are redacted like any other secret.
+
+### With HashiCorp Vault or Consul
+
+```csharp
+using ConfigFerret.HashiCorp;   // dotnet package add ConfigFerret.HashiCorp
+
+var vault = await VaultSecrets.LoadAsync(new VaultOptions
+{
+    Address = new Uri("https://vault.example.com:8200/"),
+    Token = Environment.GetEnvironmentVariable("VAULT_TOKEN"),
+    Paths = { "orders/prod" },
+});
+var consul = await ConsulKeyValues.LoadAsync(new ConsulOptions
+{
+    Address = new Uri("https://consul.example.com:8501/"),
+    Token = Environment.GetEnvironmentVariable("CONSUL_HTTP_TOKEN"),
+    Prefix = "config/orders/",
+});
+
+var report = ConfigTracer.For(builder.Configuration)
+    .WithVault(vault)
+    .WithConsul(consul)
+    .Trace();
+```
+
+Vault secrets are linked from External Secrets Operator and Secrets Store CSI references, explicit links, and layers
+whose name gives the same configuration key. Only names and metadata are read unless you set `IncludeValues`, and
+every Vault step is sensitive. Consul keys under the prefix map to configuration keys the way
+Winton.Extensions.Configuration.Consul maps them (`config/orders/Db/Timeout` sets `Db:Timeout`). Both register with
+`AddConfigFerretVault` and `AddConfigFerretConsul`, like the packages above.
 
 ### Inside a running pod
 
@@ -292,6 +323,8 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Kustomize | Every `configMapGenerator` and `secretGenerator` across bases and overlays (`create`, `merge`, `replace`, `literals`, `envs`, `files`, `namePrefix`, `nameSuffix`, hash suffixes) |
 | GitHub Actions (`ConfigFerret.GitHub`) | The organization, repository or environment variable or secret, from a workflow `env:` line, an explicit link or the same name |
 | Octopus Deploy (`ConfigFerret.Octopus`) | The project or library variable set variable whose scope fits the deployment, ordered by scope specificity |
+| HashiCorp Vault (`ConfigFerret.HashiCorp`) | The KV secret (and key, when values are read) behind an External Secrets or CSI reference, an explicit link or the same name, with version and update time |
+| Consul KV (`ConfigFerret.HashiCorp`) | The key under the prefix that sets the configuration key, including keys inside expanded JSON values |
 
 Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and `List` documents.
 
@@ -331,6 +364,7 @@ dotnet test
 dotnet pack src/ConfigFerret -c Release
 dotnet pack src/ConfigFerret.GitHub -c Release
 dotnet pack src/ConfigFerret.Octopus -c Release
+dotnet pack src/ConfigFerret.HashiCorp -c Release
 dotnet pack src/ConfigFerret.Tool -c Release
 ```
 
