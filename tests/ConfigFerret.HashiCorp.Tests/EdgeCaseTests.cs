@@ -78,11 +78,13 @@ public class EdgeCaseTests
         Assert.Single(vault.Warnings, w => w.StartsWith("Did not list", StringComparison.Ordinal));
 
         var requests = new LoopingHandler();
-        var capped = await VaultSecrets.LoadAsync(Vault(o => { o.KvVersion = 2; o.MaxRequests = 7; }), new HttpClient(requests), ct);
+        using var requestsClient = new HttpClient(requests);
+        var capped = await VaultSecrets.LoadAsync(Vault(o => { o.KvVersion = 2; o.MaxRequests = 7; }), requestsClient, ct);
         Assert.Equal(7, requests.Count);
         Assert.Single(capped.Warnings, w => w.Contains("MaxRequests", StringComparison.Ordinal));
 
-        var secrets = await VaultSecrets.LoadAsync(Vault(o => { o.KvVersion = 2; o.MaxSecrets = 3; }), new HttpClient(new LoopingHandler()), ct);
+        using var secretsClient = new HttpClient(new LoopingHandler());
+        var secrets = await VaultSecrets.LoadAsync(Vault(o => { o.KvVersion = 2; o.MaxSecrets = 3; }), secretsClient, ct);
         Assert.Single(secrets.Warnings);
         Assert.Single(secrets.Warnings, w => w.Contains("MaxSecrets", StringComparison.Ordinal));
     }
@@ -365,13 +367,27 @@ public class EdgeCaseTests
     /// <summary>Every folder holds a folder named a/ and a secret named s; counts requests.</summary>
     private sealed class LoopingHandler : HttpMessageHandler
     {
+        private readonly List<HttpResponseMessage> _sent = [];
+
         public int Count { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Count++;
             var body = request.RequestUri!.Query.Contains("list=true", StringComparison.Ordinal) ? """{"data":{"keys":["a/","s"]}}""" : """{"data":{"current_version":1}}""";
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+            _sent.Add(response);
+            return Task.FromResult(response);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _sent.ForEach(r => r.Dispose());
+            }
+
+            base.Dispose(disposing);
         }
     }
 }

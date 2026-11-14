@@ -54,16 +54,10 @@ internal sealed class ConsulResolver(ConsulKeyValues values, ConsulTraceOptions 
             return [];
         }
 
-        foreach (var key in NameMatching.CandidateKeys(layer, options.StripPrefixes, "Consul"))
-        {
-            var found = values.Find(key);
-            if (found.Count > 0)
-            {
-                return found.Select(e => ToStep(e, layer, "matched by name", inferred: true)).ToList();
-            }
-        }
-
-        return [];
+        var found = NameMatching.CandidateKeys(layer, options.StripPrefixes, "Consul")
+            .Select(values.Find)
+            .FirstOrDefault(f => f.Count > 0);
+        return found is null ? [] : found.Select(e => ToStep(e, layer, "matched by name", inferred: true)).ToList();
     }
 
     private ProvenanceStep ToStep(ConsulEntry entry, ProvenanceStep layer, string how, bool inferred)

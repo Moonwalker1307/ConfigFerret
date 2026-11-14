@@ -104,12 +104,9 @@ internal static class NameMatching
         if (layer.Reference is not ExternalSecretRef && LayerNames.Of(layer) is { } name)
         {
             Add(keys, name);
-            foreach (var prefix in stripPrefixes.Where(p => !string.IsNullOrEmpty(p)))
+            foreach (var prefix in stripPrefixes.Where(p => !string.IsNullOrEmpty(p) && name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
             {
-                if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    Add(keys, name[prefix.Length..]);
-                }
+                Add(keys, name[prefix.Length..]);
             }
         }
         else if (layer.Reference is null

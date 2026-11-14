@@ -192,7 +192,7 @@ public class ConsulTests
     [Fact]
     public async Task Stops_at_the_key_cap_also_inside_a_JSON_value()
     {
-        var many = Kv([.. Enumerable.Range(0, 5).Select(i => ($"config/orders/k{i}", (string?)"v"))]);
+        var many = Kv([.. Enumerable.Range(0, 5).Select(i => ($"config/orders/k{i}", "v"))]);
         var capped = await Load(new FakeHttpHandler().Respond(Path, many), o => o.MaxKeys = 3);
         Assert.Equal(3, capped.Entries.Count);
         Assert.Contains("Stopped reading Consul after 3 keys (MaxKeys).", capped.Warnings);

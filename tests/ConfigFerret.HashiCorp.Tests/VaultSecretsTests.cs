@@ -286,10 +286,12 @@ public class VaultSecretsTests
     [Fact]
     public async Task Stops_at_the_request_and_secret_caps()
     {
-        var byRequests = await VaultSecrets.LoadAsync(Options(o => { o.KvVersion = 2; o.MaxRequests = 5; }), new HttpClient(new LoopingHandler()), TestContext.Current.CancellationToken);
+        using var requestsClient = new HttpClient(new LoopingHandler());
+        var byRequests = await VaultSecrets.LoadAsync(Options(o => { o.KvVersion = 2; o.MaxRequests = 5; }), requestsClient, TestContext.Current.CancellationToken);
         Assert.Contains("Stopped reading HashiCorp Vault after 5 requests (MaxRequests).", byRequests.Warnings);
 
-        var bySecrets = await VaultSecrets.LoadAsync(Options(o => { o.KvVersion = 2; o.MaxSecrets = 2; }), new HttpClient(new LoopingHandler()), TestContext.Current.CancellationToken);
+        using var secretsClient = new HttpClient(new LoopingHandler());
+        var bySecrets = await VaultSecrets.LoadAsync(Options(o => { o.KvVersion = 2; o.MaxSecrets = 2; }), secretsClient, TestContext.Current.CancellationToken);
         Assert.Equal(2, bySecrets.Secrets.Count);
         Assert.Contains("Stopped reading HashiCorp Vault after 2 secrets (MaxSecrets).", bySecrets.Warnings);
     }
@@ -510,6 +512,8 @@ public class VaultSecretsTests
     /// <summary>A hostile server: every folder holds a folder named a/ and a secret named s.</summary>
     private sealed class LoopingHandler : HttpMessageHandler
     {
+        private readonly List<HttpResponseMessage> _sent = [];
+
         public int Lists { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -517,7 +521,19 @@ public class VaultSecretsTests
             var list = request.RequestUri!.Query.Contains("list=true", StringComparison.Ordinal);
             Lists += list ? 1 : 0;
             var body = list ? Keys("a/", "s") : Metadata(1);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+            _sent.Add(response);
+            return Task.FromResult(response);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _sent.ForEach(r => r.Dispose());
+            }
+
+            base.Dispose(disposing);
         }
     }
 }
