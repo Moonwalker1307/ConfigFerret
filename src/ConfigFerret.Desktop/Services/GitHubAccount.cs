@@ -175,9 +175,10 @@ public sealed class GitHubAccount
         {
             await ExtractCoreAsync(gzip, target, maxBytes, maxEntries, cancellationToken).ConfigureAwait(false);
         }
-        catch (InvalidDataException ex)
+        catch (Exception ex) when (ex is InvalidDataException or OverflowException)
         {
-            // The gzip or tar reader's way of saying the download is corrupt. The app shows InvalidOperationException messages.
+            // The gzip or tar reader's way of saying the download is corrupt (the tar reader overflows on a huge base-256
+            // number in a header). The app shows InvalidOperationException messages.
             throw new InvalidOperationException($"GitHub sent a repository archive that could not be read: {ex.Message}", ex);
         }
     }

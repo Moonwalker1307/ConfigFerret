@@ -278,4 +278,27 @@ public class GitHubAccountExtractTests : IDisposable
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Extract(corrupt));
         Assert.IsType<InvalidDataException>(ex.InnerException);
     }
+
+    [Fact]
+    public async Task A_header_number_that_overflows_is_an_InvalidOperationException_the_app_shows()
+    {
+        var header = new byte[512];
+        Encoding.ASCII.GetBytes("top/file.txt").CopyTo(header, 0);
+        header[124] = 0x80; // base-256 size, all ones: larger than a long
+        Array.Fill(header, (byte)0xFF, 125, 11);
+        header[156] = (byte)'0';
+        Encoding.ASCII.GetBytes("ustar\0" + "00").CopyTo(header, 257);
+        Array.Fill(header, (byte)' ', 148, 8);
+        Encoding.ASCII.GetBytes(Convert.ToString(header.Sum(b => b), 8).PadLeft(6, '0') + "\0 ").CopyTo(header, 148);
+
+        using var packed = new MemoryStream();
+        await using (var zip = new GZipStream(packed, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            await zip.WriteAsync(header, TestContext.Current.CancellationToken);
+            await zip.WriteAsync(new byte[1024], TestContext.Current.CancellationToken);
+        }
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Extract(packed.ToArray()));
+        Assert.IsType<OverflowException>(ex.InnerException);
+    }
 }
