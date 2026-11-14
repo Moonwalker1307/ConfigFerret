@@ -47,6 +47,12 @@ To trace from the command line without writing code, install the `configferret` 
 dotnet tool install -g ConfigFerret.Tool
 ```
 
+### Desktop app
+
+There is also a desktop app that scans a GitHub repository or a local folder and shows where each configuration value
+comes from. Download it from [GitHub Releases](https://github.com/Moonwalker1307/ConfigFerret/releases) (the
+`desktop-v*` tags), not from NuGet. See [its readme](src/ConfigFerret.Desktop/README.md).
+
 ## Use
 
 ### From the command line

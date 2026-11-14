@@ -1,0 +1,12 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      ORDERS_Features__Search: ${{ vars.FEATURES_SEARCH }}
+    steps:
+      - run: echo "deploying"
