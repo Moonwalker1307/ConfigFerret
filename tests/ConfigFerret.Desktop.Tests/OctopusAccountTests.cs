@@ -129,6 +129,72 @@ public class OctopusAccountTests
         Assert.DoesNotContain(ApiKey, ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_apps_http_client_does_not_carry_the_api_key_through_a_redirect()
+    {
+        // Two loopback servers: the "Octopus" one redirects to the other, which must never see the request.
+        using var octopus = new Loopback(_ => (HttpStatusCode.Redirect, null));
+        using var elsewhere = new Loopback(_ => (HttpStatusCode.OK, Spaces));
+        octopus.RedirectTo = new Uri(elsewhere.Address, "api/spaces/all");
+        using var http = new HttpClient(ConfigFerret.Desktop.ViewModels.MainWindowViewModel.CreateHttpHandler());
+        var account = new OctopusAccount(http, octopus.Address, ApiKey, null);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => account.ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(ApiKey, ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, octopus.Requests);
+        Assert.Equal(0, elsewhere.Requests);
+    }
+
+    private sealed class Loopback : IDisposable
+    {
+        private readonly System.Net.Sockets.TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly Func<string, (HttpStatusCode Status, string? Body)> _respond;
+        private readonly Task _loop;
+
+        public Loopback(Func<string, (HttpStatusCode Status, string? Body)> respond)
+        {
+            _respond = respond;
+            _listener.Start();
+            Address = new Uri($"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/");
+            _loop = Task.Run(ServeAsync);
+        }
+
+        public Uri Address { get; }
+
+        public Uri? RedirectTo { get; set; }
+
+        public int Requests { get; private set; }
+
+        public void Dispose()
+        {
+            _listener.Stop();
+            _ = _loop.Exception;
+        }
+
+        private async Task ServeAsync()
+        {
+            while (true)
+            {
+                using var client = await _listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                using var stream = client.GetStream();
+                using var reader = new StreamReader(stream, leaveOpen: true);
+                var line = await reader.ReadLineAsync().ConfigureAwait(false) ?? string.Empty;
+                while (!string.IsNullOrEmpty(await reader.ReadLineAsync().ConfigureAwait(false)))
+                {
+                }
+
+                Requests++;
+                var (status, body) = _respond(line);
+                var location = status == HttpStatusCode.Redirect ? $"Location: {RedirectTo}\r\n" : string.Empty;
+                var bytes = System.Text.Encoding.UTF8.GetBytes(body ?? string.Empty);
+                var head = $"HTTP/1.1 {(int)status} X\r\n{location}Content-Type: application/json\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n";
+                await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(head)).ConfigureAwait(false);
+                await stream.WriteAsync(bytes).ConfigureAwait(false);
+            }
+        }
+    }
+
     private static FakeHttpHandler Handler() => new FakeHttpHandler().Respond("/api/spaces/all", Spaces);
 
     private static OctopusAccount Account(FakeHttpHandler handler, string? space = null) =>
