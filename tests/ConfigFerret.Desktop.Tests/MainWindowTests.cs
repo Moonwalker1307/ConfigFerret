@@ -101,6 +101,21 @@ public sealed class MainWindowTests : IDisposable
         viewModel.SelectedTab = 1;
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "configuration-light");
+
+        // Ctrl+B hides the sidebar, and the choice is kept for the next start.
+        viewModel.IsDarkTheme = true;
+        window.KeyPressQwerty(Avalonia.Input.PhysicalKey.B, Avalonia.Input.RawInputModifiers.Control);
+        Dispatcher.UIThread.RunJobs();
+        Assert.False(viewModel.IsSidebarOpen);
+        Assert.Contains("\"sidebarHidden\": true", File.ReadAllText(Path.Join(_temp.FullName, "workspace.json")), StringComparison.Ordinal);
+        await Screenshots.SaveAsync(window, "sidebar-hidden");
+        using (var reopened = CreateViewModel(new FakeGitHub(), new InMemoryCredentialStore()))
+        {
+            Assert.False(reopened.IsSidebarOpen);
+        }
+
+        viewModel.ToggleSidebarCommand.Execute(null);
+        Assert.True(viewModel.IsSidebarOpen);
         window.Close();
     }
 

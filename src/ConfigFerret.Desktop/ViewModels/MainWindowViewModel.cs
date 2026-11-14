@@ -90,6 +90,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         OctopusServer = _workspace.OctopusServer;
         OctopusSpace = _workspace.OctopusSpace;
         IsDarkTheme = _workspace.DarkTheme;
+        IsSidebarOpen = !_workspace.SidebarHidden;
         LayerFilters = [new LayerFilter(null), .. Enum.GetValues<LayerKind>().Select(k => new LayerFilter(k))];
         SelectedLayerFilter = LayerFilters[0];
         IsOctopusConnected = OctopusServer.Length > 0 && HasCredential(OctopusAccountName);
@@ -352,6 +353,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool IsDarkTheme { get; set; } = true;
 
+    /// <summary>The repository sidebar is shown. Hiding it gives the results the whole window.</summary>
+    [ObservableProperty]
+    public partial bool IsSidebarOpen { get; set; } = true;
+
     /// <summary>How many variables the trace found.</summary>
     [ObservableProperty]
     public partial int TotalCount { get; set; }
@@ -446,6 +451,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     partial void OnSelectedLayerFilterChanged(LayerFilter? value) => ApplyFilter();
 
     partial void OnRevealSecretsChanged(bool value) => RetraceOnChoice();
+
+    partial void OnIsSidebarOpenChanged(bool value)
+    {
+        if (_workspace.SidebarHidden != !value)
+        {
+            _workspace.SidebarHidden = !value;
+            Save();
+        }
+    }
 
     partial void OnIsDarkThemeChanged(bool value)
     {
@@ -588,6 +602,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>Switches between the dark and light themes.</summary>
     [RelayCommand]
     private void ToggleTheme() => IsDarkTheme = !IsDarkTheme;
+
+    /// <summary>Hides or shows the repository sidebar.</summary>
+    [RelayCommand]
+    private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
 
     /// <summary>Clears the search and the filters.</summary>
     [RelayCommand]

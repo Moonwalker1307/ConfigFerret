@@ -17,7 +17,8 @@ GitHub Actions variables and Octopus Deploy variables to what it finds, then sho
 - a secrets audit: green means the value is kept in a secret store, orange means check it, red means a secret value
   sits in plain configuration
 
-You can also open a local folder instead of a GitHub repository.
+You can also open a local folder instead of a GitHub repository. Hide the repository sidebar with the button at its top,
+or Ctrl+B (Cmd+B on macOS), to give the results the whole window.
 
 ![Dead variables and values that never win](../../docs/desktop/unused.png)
 

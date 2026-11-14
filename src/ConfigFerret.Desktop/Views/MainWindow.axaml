@@ -13,15 +13,20 @@
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource CfBackground}">
 
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
+    <KeyBinding Gesture="Meta+B" Command="{Binding ToggleSidebarCommand}" />
+  </Window.KeyBindings>
+
   <Grid>
-    <Grid ColumnDefinitions="312,*">
+    <Grid ColumnDefinitions="Auto,*">
 
       <!-- ===================== Sidebar: repositories ===================== -->
-      <Border Grid.Column="0" Background="{DynamicResource CfSidebar}" BorderBrush="{DynamicResource CfBorder}" BorderThickness="0,0,1,0">
+      <Border Grid.Column="0" Width="312" IsVisible="{Binding IsSidebarOpen}" Background="{DynamicResource CfSidebar}" BorderBrush="{DynamicResource CfBorder}" BorderThickness="0,0,1,0">
         <DockPanel Margin="16,16,12,14">
 
           <!-- Brand -->
-          <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto" Margin="2,0,0,18">
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto,Auto" Margin="2,0,0,18">
             <Border Width="38" Height="38" CornerRadius="10" ClipToBounds="True" BorderBrush="{DynamicResource CfBorder}" BorderThickness="1">
               <Image Source="avares://ConfigFerret.Desktop/Assets/icon.png" Stretch="UniformToFill" RenderOptions.BitmapInterpolationMode="None" />
             </Border>
@@ -33,6 +38,9 @@
             </StackPanel>
             <Button Grid.Column="2" Classes="ghost" Command="{Binding ToggleThemeCommand}" ToolTip.Tip="Switch between dark and light">
               <PathIcon Data="{StaticResource IconTheme}" Width="16" Height="16" Foreground="{DynamicResource CfMuted}" />
+            </Button>
+            <Button Grid.Column="3" Classes="ghost" Command="{Binding ToggleSidebarCommand}" ToolTip.Tip="Hide the sidebar (Ctrl+B)" AutomationProperties.Name="Hide the sidebar">
+              <PathIcon Data="{StaticResource IconSidebar}" Width="16" Height="16" Foreground="{DynamicResource CfMuted}" />
             </Button>
           </Grid>
 
@@ -113,6 +121,21 @@
       <!-- ===================== Main area ===================== -->
       <Grid Grid.Column="1" RowDefinitions="*,Auto">
 
+        <!-- Show the sidebar again, on the welcome page -->
+        <Button Classes="subtle" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16,16,0,0" ZIndex="1"
+                Command="{Binding ToggleSidebarCommand}" ToolTip.Tip="Show the sidebar (Ctrl+B)" AutomationProperties.Name="Show the sidebar">
+          <Button.IsVisible>
+            <MultiBinding Converter="{x:Static BoolConverters.And}">
+              <Binding Path="!IsSidebarOpen" />
+              <Binding Path="ShowWelcome" />
+            </MultiBinding>
+          </Button.IsVisible>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <PathIcon Data="{StaticResource IconSidebar}" Width="14" Height="14" />
+            <TextBlock Text="Repositories" />
+          </StackPanel>
+        </Button>
+
         <!-- Welcome -->
         <ScrollViewer IsVisible="{Binding ShowWelcome}">
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="760" Margin="40" Spacing="18">
@@ -148,12 +171,16 @@
         <DockPanel IsVisible="{Binding HasSubject}" Margin="28,22,28,0">
 
           <!-- Title and actions -->
-          <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
-            <StackPanel Spacing="2">
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto">
+            <Button Classes="ghost" VerticalAlignment="Top" Margin="-8,2,10,0" IsVisible="{Binding !IsSidebarOpen}"
+                    Command="{Binding ToggleSidebarCommand}" ToolTip.Tip="Show the sidebar (Ctrl+B)" AutomationProperties.Name="Show the sidebar">
+              <PathIcon Data="{StaticResource IconSidebar}" Width="18" Height="18" Foreground="{DynamicResource CfMuted}" />
+            </Button>
+            <StackPanel Grid.Column="1" Spacing="2">
               <SelectableTextBlock Classes="h1" Text="{Binding SubjectTitle}" FontSize="24" FontWeight="Bold" />
               <TextBlock Classes="muted" Text="{Binding SubjectDetail}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
               <ToggleButton Classes="pill" IsChecked="{Binding RevealSecrets}" ToolTip.Tip="Show secret values instead of ***">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <PathIcon Data="{StaticResource IconEye}" Width="14" Height="14" />
