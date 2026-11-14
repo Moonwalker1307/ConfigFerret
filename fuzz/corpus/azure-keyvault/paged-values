@@ -1,0 +1,8 @@
+{"value":[{"id":"https://contoso.vault.azure.net/secrets/Db--Password","attributes":{"enabled":true,"updated":1767225600},"tags":{"team":"orders"},"contentType":"text/plain"}],"nextLink":"https://contoso.vault.azure.net/secrets?api-version=7.6&$skiptoken=p2"}
+%%
+{"value":[{"id":"https://contoso.vault.azure.net/secrets/Old","attributes":{"enabled":false,"updated":1767225600},"tags":{"team":"orders"},"contentType":"text/plain"},{"id":"https://contoso.vault.azure.net/secrets/Db--Timeout","attributes":{"enabled":true,"updated":1767225600},"tags":{"team":"orders"},"contentType":"text/plain"}]}
+%%
+{"value":"hunter2-secret-value","id":"https://contoso.vault.azure.net/secrets/Db--Password/v1","attributes":{"enabled":true}}
+%%
+HTTP 403
+{"error":{"code":"Forbidden","message":"no get"}}

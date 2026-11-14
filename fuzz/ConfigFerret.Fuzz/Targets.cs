@@ -42,6 +42,8 @@ internal static partial class Targets
         ["vault"] = new("HashiCorp Vault KV API responses (split by %%), then the Vault resolver", Vault),
         ["consul"] = new("Consul KV API response, then the Consul resolver", Consul),
         ["kubernetes-cluster"] = new("Kubernetes API responses (split by %%) read as a live workload, then traced", KubernetesClusterApi),
+        ["azure-keyvault"] = new("Azure Key Vault responses (split by %%), then the Key Vault resolver and a redacted trace", AzureKeyVault),
+        ["azure-appconfig"] = new("Azure App Configuration responses (split by %%), then the App Configuration resolver and a trace", AzureAppConfiguration),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

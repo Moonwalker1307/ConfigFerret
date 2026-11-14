@@ -21,6 +21,7 @@
     <ProjectReference Include="../../src/ConfigFerret.Octopus/ConfigFerret.Octopus.csproj" />
     <ProjectReference Include="../../src/ConfigFerret.HashiCorp/ConfigFerret.HashiCorp.csproj" />
     <ProjectReference Include="../../src/ConfigFerret.KubernetesCluster/ConfigFerret.KubernetesCluster.csproj" />
+    <ProjectReference Include="../../src/ConfigFerret.Azure/ConfigFerret.Azure.csproj" />
   </ItemGroup>
 
 </Project>
