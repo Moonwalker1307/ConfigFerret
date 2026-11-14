@@ -308,6 +308,127 @@ public class GitHubAccountTests
     private static HttpResponseMessage Redirect(string location) =>
         new(HttpStatusCode.Found) { Headers = { Location = new Uri(location, UriKind.RelativeOrAbsolute) } };
 
+    [Fact]
+    public void Needs_a_client_and_an_api_address()
+    {
+        Assert.Throws<ArgumentNullException>(() => new GitHubAccount(null!, GitHubAccount.DefaultApiBase, Token));
+        Assert.Throws<ArgumentNullException>(() => new GitHubAccount(new HttpClient(), null!, Token));
+    }
+
+    [Fact]
+    public void Explains_why_an_api_address_without_https_is_refused()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new GitHubAccount(new HttpClient(), new Uri("http://github.example.test/"), Token));
+
+        Assert.Contains("https", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("apiBase", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task Identifies_itself_and_asks_for_the_json_api()
+    {
+        var handler = new FakeHttpHandler().Respond("/user", """{"login":"ferret-fan"}""");
+
+        await Account(handler).GetLoginAsync(TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Contains("application/vnd.github+json", request.Headers.Accept.ToString(), StringComparison.Ordinal);
+        Assert.Contains("ConfigFerret-Desktop", request.Headers.UserAgent.ToString(), StringComparison.Ordinal);
+        Assert.Equal("2022-11-28", Assert.Single(request.Headers.GetValues("X-GitHub-Api-Version")));
+    }
+
+    [Theory]
+    [InlineData("""{"login":5}""")]
+    [InlineData("""{"login":null}""")]
+    public async Task Says_so_when_the_login_is_not_text(string body)
+    {
+        var handler = new FakeHttpHandler().Respond("/user", body);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).GetLoginAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("did not say who", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"environments":{"name":"staging"}}""")]
+    [InlineData("""{"environments":"staging"}""")]
+    [InlineData("""{"environments":[]}""")]
+    public async Task Lists_no_environments_when_the_answer_has_no_list(string body)
+    {
+        var handler = new FakeHttpHandler().Respond("/repos/contoso/orders/environments?per_page=100", body);
+
+        Assert.Empty(await Account(handler).ListEnvironmentsAsync("contoso/orders", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Skips_environments_without_a_name()
+    {
+        var handler = new FakeHttpHandler().Respond("/repos/contoso/orders/environments?per_page=100", """{"environments":[{"name":"staging"},{"id":3},{"name":7}]}""");
+
+        Assert.Equal(["staging"], await Account(handler).ListEnvironmentsAsync("contoso/orders", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Other_errors_listing_environments_are_not_hidden()
+    {
+        var handler = new FakeHttpHandler().Respond("/repos/contoso/orders/environments?per_page=100", "{}", HttpStatusCode.Unauthorized);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListEnvironmentsAsync("contoso/orders", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Keeps_the_slash_between_owner_and_name()
+    {
+        var handler = new FakeHttpHandler();
+
+        await Account(handler).ListEnvironmentsAsync("con-toso/or.ders_1", TestContext.Current.CancellationToken);
+
+        Assert.Equal("/repos/con-toso/or.ders_1/environments?per_page=100", Assert.Single(handler.Requests).RequestUri!.PathAndQuery);
+    }
+
+    [Theory]
+    [InlineData("", "main")]
+    [InlineData("contoso/orders", " ")]
+    public async Task A_download_needs_a_repository_and_a_ref(string fullName, string gitRef)
+    {
+        var handler = new FakeHttpHandler();
+        using var parent = new TempFolder();
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => Account(handler).DownloadAsync(fullName, gitRef, parent.Path, TestContext.Current.CancellationToken));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Downloads_the_ref_that_was_asked_for_with_the_token()
+    {
+        var handler = new FakeHttpHandler();
+        using var parent = new TempFolder();
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).DownloadAsync("contoso/orders", "feature/x y", parent.Path, TestContext.Current.CancellationToken));
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("/repos/contoso/orders/tarball/feature%2Fx%20y", request.RequestUri!.PathAndQuery);
+        Assert.Equal(Token, request.Headers.Authorization?.Parameter);
+    }
+
+    [Fact]
+    public async Task A_download_goes_into_a_folder_named_after_the_repository_and_never_reuses_one()
+    {
+        var tarball = FakeGitHub.Tarball(OrdersRepo.Root);
+        using var http = new HttpClient(new TarballHandler(tarball));
+        var account = new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token);
+        using var parent = new TempFolder();
+
+        var first = await account.DownloadAsync("contoso/orders", "main", parent.Path, TestContext.Current.CancellationToken);
+        var second = await account.DownloadAsync("contoso/orders", "main", parent.Path, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(first, second);
+        Assert.Equal(parent.Path, Path.GetDirectoryName(first));
+        Assert.StartsWith("contoso_orders-", Path.GetFileName(first), StringComparison.Ordinal);
+    }
+
     private static string ReposPath(int page) =>
         $"/user/repos?per_page=100&page={page}&sort=pushed&affiliation=owner,collaborator,organization_member";
 
