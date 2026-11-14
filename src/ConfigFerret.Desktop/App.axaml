@@ -1,0 +1,106 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ConfigFerret.Desktop.App"
+             Name="ConfigFerret"
+             RequestedThemeVariant="Dark">
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://ConfigFerret.Desktop/Themes/Icons.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <ResourceDictionary.ThemeDictionaries>
+        <!-- Dark: the logo's black, cream and ferret orange. -->
+        <ResourceDictionary x:Key="Dark">
+          <Color x:Key="CfBackgroundColor">#0B0C10</Color>
+          <SolidColorBrush x:Key="CfBackground" Color="#0B0C10" />
+          <SolidColorBrush x:Key="CfSidebar" Color="#111318" />
+          <SolidColorBrush x:Key="CfSurface" Color="#15181F" />
+          <SolidColorBrush x:Key="CfSurfaceRaised" Color="#1C2029" />
+          <SolidColorBrush x:Key="CfSurfaceHover" Color="#232836" />
+          <SolidColorBrush x:Key="CfBorder" Color="#262B37" />
+          <SolidColorBrush x:Key="CfText" Color="#F4EEE3" />
+          <SolidColorBrush x:Key="CfMuted" Color="#8C93A6" />
+          <SolidColorBrush x:Key="CfAccent" Color="#F5A524" />
+          <SolidColorBrush x:Key="CfAccentHover" Color="#FFB940" />
+          <SolidColorBrush x:Key="CfAccentText" Color="#16110A" />
+          <SolidColorBrush x:Key="CfAccentSoft" Color="#2A2113" />
+          <SolidColorBrush x:Key="CfGood" Color="#3DDC84" />
+          <SolidColorBrush x:Key="CfGoodSoft" Color="#12291D" />
+          <SolidColorBrush x:Key="CfBad" Color="#FF5D5D" />
+          <SolidColorBrush x:Key="CfBadSoft" Color="#2D1517" />
+          <SolidColorBrush x:Key="CfWarn" Color="#F5C451" />
+          <SolidColorBrush x:Key="CfInfo" Color="#6FA8FF" />
+          <SolidColorBrush x:Key="CfCode" Color="#0F1116" />
+          <!-- One colour per layer family, for chips and icons. -->
+          <SolidColorBrush x:Key="CfKindDotnet" Color="#B794F6" />
+          <SolidColorBrush x:Key="CfKindK8s" Color="#5B8DEF" />
+          <SolidColorBrush x:Key="CfKindSecret" Color="#FF6B8B" />
+          <SolidColorBrush x:Key="CfKindHelm" Color="#2EC4B6" />
+          <SolidColorBrush x:Key="CfKindKustomize" Color="#7BD389" />
+          <SolidColorBrush x:Key="CfKindGithub" Color="#E6E6E6" />
+          <SolidColorBrush x:Key="CfKindOctopus" Color="#FF8A5B" />
+          <SolidColorBrush x:Key="CfKindDotnetSoft" Color="#241D33" />
+          <SolidColorBrush x:Key="CfKindK8sSoft" Color="#162238" />
+          <SolidColorBrush x:Key="CfKindSecretSoft" Color="#331821" />
+          <SolidColorBrush x:Key="CfKindHelmSoft" Color="#112D2B" />
+          <SolidColorBrush x:Key="CfKindKustomizeSoft" Color="#182C1C" />
+          <SolidColorBrush x:Key="CfKindGithubSoft" Color="#24262B" />
+          <SolidColorBrush x:Key="CfKindOctopusSoft" Color="#33201A" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <Color x:Key="CfBackgroundColor">#F7F4EE</Color>
+          <SolidColorBrush x:Key="CfBackground" Color="#F7F4EE" />
+          <SolidColorBrush x:Key="CfSidebar" Color="#EFEAE1" />
+          <SolidColorBrush x:Key="CfSurface" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="CfSurfaceRaised" Color="#FBF9F5" />
+          <SolidColorBrush x:Key="CfSurfaceHover" Color="#F1ECE3" />
+          <SolidColorBrush x:Key="CfBorder" Color="#E2DBCF" />
+          <SolidColorBrush x:Key="CfText" Color="#1B1A17" />
+          <SolidColorBrush x:Key="CfMuted" Color="#6E6A62" />
+          <SolidColorBrush x:Key="CfAccent" Color="#E08A00" />
+          <SolidColorBrush x:Key="CfAccentHover" Color="#F09A10" />
+          <SolidColorBrush x:Key="CfAccentText" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="CfAccentSoft" Color="#FCEBD0" />
+          <SolidColorBrush x:Key="CfGood" Color="#16A05A" />
+          <SolidColorBrush x:Key="CfGoodSoft" Color="#DDF5E7" />
+          <SolidColorBrush x:Key="CfBad" Color="#D93A3A" />
+          <SolidColorBrush x:Key="CfBadSoft" Color="#FBE3E3" />
+          <SolidColorBrush x:Key="CfWarn" Color="#B7860B" />
+          <SolidColorBrush x:Key="CfInfo" Color="#2F6FD6" />
+          <SolidColorBrush x:Key="CfCode" Color="#F4F1EA" />
+          <SolidColorBrush x:Key="CfKindDotnet" Color="#7A4FD0" />
+          <SolidColorBrush x:Key="CfKindK8s" Color="#2D63D1" />
+          <SolidColorBrush x:Key="CfKindSecret" Color="#D13B63" />
+          <SolidColorBrush x:Key="CfKindHelm" Color="#11867B" />
+          <SolidColorBrush x:Key="CfKindKustomize" Color="#2F8A42" />
+          <SolidColorBrush x:Key="CfKindGithub" Color="#2B2F36" />
+          <SolidColorBrush x:Key="CfKindOctopus" Color="#D35A26" />
+          <SolidColorBrush x:Key="CfKindDotnetSoft" Color="#EEE7FB" />
+          <SolidColorBrush x:Key="CfKindK8sSoft" Color="#E3ECFC" />
+          <SolidColorBrush x:Key="CfKindSecretSoft" Color="#FBE4EB" />
+          <SolidColorBrush x:Key="CfKindHelmSoft" Color="#DDF3F0" />
+          <SolidColorBrush x:Key="CfKindKustomizeSoft" Color="#E1F3E4" />
+          <SolidColorBrush x:Key="CfKindGithubSoft" Color="#E9EAEC" />
+          <SolidColorBrush x:Key="CfKindOctopusSoft" Color="#FBE6DC" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <FontFamily x:Key="CfMono">Cascadia Mono, SF Mono, Menlo, JetBrains Mono, DejaVu Sans Mono, Consolas, monospace</FontFamily>
+      <CornerRadius x:Key="CfRadius">10</CornerRadius>
+      <CornerRadius x:Key="CfRadiusSmall">6</CornerRadius>
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Dark" Accent="#F5A524" RegionColor="#0B0C10" />
+        <ColorPaletteResources x:Key="Light" Accent="#E08A00" RegionColor="#F7F4EE" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
+    <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
+    <StyleInclude Source="avares://ConfigFerret.Desktop/Themes/Styles.axaml" />
+  </Application.Styles>
+</Application>

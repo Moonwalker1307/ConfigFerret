@@ -1,0 +1,613 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:ConfigFerret.Desktop.ViewModels"
+        xmlns:ui="using:ConfigFerret.Desktop.Views"
+        mc:Ignorable="d" d:DesignWidth="1440" d:DesignHeight="900"
+        x:Class="ConfigFerret.Desktop.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="ConfigFerret"
+        Icon="avares://ConfigFerret.Desktop/Assets/icon.ico"
+        Width="1440" Height="900" MinWidth="1040" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource CfBackground}">
+
+  <Grid>
+    <Grid ColumnDefinitions="312,*">
+
+      <!-- ===================== Sidebar: repositories ===================== -->
+      <Border Grid.Column="0" Background="{DynamicResource CfSidebar}" BorderBrush="{DynamicResource CfBorder}" BorderThickness="0,0,1,0">
+        <DockPanel Margin="16,16,12,14">
+
+          <!-- Brand -->
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto" Margin="2,0,0,18">
+            <Border Width="38" Height="38" CornerRadius="10" ClipToBounds="True" BorderBrush="{DynamicResource CfBorder}" BorderThickness="1">
+              <Image Source="avares://ConfigFerret.Desktop/Assets/icon.png" Stretch="UniformToFill" RenderOptions.BitmapInterpolationMode="None" />
+            </Border>
+            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+              <TextBlock FontSize="18" FontWeight="Bold">
+                <Run Text="Config" /><Run Text="Ferret" Foreground="{DynamicResource CfAccent}" />
+              </TextBlock>
+              <TextBlock Classes="muted" FontSize="11" Text="Why is this value 42?" />
+            </StackPanel>
+            <Button Grid.Column="2" Classes="ghost" Command="{Binding ToggleThemeCommand}" ToolTip.Tip="Switch between dark and light">
+              <PathIcon Data="{StaticResource IconTheme}" Width="16" Height="16" Foreground="{DynamicResource CfMuted}" />
+            </Button>
+          </Grid>
+
+          <!-- Connections -->
+          <Button DockPanel.Dock="Top" Classes="subtle" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                  Command="{Binding ToggleConnectionsCommand}" Margin="0,0,0,14" Padding="12,10" x:Name="ConnectionsButton">
+            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+              <PathIcon Data="{StaticResource IconBranch}" Width="14" Height="14" Foreground="{DynamicResource CfKindGithub}" />
+              <TextBlock Grid.Column="1" Margin="8,0" FontSize="12.5" Text="{Binding GitHubStatus}" TextTrimming="CharacterEllipsis" />
+              <Ellipse Grid.Column="2" Width="8" Height="8" Fill="{DynamicResource CfGood}" IsVisible="{Binding IsGitHubConnected}" />
+              <Ellipse Grid.Column="2" Width="8" Height="8" Fill="{DynamicResource CfMuted}" IsVisible="{Binding !IsGitHubConnected}" />
+              <PathIcon Grid.Row="1" Data="{StaticResource IconRocket}" Width="14" Height="14" Margin="0,8,0,0" Foreground="{DynamicResource CfKindOctopus}" />
+              <TextBlock Grid.Row="1" Grid.Column="1" Margin="8,8,8,0" FontSize="12.5" Text="{Binding OctopusStatus}" TextTrimming="CharacterEllipsis" />
+              <Ellipse Grid.Row="1" Grid.Column="2" Margin="0,8,0,0" Width="8" Height="8" Fill="{DynamicResource CfGood}" IsVisible="{Binding IsOctopusConnected}" />
+              <Ellipse Grid.Row="1" Grid.Column="2" Margin="0,8,0,0" Width="8" Height="8" Fill="{DynamicResource CfMuted}" IsVisible="{Binding !IsOctopusConnected}" />
+            </Grid>
+          </Button>
+
+          <!-- Search -->
+          <TextBox DockPanel.Dock="Top" Classes="search" PlaceholderText="Search repositories" Text="{Binding RepositoryFilter}" Margin="0,0,0,8">
+            <TextBox.InnerLeftContent>
+              <PathIcon Data="{StaticResource IconSearch}" Width="14" Height="14" Margin="10,0,2,0" Foreground="{DynamicResource CfMuted}" />
+            </TextBox.InnerLeftContent>
+          </TextBox>
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="2,2,0,6">
+            <TextBlock Classes="caption" Text="REPOSITORIES" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+              <TextBlock Classes="muted" FontSize="11" Text="{Binding RepositoryCountText}" VerticalAlignment="Center" />
+              <Button Classes="ghost" Padding="6" Command="{Binding ReloadRepositoriesCommand}" IsEnabled="{Binding IsGitHubConnected}" ToolTip.Tip="Reload the list">
+                <PathIcon Data="{StaticResource IconRefresh}" Width="13" Height="13" Foreground="{DynamicResource CfMuted}" />
+              </Button>
+            </StackPanel>
+          </Grid>
+
+          <!-- Local folder -->
+          <Button DockPanel.Dock="Bottom" Classes="subtle" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,10,0,0"
+                  Command="{Binding OpenFolderCommand}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <PathIcon Data="{StaticResource IconFolder}" Width="14" Height="14" />
+              <TextBlock Text="Open a local folder" />
+            </StackPanel>
+          </Button>
+
+          <Panel>
+            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoadingRepositories}" VerticalAlignment="Top" Height="2" MinHeight="2" Foreground="{DynamicResource CfAccent}" />
+            <ListBox Classes="repos" ItemsSource="{Binding Repositories}" SelectedItem="{Binding SelectedRepository}" IsVisible="{Binding IsGitHubConnected}">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:RepositoryRow">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <Border Classes="avatar" VerticalAlignment="Top">
+                      <TextBlock Text="{Binding Initial}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="190" />
+                        <PathIcon Data="{StaticResource IconLock}" Width="10" Height="10" Foreground="{DynamicResource CfMuted}" IsVisible="{Binding IsPrivate}" />
+                      </StackPanel>
+                      <TextBlock Classes="muted" FontSize="11.5" TextTrimming="CharacterEllipsis">
+                        <Run Text="{Binding Owner}" /><Run Text="  ·  " /><Run Text="{Binding Pushed}" />
+                      </TextBlock>
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <Border Classes="card" IsVisible="{Binding ShowConnectPrompt}" VerticalAlignment="Top" Margin="0,4,0,0">
+              <StackPanel Spacing="10">
+                <PathIcon Data="{StaticResource IconPlug}" Width="22" Height="22" HorizontalAlignment="Left" Foreground="{DynamicResource CfAccent}" />
+                <TextBlock Classes="h2" Text="Connect GitHub" />
+                <TextBlock Classes="muted" TextWrapping="Wrap" Text="Add a token to list every repository you can read. Pick one to see its full configuration." />
+                <Button Classes="accent" Content="Connect" Command="{Binding ToggleConnectionsCommand}" />
+              </StackPanel>
+            </Border>
+          </Panel>
+        </DockPanel>
+      </Border>
+
+      <!-- ===================== Main area ===================== -->
+      <Grid Grid.Column="1" RowDefinitions="*,Auto">
+
+        <!-- Welcome -->
+        <ScrollViewer IsVisible="{Binding ShowWelcome}">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="760" Margin="40" Spacing="18">
+            <Image Source="avares://ConfigFerret.Desktop/Assets/logo.png" MaxWidth="560" RenderOptions.BitmapInterpolationMode="None" />
+            <TextBlock Classes="h1" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                       Text="Every configuration value, traced to where it was set." />
+            <TextBlock Classes="muted" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" FontSize="14"
+                       Text="Pick a repository. ConfigFerret reads its appsettings files, Helm charts, Kustomize overlays and manifests, links GitHub Actions and Octopus Deploy variables, and shows the merged result, what's unused and which secrets are exposed." />
+            <UniformGrid Columns="3" Margin="0,8,0,0">
+              <Border Classes="card" Margin="0,0,8,0">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="accent" FontWeight="Bold" Text="1  Connect" />
+                  <TextBlock Classes="muted" TextWrapping="Wrap" Text="A GitHub token, and an Octopus API key if you deploy with Octopus. Kept in your system's credential store." />
+                </StackPanel>
+              </Border>
+              <Border Classes="card" Margin="4,0">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="accent" FontWeight="Bold" Text="2  Pick a repository" />
+                  <TextBlock Classes="muted" TextWrapping="Wrap" Text="Or open a local folder. The configuration sources are found for you." />
+                </StackPanel>
+              </Border>
+              <Border Classes="card" Margin="8,0,0,0">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="accent" FontWeight="Bold" Text="3  See the full picture" />
+                  <TextBlock Classes="muted" TextWrapping="Wrap" Text="Every value with its history, possibly unused values and a secrets audit." />
+                </StackPanel>
+              </Border>
+            </UniformGrid>
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- Repository analysis -->
+        <DockPanel IsVisible="{Binding HasSubject}" Margin="28,22,28,0">
+
+          <!-- Title and actions -->
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
+            <StackPanel Spacing="2">
+              <SelectableTextBlock Classes="h1" Text="{Binding SubjectTitle}" FontSize="24" FontWeight="Bold" />
+              <TextBlock Classes="muted" Text="{Binding SubjectDetail}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+              <ToggleButton Classes="pill" IsChecked="{Binding RevealSecrets}" ToolTip.Tip="Show secret values instead of ***">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <PathIcon Data="{StaticResource IconEye}" Width="14" Height="14" />
+                  <TextBlock Text="Reveal secrets" />
+                </StackPanel>
+              </ToggleButton>
+              <Button Classes="subtle" Command="{Binding RefreshCommand}" ToolTip.Tip="Download again and trace">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <PathIcon Data="{StaticResource IconRefresh}" Width="14" Height="14" />
+                  <TextBlock Text="Refresh" />
+                </StackPanel>
+              </Button>
+              <Button Classes="accent" IsEnabled="{Binding HasResult}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <PathIcon Data="{StaticResource IconExport}" Width="14" Height="14" />
+                  <TextBlock Text="Export" />
+                </StackPanel>
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="Report as JSON…" Command="{Binding ExportJsonCommand}" />
+                    <MenuItem Header="Report as text…" Command="{Binding ExportTextCommand}" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+            </StackPanel>
+          </Grid>
+
+          <!-- Choices -->
+          <WrapPanel DockPanel.Dock="Top" Margin="0,16,0,0" Orientation="Horizontal">
+            <StackPanel Margin="0,0,12,8" Spacing="4">
+              <TextBlock Classes="caption" Text="APP" />
+              <ComboBox ItemsSource="{Binding Apps}" SelectedItem="{Binding SelectedApp}" MinWidth="200" PlaceholderText="No appsettings.json" />
+            </StackPanel>
+            <StackPanel Margin="0,0,12,8" Spacing="4">
+              <TextBlock Classes="caption" Text="ENVIRONMENT" />
+              <ComboBox ItemsSource="{Binding Environments}" SelectedItem="{Binding SelectedEnvironment}" />
+            </StackPanel>
+            <StackPanel Margin="0,0,12,8" Spacing="4" IsVisible="{Binding HasHelm}">
+              <TextBlock Classes="caption" Text="HELM VALUES" />
+              <ComboBox ItemsSource="{Binding ValuesFiles}" SelectedItem="{Binding SelectedValuesFile}" MinWidth="200" />
+            </StackPanel>
+            <StackPanel Margin="0,0,12,8" Spacing="4" IsVisible="{Binding IsGitHubSubject}">
+              <TextBlock Classes="caption" Text="GITHUB ENVIRONMENT" />
+              <ComboBox ItemsSource="{Binding GitHubEnvironments}" SelectedItem="{Binding SelectedGitHubEnvironment}" />
+            </StackPanel>
+            <StackPanel Margin="0,0,12,8" Spacing="4" IsVisible="{Binding IsOctopusConnected}">
+              <TextBlock Classes="caption" Text="OCTOPUS PROJECT" />
+              <ComboBox ItemsSource="{Binding OctopusProjects}" SelectedItem="{Binding SelectedOctopusProject}" MinWidth="180" />
+            </StackPanel>
+            <StackPanel Margin="0,0,12,8" Spacing="4" IsVisible="{Binding IsOctopusConnected}">
+              <TextBlock Classes="caption" Text="OCTOPUS ENVIRONMENT" />
+              <ComboBox ItemsSource="{Binding OctopusEnvironments}" SelectedItem="{Binding SelectedOctopusEnvironment}" />
+            </StackPanel>
+          </WrapPanel>
+
+          <!-- Stat tiles -->
+          <WrapPanel DockPanel.Dock="Top" Margin="0,8,0,4" IsVisible="{Binding HasResult}">
+            <Border Classes="tile" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding TotalCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="settings" />
+              </StackPanel>
+            </Border>
+            <Border Classes="tile" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding OverriddenCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="overridden" />
+              </StackPanel>
+            </Border>
+            <Border Classes="tile" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding UpstreamCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="from upstream" />
+              </StackPanel>
+            </Border>
+            <Border Classes="tile good" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding ProtectedCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="secrets protected" />
+              </StackPanel>
+            </Border>
+            <Border Classes="tile check" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding CheckCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="secrets to check" />
+              </StackPanel>
+            </Border>
+            <Border Classes="tile bad" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding ExposedCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="secrets exposed" />
+              </StackPanel>
+            </Border>
+            <Border Classes="tile" Margin="0,0,10,10">
+              <StackPanel>
+                <TextBlock Classes="number" Text="{Binding UnusedCount, Converter={x:Static ui:Converters.Number}}" />
+                <TextBlock Classes="muted" FontSize="12" Text="possibly unused" />
+              </StackPanel>
+            </Border>
+          </WrapPanel>
+
+          <!-- Tabs -->
+          <TabControl Classes="main" SelectedIndex="{Binding SelectedTab}">
+
+            <!-- Overview -->
+            <TabItem Header="Overview">
+              <ScrollViewer Margin="0,12,0,0">
+                <StackPanel Spacing="10">
+                  <TextBlock Classes="caption" Text="FOUND IN THE REPOSITORY" />
+                  <ItemsControl ItemsSource="{Binding Discoveries}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <WrapPanel />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate DataType="vm:DiscoveryCard">
+                        <Border Classes="card" Width="300" Margin="0,0,12,12" Padding="14">
+                          <Grid ColumnDefinitions="Auto,*">
+                            <Border Classes="iconbox" ui:DynamicClasses.Classes="{Binding Css}" VerticalAlignment="Top">
+                              <PathIcon Data="{Binding Icon, Converter={x:Static ui:Converters.IconGeometry}}" />
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="12,0,0,0" Spacing="3">
+                              <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                <Border Grid.Column="1" Classes="chip" ui:DynamicClasses.Classes="{Binding Css}" IsVisible="{Binding Used}">
+                                  <TextBlock Text="{Binding State}" />
+                                </Border>
+                              </Grid>
+                              <TextBlock Classes="muted" FontSize="12" Text="{Binding Detail}" TextWrapping="Wrap" />
+                            </StackPanel>
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock Classes="caption" Text="NOTES" Margin="0,8,0,0" IsVisible="{Binding ProblemCount, Converter={x:Static ui:Converters.Positive}}" />
+                  <ItemsControl ItemsSource="{Binding Problems}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate DataType="vm:ProblemRow">
+                        <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,8">
+                          <PathIcon Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top" Data="{Binding Severity, Converter={x:Static ui:Converters.SeverityIcon}}" ui:DynamicClasses.Classes="{Binding Severity}" />
+                          <SelectableTextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <!-- Configuration -->
+            <TabItem>
+              <TabItem.Header>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Configuration" />
+                  <!-- A minimum width: the tab header is measured before the count arrives. -->
+                  <TextBlock MinWidth="30" Text="{Binding TotalCount}" Foreground="{DynamicResource CfMuted}" />
+                </StackPanel>
+              </TabItem.Header>
+              <Grid ColumnDefinitions="*,4,420" RowDefinitions="Auto,*" Margin="0,12,0,0">
+                <!-- Filters -->
+                <WrapPanel Grid.ColumnSpan="3" Margin="0,0,0,10">
+                  <TextBox Classes="search" Width="300" PlaceholderText="Search keys, values and sources" Text="{Binding FilterText}" Margin="0,0,8,0">
+                    <TextBox.InnerLeftContent>
+                      <PathIcon Data="{StaticResource IconSearch}" Width="14" Height="14" Margin="10,0,2,0" Foreground="{DynamicResource CfMuted}" />
+                    </TextBox.InnerLeftContent>
+                  </TextBox>
+                  <ComboBox ItemsSource="{Binding LayerFilters}" SelectedItem="{Binding SelectedLayerFilter}" Margin="0,0,8,0" />
+                  <ToggleButton Classes="pill" Content="Overridden" IsChecked="{Binding OnlyOverridden}" Margin="0,0,8,0" />
+                  <ToggleButton Classes="pill" Content="Secrets" IsChecked="{Binding OnlySecrets}" Margin="0,0,8,0" />
+                  <Button Classes="link" Content="Clear" Command="{Binding ClearFiltersCommand}" VerticalAlignment="Center" Margin="4,0,12,0" />
+                  <TextBlock Classes="muted" Text="{Binding ShownText}" VerticalAlignment="Center" />
+                </WrapPanel>
+
+                <Border Grid.Row="1" Classes="card" Padding="0">
+                  <DataGrid ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}" IsReadOnly="True" CanUserSortColumns="True"
+                            HeadersVisibility="Column" SelectionMode="Single" RowHeight="40">
+                    <DataGrid.Columns>
+                      <DataGridTemplateColumn Header="KEY" Width="1.7*" SortMemberPath="Key">
+                        <DataGridTemplateColumn.CellTemplate>
+                          <DataTemplate DataType="vm:SettingRow">
+                            <TextBlock Classes="mono" Text="{Binding Key}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="12,0" FontWeight="SemiBold" />
+                          </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                      </DataGridTemplateColumn>
+                      <DataGridTemplateColumn Header="VALUE" Width="1.4*" SortMemberPath="Value">
+                        <DataGridTemplateColumn.CellTemplate>
+                          <DataTemplate DataType="vm:SettingRow">
+                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="12,0" VerticalAlignment="Center">
+                              <PathIcon Data="{StaticResource IconLock}" Width="11" Height="11" Foreground="{DynamicResource CfKindSecret}" IsVisible="{Binding IsSensitive}" />
+                              <TextBlock Classes="mono" Text="{Binding Value}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                          </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                      </DataGridTemplateColumn>
+                      <DataGridTemplateColumn Header="COMES FROM" Width="1.5*" SortMemberPath="ComesFrom">
+                        <DataGridTemplateColumn.CellTemplate>
+                          <DataTemplate DataType="vm:SettingRow">
+                            <TextBlock Text="{Binding ComesFrom}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="12,0" ToolTip.Tip="{Binding Story}" />
+                          </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                      </DataGridTemplateColumn>
+                      <DataGridTemplateColumn Header="LAYERS" Width="1.7*" SortMemberPath="LayerCount">
+                        <DataGridTemplateColumn.CellTemplate>
+                          <DataTemplate DataType="vm:SettingRow">
+                            <ItemsControl ItemsSource="{Binding Kinds}" VerticalAlignment="Center" Margin="12,0">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                  <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:KindBadge">
+                                  <Border Classes="chip" ui:DynamicClasses.Classes="{Binding Css}">
+                                    <TextBlock Text="{Binding Label}" />
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                      </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                  </DataGrid>
+                </Border>
+
+                <GridSplitter Grid.Row="1" Grid.Column="1" Background="Transparent" ResizeDirection="Columns" />
+
+                <!-- Details -->
+                <Border Grid.Row="1" Grid.Column="2" Classes="card" Padding="0">
+                  <ScrollViewer>
+                    <StackPanel Margin="18" Spacing="12" IsVisible="{Binding HasSelection}">
+                      <TextBlock Classes="caption" Text="SETTING" />
+                      <SelectableTextBlock Classes="mono" FontSize="16" FontWeight="Bold" Text="{Binding SelectedRow.Key, FallbackValue=''}" TextWrapping="Wrap" />
+                      <Border Classes="code">
+                        <SelectableTextBlock Classes="mono" Text="{Binding SelectedRow.Value, FallbackValue=''}" TextWrapping="Wrap" />
+                      </Border>
+                      <Border Classes="rating" ui:DynamicClasses.Classes="{Binding SelectedSecret.Css, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding SelectedSecret.Reason, FallbackValue=''}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <PathIcon Data="{StaticResource IconShield}" Width="12" Height="12" />
+                          <TextBlock Text="{Binding SelectedSecret.Label, FallbackValue=''}" />
+                        </StackPanel>
+                      </Border>
+                      <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding SelectedSecret.Reason, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                      <TextBlock Classes="caption" Text="STORY" Margin="0,6,0,0" />
+                      <TextBlock TextWrapping="Wrap" Text="{Binding SelectedRow.Story, FallbackValue=''}" LineHeight="20" />
+                      <TextBlock Classes="caption" Text="LAYERS, LOWEST PRIORITY FIRST" Margin="0,6,0,0" />
+                      <TreeView ItemsSource="{Binding Details}" Background="Transparent">
+                        <TreeView.Styles>
+                          <Style Selector="TreeViewItem">
+                            <Setter Property="IsExpanded" Value="True" />
+                            <Setter Property="Padding" Value="0,3" />
+                          </Style>
+                          <Style Selector="TreeViewItem:selected /template/ Border#PART_LayoutRoot">
+                            <Setter Property="Background" Value="Transparent" />
+                          </Style>
+                          <Style Selector="TreeViewItem:pointerover /template/ Border#PART_LayoutRoot">
+                            <Setter Property="Background" Value="Transparent" />
+                          </Style>
+                        </TreeView.Styles>
+                        <TreeView.ItemTemplate>
+                          <TreeDataTemplate DataType="vm:StepNode" ItemsSource="{Binding Children}">
+                            <Border Classes="node" Classes.effective="{Binding IsEffective}" Margin="0,0,4,0">
+                              <StackPanel Spacing="4">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                  <Border Classes="chip" ui:DynamicClasses.Classes="{Binding KindCss}">
+                                    <TextBlock Text="{Binding KindLabel}" />
+                                  </Border>
+                                  <Border Classes="state" Classes.effective="{Binding IsEffective}">
+                                    <TextBlock Text="{Binding State}" />
+                                  </Border>
+                                  <TextBlock Classes="muted" FontSize="11" Text="guessed" IsVisible="{Binding IsInferred}" VerticalAlignment="Center" ToolTip.Tip="Linked by matching names; check it" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding Source}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Classes="muted" FontSize="12" Text="{Binding Location}" IsVisible="{Binding HasLocation}" TextWrapping="Wrap" />
+                                <TextBlock Classes="mono" Text="{Binding Value}" TextWrapping="Wrap" />
+                                <TextBlock Classes="muted" FontSize="12" Text="{Binding Note}" IsVisible="{Binding HasNote}" TextWrapping="Wrap" />
+                              </StackPanel>
+                            </Border>
+                          </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                      </TreeView>
+                    </StackPanel>
+                  </ScrollViewer>
+                </Border>
+              </Grid>
+            </TabItem>
+
+            <!-- Secrets -->
+            <TabItem>
+              <TabItem.Header>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Secrets" />
+                  <!-- A minimum width: the tab header is measured before the count arrives. -->
+                  <TextBlock MinWidth="30" Text="{Binding ExposedCount}" Foreground="{DynamicResource CfBad}" />
+                </StackPanel>
+              </TabItem.Header>
+              <Grid RowDefinitions="Auto,*" Margin="0,12,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="16" Margin="2,0,0,10">
+                  <StackPanel Orientation="Horizontal" Spacing="6"><Ellipse Width="10" Height="10" Fill="{DynamicResource CfGood}" /><TextBlock Classes="muted" Text="In a secret store" /></StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="6"><Ellipse Width="10" Height="10" Fill="{DynamicResource CfAccent}" /><TextBlock Classes="muted" Text="Check: in doubt" /></StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="6"><Ellipse Width="10" Height="10" Fill="{DynamicResource CfBad}" /><TextBlock Classes="muted" Text="Exposed in plain configuration" /></StackPanel>
+                </StackPanel>
+                <Border Grid.Row="1" Classes="card" Padding="6">
+                  <Panel>
+                    <ListBox Classes="plain" ItemsSource="{Binding SecretRows}">
+                      <ListBox.ItemTemplate>
+                        <DataTemplate DataType="vm:SecretRow">
+                          <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                            <Border Classes="stripe" ui:DynamicClasses.Classes="{Binding Css}" />
+                            <Border Grid.Column="1" Classes="rating" Width="112" Margin="12,0" ui:DynamicClasses.Classes="{Binding Css}">
+                              <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="2" Spacing="3">
+                              <TextBlock Classes="mono" FontWeight="SemiBold" Text="{Binding Key}" />
+                              <TextBlock TextWrapping="Wrap" Text="{Binding Reason}" />
+                              <TextBlock Classes="muted" FontSize="12" Text="{Binding Where}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <Button Grid.Column="3" Classes="link" Content="Show" VerticalAlignment="Center" Margin="12,0"
+                                    Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowKeyCommand}" CommandParameter="{Binding Key}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" IsVisible="{Binding !SecretRows.Count}">
+                      <PathIcon Data="{StaticResource IconShield}" Width="32" Height="32" Foreground="{DynamicResource CfGood}" />
+                      <TextBlock Classes="muted" Text="Nothing here looks like a secret." />
+                    </StackPanel>
+                  </Panel>
+                </Border>
+              </Grid>
+            </TabItem>
+
+            <!-- Unused -->
+            <TabItem>
+              <TabItem.Header>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Unused" />
+                  <!-- A minimum width: the tab header is measured before the count arrives. -->
+                  <TextBlock MinWidth="30" Text="{Binding UnusedCount}" Foreground="{DynamicResource CfMuted}" />
+                </StackPanel>
+              </TabItem.Header>
+              <Grid RowDefinitions="Auto,*" Margin="0,12,0,0">
+                <TextBlock Classes="muted" TextWrapping="Wrap" Margin="2,0,0,10"
+                           Text="Values that a later layer always overrides, and GitHub or Octopus variables no setting picks up. Possibly unused in this environment: check other environments before deleting." />
+                <Border Grid.Row="1" Classes="card" Padding="6">
+                  <Panel>
+                    <ListBox Classes="plain" ItemsSource="{Binding Unused}">
+                      <ListBox.ItemTemplate>
+                        <DataTemplate DataType="vm:UnusedRow">
+                          <Grid ColumnDefinitions="120,*,Auto">
+                            <Border Classes="chip" ui:DynamicClasses.Classes="{Binding Css}" HorizontalAlignment="Left">
+                              <TextBlock Text="{Binding Kind}" />
+                            </Border>
+                            <StackPanel Grid.Column="1" Spacing="3">
+                              <TextBlock Classes="mono" FontWeight="SemiBold" Text="{Binding Name}" />
+                              <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap">
+                                <Run Text="{Binding Where}" /><Run Text="  ·  " /><Run Text="{Binding Detail}" />
+                              </TextBlock>
+                            </StackPanel>
+                            <Button Grid.Column="2" Classes="link" Content="Show" VerticalAlignment="Center" Margin="12,0"
+                                    Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowKeyCommand}" CommandParameter="{Binding Name}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" IsVisible="{Binding !Unused.Count}">
+                      <PathIcon Data="{StaticResource IconSleep}" Width="28" Height="28" Foreground="{DynamicResource CfMuted}" />
+                      <TextBlock Classes="muted" Text="Everything here is used." />
+                    </StackPanel>
+                  </Panel>
+                </Border>
+              </Grid>
+            </TabItem>
+          </TabControl>
+        </DockPanel>
+
+        <!-- Busy -->
+        <Border Grid.RowSpan="2" Background="{DynamicResource CfBackground}" Opacity="0.85" IsVisible="{Binding IsBusy}" />
+        <StackPanel Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14" IsVisible="{Binding IsBusy}">
+          <Border Width="64" Height="64" CornerRadius="16" ClipToBounds="True" HorizontalAlignment="Center">
+            <Image Source="avares://ConfigFerret.Desktop/Assets/icon.png" RenderOptions.BitmapInterpolationMode="None" />
+          </Border>
+          <ProgressBar IsIndeterminate="True" Width="220" Foreground="{DynamicResource CfAccent}" />
+          <TextBlock Classes="muted" HorizontalAlignment="Center" Text="{Binding BusyText}" />
+        </StackPanel>
+
+        <!-- Status bar -->
+        <Border Grid.Row="1" BorderBrush="{DynamicResource CfBorder}" BorderThickness="0,1,0,0" Padding="28,8">
+          <TextBlock Classes="muted" FontSize="12" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
+        </Border>
+      </Grid>
+    </Grid>
+
+    <!-- ===================== Connections dialog ===================== -->
+    <Panel IsVisible="{Binding ShowConnections}">
+      <Border Classes="scrim" PointerPressed="OnScrimPressed" />
+      <Border Classes="dialog" Width="560" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Spacing="14">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Spacing="2">
+              <TextBlock Classes="h1" FontSize="20" Text="Connections" />
+              <TextBlock Classes="muted" TextWrapping="Wrap">
+                <Run Text="Tokens and API keys are kept in the " /><Run Text="{Binding CredentialStoreName}" FontWeight="SemiBold" /><Run Text=", never in ConfigFerret's own files." />
+              </TextBlock>
+            </StackPanel>
+            <Button Grid.Column="1" Classes="ghost" Command="{Binding ToggleConnectionsCommand}" VerticalAlignment="Top">
+              <PathIcon Data="{StaticResource IconClose}" Width="14" Height="14" />
+            </Button>
+          </Grid>
+
+          <!-- GitHub -->
+          <Border Classes="card" Padding="14">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <Border Classes="iconbox github" Width="32" Height="32"><PathIcon Data="{StaticResource IconBranch}" Width="16" Height="16" /></Border>
+                <StackPanel Grid.Column="1" Margin="10,0" VerticalAlignment="Center">
+                  <TextBlock FontWeight="SemiBold" Text="GitHub" />
+                  <TextBlock Classes="muted" FontSize="12" Text="{Binding GitHubStatus}" />
+                </StackPanel>
+                <Button Grid.Column="2" Classes="link" Content="Disconnect" Command="{Binding DisconnectGitHubCommand}" IsVisible="{Binding IsGitHubConnected}" />
+              </Grid>
+              <TextBox PlaceholderText="Token (classic: repo; fine-grained: Contents, Variables, Secrets, Environments read)" PasswordChar="•" Text="{Binding GitHubTokenInput}" />
+              <TextBox PlaceholderText="API address, for GitHub Enterprise Server only (https://HOST/api/v3/)" Text="{Binding GitHubApiUrl}" />
+              <Button Classes="accent" HorizontalAlignment="Right" Content="Connect GitHub" Command="{Binding ConnectGitHubCommand}" />
+            </StackPanel>
+          </Border>
+
+          <!-- Octopus -->
+          <Border Classes="card" Padding="14">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <Border Classes="iconbox octopus" Width="32" Height="32"><PathIcon Data="{StaticResource IconRocket}" Width="16" Height="16" /></Border>
+                <StackPanel Grid.Column="1" Margin="10,0" VerticalAlignment="Center">
+                  <TextBlock FontWeight="SemiBold" Text="Octopus Deploy (optional)" />
+                  <TextBlock Classes="muted" FontSize="12" Text="{Binding OctopusStatus}" />
+                </StackPanel>
+                <Button Grid.Column="2" Classes="link" Content="Disconnect" Command="{Binding DisconnectOctopusCommand}" IsVisible="{Binding IsOctopusConnected}" />
+              </Grid>
+              <Grid ColumnDefinitions="2*,8,*">
+                <TextBox PlaceholderText="Server, for example https://contoso.octopus.app" Text="{Binding OctopusServer}" />
+                <TextBox Grid.Column="2" PlaceholderText="Space (default)" Text="{Binding OctopusSpace}" />
+              </Grid>
+              <TextBox PlaceholderText="API key (API-…)" PasswordChar="•" Text="{Binding OctopusKeyInput}" />
+              <Button Classes="accent" HorizontalAlignment="Right" Content="Connect Octopus" Command="{Binding ConnectOctopusCommand}" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="rating bad" IsVisible="{Binding ConnectionError, Converter={x:Static ObjectConverters.IsNotNull}}" CornerRadius="8" Padding="12,8" HorizontalAlignment="Stretch">
+            <TextBlock Text="{Binding ConnectionError}" TextWrapping="Wrap" FontWeight="Normal" />
+          </Border>
+        </StackPanel>
+      </Border>
+    </Panel>
+  </Grid>
+</Window>
