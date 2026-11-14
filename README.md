@@ -319,6 +319,8 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Kubernetes `env` | Literal value, `configMapKeyRef`, `secretKeyRef`, `fieldRef`, with workload and container |
 | Kubernetes `envFrom` | Which ConfigMap or Secret, with prefix, and the precedence between `envFrom` and `env` |
 | Kubernetes volumes | Which ConfigMap or Secret key a mounted file comes from (`configMap`, `secret`, `projected`, `subPath`, `items`) |
+| External Secrets Operator | The `ExternalSecret` behind a Secret key (`spec.data` remote key, property and version, the `SecretStore` or `ClusterSecretStore` and its provider). Its target Secret counts as existing with unknown values when it is not in the manifests; `dataFrom` keys show as a guess |
+| Secrets Store CSI driver | The `SecretProviderClass` object behind a mounted CSI file or a key of a Secret it syncs (`secretObjects`), for the `azure`, `aws`, `gcp` and `vault` providers |
 | Helm | The template line that renders the key, and every values file and `--set` that set or removed the value |
 | Kustomize | Every `configMapGenerator` and `secretGenerator` across bases and overlays (`create`, `merge`, `replace`, `literals`, `envs`, `files`, `namePrefix`, `nameSuffix`, hash suffixes) |
 | GitHub Actions (`ConfigFerret.GitHub`) | The organization, repository or environment variable or secret, from a workflow `env:` line, an explicit link or the same name |
@@ -351,6 +353,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 - GitHub and Octopus links by name or JSON key are guesses, so they are marked `[inferred]`; a workflow `env:` line or
   `Map` makes a certain link. When a name is on both an environment variable and the Kubernetes env entry behind it,
   the GitHub or Octopus layer shows under both. Octopus `#{...}` references are not expanded.
+- External Secrets Operator and Secrets Store CSI values are never in the manifests, so those Secret keys and files
+  show `(unknown)`. The secret store packages link the `ExternalSecretRef` step to the secret in the store.
+  `spec.target.template`, `dataFrom.find`, generators and `ClusterExternalSecret` are not expanded.
 - YAML whose aliases expand to more than 10 million characters is rejected.
 - Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace

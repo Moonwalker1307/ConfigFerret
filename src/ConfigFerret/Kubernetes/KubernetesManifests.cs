@@ -18,6 +18,10 @@ public sealed class KubernetesManifests
     private readonly List<Workload> _workloads = [];
     private readonly Dictionary<string, KubernetesData> _configMaps = new(StringComparer.Ordinal);
     private readonly Dictionary<string, KubernetesData> _secrets = new(StringComparer.Ordinal);
+    private readonly List<ExternalSecret> _externalSecrets = [];
+    private readonly List<SecretStore> _secretStores = [];
+    private readonly Dictionary<string, SecretProviderClass> _secretProviderClasses = new(StringComparer.Ordinal);
+    private Dictionary<string, KubernetesData>? _createdSecrets;
 
     /// <summary>The workloads found, with their pod specs.</summary>
     public IReadOnlyList<Workload> Workloads => _workloads;
@@ -27,6 +31,21 @@ public sealed class KubernetesManifests
 
     /// <summary>The Secrets found, by name. Values are decoded but always treated as sensitive.</summary>
     public IReadOnlyDictionary<string, KubernetesData> Secrets => _secrets;
+
+    /// <summary>
+    /// The External Secrets Operator <c>ExternalSecret</c>s found. The Secret each one writes is treated as existing,
+    /// with its <c>spec.data</c> keys and unknown values, when the Secret itself is not in the manifests.
+    /// </summary>
+    public IReadOnlyList<ExternalSecret> ExternalSecrets => _externalSecrets;
+
+    /// <summary>The External Secrets Operator <c>SecretStore</c>s and <c>ClusterSecretStore</c>s found.</summary>
+    public IReadOnlyList<SecretStore> SecretStores => _secretStores;
+
+    /// <summary>
+    /// The Secrets Store CSI driver <c>SecretProviderClass</c>es found, by name. The Secrets they sync
+    /// (<c>spec.secretObjects</c>) are treated as existing like an ExternalSecret's target.
+    /// </summary>
+    public IReadOnlyDictionary<string, SecretProviderClass> SecretProviderClasses => _secretProviderClasses;
 
     /// <summary>Parses manifests from YAML or JSON text. Multi-document YAML and <c>List</c> kinds are supported.</summary>
     /// <param name="text">The manifest text.</param>
@@ -61,6 +80,16 @@ public sealed class KubernetesManifests
         return result;
     }
 
+    /// <summary>
+    /// Creates the resolver that <see cref="ConfigTracer.WithKubernetes"/> adds, for hosts that pass resolvers around
+    /// on their own, such as an <see cref="Sources.IConfigSource"/> that reads a live cluster. It links environment
+    /// variables and mounted files to the workload, ConfigMaps and Secrets in these manifests, and Secret keys to the
+    /// ExternalSecrets and SecretProviderClasses that fill them.
+    /// </summary>
+    /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
+    /// <param name="container">The container name. Needed only when the workload has more than one.</param>
+    public IOriginResolver CreateResolver(string? workload = null, string? container = null) => new KubernetesResolver(this, workload, container);
+
     /// <summary>Loads manifests from a single file.</summary>
     public static KubernetesManifests LoadFile(string path) => LoadFiles(path);
 
@@ -88,11 +117,45 @@ public sealed class KubernetesManifests
     {
         var kind = obj.Str("kind");
         var name = obj.Get("metadata").Str("name") ?? "(unnamed)";
+        _createdSecrets = null;
+        var apiVersion = obj.Str("apiVersion");
+        if (ExternalSecretsReader.IsExternalSecrets(apiVersion))
+        {
+            switch (kind)
+            {
+                case "ExternalSecret":
+                    _externalSecrets.Add(ExternalSecretsReader.ReadExternalSecret(obj, name, sourceName));
+                    return;
+                case "SecretStore" or "ClusterSecretStore":
+                    _secretStores.RemoveAll(s => s.Kind == kind && s.Name == name);
+                    _secretStores.Add(ExternalSecretsReader.ReadSecretStore(obj, kind, name, sourceName));
+                    return;
+                case "ExternalSecretList" or "SecretStoreList" or "ClusterSecretStoreList":
+                    break;
+                default:
+                    return;
+            }
+        }
+        else if (ExternalSecretsReader.IsSecretsStoreCsi(apiVersion))
+        {
+            if (kind == "SecretProviderClass")
+            {
+                _secretProviderClasses[name] = ExternalSecretsReader.ReadSecretProviderClass(obj, name, sourceName);
+                return;
+            }
+
+            if (kind != "SecretProviderClassList")
+            {
+                return;
+            }
+        }
+
         switch (kind)
         {
             case null:
                 return;
-            case "List" or "PodList" or "ConfigMapList" or "SecretList" or "DeploymentList":
+            case "List" or "PodList" or "ConfigMapList" or "SecretList" or "DeploymentList"
+                or "ExternalSecretList" or "SecretStoreList" or "ClusterSecretStoreList" or "SecretProviderClassList":
                 foreach (var item in obj.Get("items").Items())
                 {
                     AddObject(item, sourceName);
@@ -220,7 +283,11 @@ public sealed class KubernetesManifests
             }
         }
 
-        return new Volume(name, projections);
+        var csi = v.Get("csi");
+        var secretProviderClass = csi.Str("driver") == "secrets-store.csi.k8s.io"
+            ? csi.Get("volumeAttributes").Str("secretProviderClass")
+            : null;
+        return new Volume(name, projections) { SecretProviderClass = secretProviderClass };
     }
 
     private static VolumeProjection ReadProjection(YamlNode node, string? sourceName, bool isSecret)
@@ -230,6 +297,172 @@ public sealed class KubernetesManifests
             .Where(i => i.Key.Length > 0)
             .ToList();
         return new VolumeProjection(sourceName ?? "", isSecret, items);
+    }
+
+    /// <summary>
+    /// The Secret named <paramref name="name"/>: the one in the manifests, or else the one an ExternalSecret or a
+    /// SecretProviderClass creates, with its keys and unknown values.
+    /// </summary>
+    internal bool TryGetSecret(string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out KubernetesData? data)
+    {
+        if (_secrets.TryGetValue(name, out data))
+        {
+            return true;
+        }
+
+        return CreatedSecrets().TryGetValue(name, out data);
+    }
+
+    /// <summary>The ConfigMap or Secret named <paramref name="name"/>, counting Secrets that operators create.</summary>
+    internal bool TryGetData(bool isSecret, string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out KubernetesData? data)
+    {
+        if (isSecret)
+        {
+            return TryGetSecret(name, out data);
+        }
+
+        return _configMaps.TryGetValue(name, out data);
+    }
+
+    /// <summary>The ExternalSecrets and SecretProviderClasses that fill key <paramref name="key"/> of Secret <paramref name="secretName"/>.</summary>
+    internal List<SecretOrigin> SecretOrigins(string secretName, string key)
+    {
+        var origins = new List<SecretOrigin>();
+        foreach (var es in _externalSecrets.Where(e => string.Equals(e.TargetSecret, secretName, StringComparison.Ordinal)))
+        {
+            var template = es.HasTemplate ? "; its target template may change the key or the value" : "";
+            var matched = false;
+            foreach (var item in es.Data.Where(d => string.Equals(d.SecretKey, key, StringComparison.Ordinal)))
+            {
+                matched = true;
+                if (item.RemoteKey is null)
+                {
+                    continue;
+                }
+
+                var store = item.Store ?? es.Store;
+                var reference = new ExternalSecretRef(ProviderOf(store), store?.Name, item.RemoteKey, item.Property, item.Version);
+                origins.Add(new SecretOrigin(
+                    reference,
+                    $"ExternalSecret {es.Name}",
+                    $"remoteRef {Describe(reference)}, {es.SourceName}:{item.Line}",
+                    $"{StoreNote(store, reference.Provider)} writes Secret {secretName} key {key}{template}",
+                    IsInferred: false));
+            }
+
+            if (matched)
+            {
+                continue;
+            }
+
+            foreach (var item in es.DataFrom.Where(d => d.RemoteKey is not null))
+            {
+                var store = item.Store ?? es.Store;
+                var reference = new ExternalSecretRef(ProviderOf(store), store?.Name, item.RemoteKey!, Version: item.Version);
+                origins.Add(new SecretOrigin(
+                    reference,
+                    $"ExternalSecret {es.Name}",
+                    $"dataFrom extract {Describe(reference)}, {es.SourceName}:{item.Line}",
+                    $"{StoreNote(store, reference.Provider)} writes every property of the remote secret into Secret {secretName}, so key {key} probably comes from it{template}",
+                    IsInferred: true));
+            }
+        }
+
+        foreach (var spc in _secretProviderClasses.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
+        {
+            foreach (var synced in spc.SecretObjects.Where(s => string.Equals(s.SecretName, secretName, StringComparison.Ordinal)))
+            {
+                foreach (var (secretKey, objectName) in synced.Keys.Where(k => string.Equals(k.Key, key, StringComparison.Ordinal)))
+                {
+                    if (FindObject(spc, objectName) is { } origin)
+                    {
+                        origins.Add(origin with
+                        {
+                            Note = $"{origin.Note}; synced into Secret {secretName} key {secretKey} while a pod mounts the volume",
+                        });
+                    }
+                }
+            }
+        }
+
+        return origins;
+    }
+
+    /// <summary>The layer for the file <paramref name="fileName"/> that a SecretProviderClass mounts, when it lists that object.</summary>
+    internal static SecretOrigin? FindObject(SecretProviderClass spc, string fileName)
+    {
+        var obj = spc.Objects.FirstOrDefault(o => string.Equals(o.FileName, fileName, StringComparison.Ordinal));
+        if (obj is null)
+        {
+            return null;
+        }
+
+        var reference = new ExternalSecretRef(spc.Provider, spc.Name, obj.RemoteKey, obj.Property, obj.Version);
+        return new SecretOrigin(
+            reference,
+            $"SecretProviderClass {spc.Name}",
+            $"object {Describe(reference)}, {spc.SourceName}:{spc.Line}",
+            spc.Provider is null ? "Secrets Store CSI driver" : $"Secrets Store CSI driver, provider {spc.Provider}",
+            IsInferred: false);
+    }
+
+    private string? ProviderOf(SecretStoreReference? store) =>
+        store is null ? null : _secretStores.FirstOrDefault(s => s.Kind == store.Kind && s.Name == store.Name)?.Provider;
+
+    private static string StoreNote(SecretStoreReference? store, string? provider) =>
+        store is null
+            ? "External Secrets Operator"
+            : $"External Secrets Operator, {store.Kind} {store.Name}" + (provider is null ? " (not loaded)" : $" ({provider})");
+
+    private static string Describe(ExternalSecretRef reference) =>
+        reference.RemoteKey
+        + (reference.Property is null ? "" : $", property {reference.Property}")
+        + (reference.Version is null ? "" : $", version {reference.Version}");
+
+    // The Secrets that ExternalSecrets and SecretProviderClasses create, for names that are not in the manifests.
+    private Dictionary<string, KubernetesData> CreatedSecrets()
+    {
+        if (_createdSecrets is not null)
+        {
+            return _createdSecrets;
+        }
+
+        var created = new Dictionary<string, (Dictionary<string, KubernetesValue> Data, string SourceName, string CreatedBy, bool Unknown)>(StringComparer.Ordinal);
+        void Add(string secretName, string sourceName, string createdBy, bool unknownKeys, IEnumerable<(string Key, int Line)> keys)
+        {
+            if (!created.TryGetValue(secretName, out var entry))
+            {
+                entry = (new Dictionary<string, KubernetesValue>(StringComparer.Ordinal), sourceName, createdBy, false);
+            }
+
+            foreach (var (key, line) in keys)
+            {
+                entry.Data.TryAdd(key, new KubernetesValue(null, line));
+            }
+
+            created[secretName] = entry with { Unknown = entry.Unknown || unknownKeys };
+        }
+
+        foreach (var es in _externalSecrets)
+        {
+            Add(es.TargetSecret, es.SourceName, $"ExternalSecret {es.Name}", es.DataFrom.Count > 0 || es.HasTemplate, es.Data.Select(d => (d.SecretKey, d.Line)));
+        }
+
+        foreach (var spc in _secretProviderClasses.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
+        {
+            foreach (var synced in spc.SecretObjects)
+            {
+                Add(synced.SecretName, spc.SourceName, $"SecretProviderClass {spc.Name}", unknownKeys: false, synced.Keys.Select(k => (k.Key, synced.Line)));
+            }
+        }
+
+        _createdSecrets = created
+            .Where(c => !_secrets.ContainsKey(c.Key))
+            .ToDictionary(
+                c => c.Key,
+                c => new KubernetesData(c.Key, c.Value.Data, c.Value.SourceName) { CreatedBy = c.Value.CreatedBy, HasUnknownKeys = c.Value.Unknown },
+                StringComparer.Ordinal);
+        return _createdSecrets;
     }
 
     private static Dictionary<string, KubernetesValue> ReadData(YamlNode obj, bool decode)
@@ -331,13 +564,30 @@ public sealed record EnvFromEntry(string Name, bool IsSecret, string Prefix);
 public sealed record VolumeMount(string Name, string MountPath, string? SubPath);
 
 /// <summary>A pod volume and the ConfigMaps or Secrets it projects.</summary>
-public sealed record Volume(string Name, IReadOnlyList<VolumeProjection> Projections);
+public sealed record Volume(string Name, IReadOnlyList<VolumeProjection> Projections)
+{
+    /// <summary>
+    /// The <c>SecretProviderClass</c> a Secrets Store CSI volume (<c>csi.driver: secrets-store.csi.k8s.io</c>) mounts,
+    /// or null for other volumes.
+    /// </summary>
+    public string? SecretProviderClass { get; init; }
+}
 
 /// <summary>A ConfigMap or Secret projected into a volume, with optional key-to-path items.</summary>
 public sealed record VolumeProjection(string SourceName, bool IsSecret, IReadOnlyList<KeyValuePair<string, string>> Items);
 
 /// <summary>The data of a ConfigMap or Secret.</summary>
-public sealed record KubernetesData(string Name, IReadOnlyDictionary<string, KubernetesValue> Data, string SourceName);
+public sealed record KubernetesData(string Name, IReadOnlyDictionary<string, KubernetesValue> Data, string SourceName)
+{
+    /// <summary>
+    /// For a Secret that is not in the manifests but that an operator creates, what creates it, for example
+    /// <c>ExternalSecret db</c>. Its values are then unknown. Null for a ConfigMap or Secret that was loaded.
+    /// </summary>
+    public string? CreatedBy { get; init; }
+
+    /// <summary>True when the Secret may hold keys that are not listed, because an ExternalSecret's <c>dataFrom</c> or template adds them.</summary>
+    public bool HasUnknownKeys { get; init; }
+}
 
 /// <summary>A value in a ConfigMap or Secret, with the line it is on when known.</summary>
 public sealed record KubernetesValue(string? Value, int Line);
