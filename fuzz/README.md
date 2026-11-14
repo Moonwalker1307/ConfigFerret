@@ -24,6 +24,11 @@ that touch `src/` or `fuzz/`. Each night starts from the corpus the previous nig
 | `kubernetes-cluster` | `KubernetesClusterReader.LoadAsync` against a scripted API server (first byte picks the workload kind, `IncludeSecrets` and the container; then one response per request: the workload, the operator object lists, the ConfigMaps, the Secrets), then `ConfigTracer.ForContainer` over what it read | anything other than `InvalidOperationException`, a Secret read with `IncludeSecrets` off, the token in a message, an entry whose sensitivity does not match its reference, or a Secret value in the report |
 | `azure-keyvault` | `AzureKeyVaultSecrets.LoadAsync` through the Azure SDK against a scripted server (first byte picks values, disabled secrets, a name filter and the store type; Key Vault's 401 challenge is answered first), then the Key Vault resolver and a traced report | anything other than `RequestFailedException`, a value or disabled secret that was not asked for, a step that is not sensitive, the token or the layer's value in a message or note, or a secret value left unredacted in the report |
 | `azure-appconfig` | `AzureAppConfigurationSettings.LoadAsync` the same way (first byte picks labels, Key Vault references, feature flags, key filter, trimmed prefix, matching and token or connection-string sign-in), then the App Configuration resolver and a trace | anything other than `RequestFailedException`, a Key Vault reference with a value, a feature flag not under `FeatureManagement:`, or the token, access key or layer's value in a message or note |
+| `desktop-tar` | `GitHubAccount.ExtractAsync` (desktop app): first byte 0 means the rest is the gzip, otherwise the rest is gzipped by the target so tar headers get fuzzed | anything the download's call site does not catch, a file outside the target, a link, or more than the size cap |
+| `dotenv` | the desktop app's `DotEnv.Parse` | anything other than `FormatException`, or an empty name |
+| `secret-audit` | `SecretAudit.LooksLikeCredential` and `IsPlaceholder` on each line and on the whole input | any exception, more than two seconds, or a placeholder rated as a credential |
+| `scanner` | `RepositoryScanner.Scan` over a temp folder written from `path` line then content, files split by `%%` | any exception, or a result that is not inside the folder |
+| `workspace` | `WorkspaceStore.Load` on workspace JSON, then save and load again | anything other than the exceptions the app catches (`JsonException`, `IOException`, `UnauthorizedAccessException`, `NotSupportedException`), a null member, or a save that does not load back the same |
 | `unused` | `FindUnused` and `RecordReads` over `appsettings.json %% appsettings.Production.json %% KEY=VALUE lines %% Kubernetes manifests %% keys read` | a never-winning step that wins, a winner that does not win, a read key listed as unread, counts that do not add up, an unredacted sensitive value, or lists out of the report's order |
 
 Seeds are in `corpus/<target>/` and libFuzzer dictionaries in `dictionaries/`.
@@ -36,7 +41,7 @@ Needs Linux, the .NET 10 SDK, and clang with the libFuzzer runtime (`apt-get ins
 fuzz/run.sh kubernetes 300
 ```
 
-The script builds the harness, instruments the ConfigFerret assemblies and `YamlDotNet.dll`, and runs one target for the
+The script builds the harness, instruments the ConfigFerret assemblies (the desktop app included) and `YamlDotNet.dll`, and runs one target for the
 given number of seconds. It grows the corpus in `fuzz/work/<target>/corpus/` and writes crashes to
 `fuzz/findings/<target>/`. Delete `fuzz/out/` to rebuild after changing the code.
 

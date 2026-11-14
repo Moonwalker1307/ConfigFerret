@@ -44,6 +44,11 @@ internal static partial class Targets
         ["kubernetes-cluster"] = new("Kubernetes API responses (split by %%) read as a live workload, then traced", KubernetesClusterApi),
         ["azure-keyvault"] = new("Azure Key Vault responses (split by %%), then the Key Vault resolver and a redacted trace", AzureKeyVault),
         ["azure-appconfig"] = new("Azure App Configuration responses (split by %%), then the App Configuration resolver and a trace", AzureAppConfiguration),
+        ["desktop-tar"] = new("Desktop GitHub tarball extraction (first byte 0 = input is the gzip, else the rest is gzipped here)", DesktopTar),
+        ["dotenv"] = new("Desktop dotenv parser", DotEnvTarget),
+        ["secret-audit"] = new("Desktop SecretAudit.LooksLikeCredential and IsPlaceholder, one value per line", SecretAuditTarget),
+        ["scanner"] = new("Desktop RepositoryScanner over files (split by %%, first line of each is its path)", ScannerTarget),
+        ["workspace"] = new("Desktop WorkspaceStore.Load on workspace JSON", WorkspaceTarget),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

@@ -1,0 +1,23 @@
+src/Api/appsettings.json
+{"A":1}
+%%
+src/Api/appsettings.Production.json
+{}
+%%
+charts/web/Chart.yaml
+name: web
+%%
+charts/web/values.yaml
+replicas: 1
+%%
+k8s/deploy.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a
+%%
+overlays/prod/kustomization.yaml
+resources: []
+%%
+.github/workflows/ci.yml
+on: push

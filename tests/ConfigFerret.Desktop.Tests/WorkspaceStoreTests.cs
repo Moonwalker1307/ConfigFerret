@@ -263,4 +263,64 @@ public class WorkspaceStoreTests : IDisposable
                 break;
         }
     }
+
+    [Theory]
+    [InlineData("""{"repositories":null,"recentFolders":null}""")]
+    [InlineData("""{"gitHubApiUrl":null,"octopusServer":null,"octopusSpace":null}""")]
+    [InlineData("""{"repositories":{"a/b":null,"c/d":{"environment":null}},"recentFolders":[null,"/work/x"]}""")]
+    public void Nulls_in_the_file_never_reach_the_app(string json)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        File.WriteAllText(FilePath, json);
+
+        var workspace = new WorkspaceStore(FilePath).Load();
+
+        Assert.NotNull(workspace.Repositories);
+        Assert.NotNull(workspace.RecentFolders);
+        Assert.NotNull(workspace.GitHubApiUrl);
+        Assert.NotNull(workspace.OctopusServer);
+        Assert.NotNull(workspace.OctopusSpace);
+        Assert.All(workspace.Repositories, r => Assert.NotNull(r.Value?.Environment));
+        Assert.DoesNotContain(null!, workspace.RecentFolders);
+        Assert.DoesNotContain("a/b", workspace.Repositories.Keys);
+    }
+
+    [Fact]
+    public void Every_setting_survives_a_save_and_load()
+    {
+        // Load rebuilds the workspace to drop nulls, so a new setting must be copied there too.
+        var dir = Directory.CreateTempSubdirectory("configferret-ws-");
+        try
+        {
+            var store = new WorkspaceStore(Path.Join(dir.FullName, "workspace.json"));
+            var saved = new Workspace();
+            foreach (var property in typeof(Workspace).GetProperties().Where(p => p.CanWrite && p.SetMethod!.IsPublic))
+            {
+                if (property.PropertyType == typeof(bool))
+                {
+                    property.SetValue(saved, !(bool)property.GetValue(saved)!);
+                }
+                else if (property.PropertyType == typeof(string))
+                {
+                    property.SetValue(saved, "x-" + property.Name);
+                }
+                else if (property.PropertyType == typeof(int))
+                {
+                    property.SetValue(saved, (int)property.GetValue(saved)! + 1);
+                }
+            }
+
+            store.Save(saved);
+            var loaded = store.Load();
+
+            foreach (var property in typeof(Workspace).GetProperties().Where(p => p.PropertyType == typeof(bool) || p.PropertyType == typeof(string) || p.PropertyType == typeof(int)))
+            {
+                Assert.True(Equals(property.GetValue(saved), property.GetValue(loaded)), property.Name);
+            }
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
 }

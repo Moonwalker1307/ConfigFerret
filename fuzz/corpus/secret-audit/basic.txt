@@ -1,0 +1,9 @@
+ghp_abcdefghijklmnopqrstuvwxyz0123456789
+Server=x;Password=abc;
+#{Token}
+${{ secrets.X }}
+__TOKEN__
+AbCdEfGhIjKlMnOpQrStUvWxYz0123456789
+-----BEGIN RSA PRIVATE KEY-----
+eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdef
+***
