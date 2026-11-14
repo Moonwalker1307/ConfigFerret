@@ -102,10 +102,21 @@ internal static class JsonApi
             {
                 if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
                 {
-                    var text = value.GetString() ?? string.Empty;
-                    return text.Length > MaxErrorMessageLength ? text[..MaxErrorMessageLength] + "..." : text;
+                    return Shorten(value.GetString() ?? string.Empty);
                 }
             }
+
+            // HashiCorp Vault returns {"errors": ["permission denied"]}.
+            if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
+            {
+                var texts = errors.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()).Take(3).ToList();
+                return texts.Count == 0 ? null : Shorten(string.Join("; ", texts));
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // A string that is not valid UTF-16 (a lone surrogate escape): report the status alone.
+            return null;
         }
         catch (JsonException)
         {
@@ -115,4 +126,6 @@ internal static class JsonApi
 
         return null;
     }
+
+    private static string Shorten(string text) => text.Length > MaxErrorMessageLength ? text[..MaxErrorMessageLength] + "..." : text;
 }
