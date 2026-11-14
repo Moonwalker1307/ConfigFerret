@@ -186,6 +186,45 @@ public class RepositoryAnalyzerTests : IDisposable
         Assert.Contains(notes, n => n.Contains("2 workloads", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Writes_the_rendered_manifests_into_a_folder_only_the_user_can_open()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var yaml = File.ReadAllText(OrdersRepo.Full("deploy/rendered.yaml"));
+
+        var (profile, _) = Build(new RepositoryAnalyzer((tool, _) => tool == "helm" ? yaml : null), NoConnections);
+
+        var rendered = Assert.Single(Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource)).Paths);
+        var folder = Path.GetDirectoryName(rendered)!;
+        try
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(folder));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Runs_tools_without_a_shell_and_without_network_access()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses /bin/sh as the tool.");
+
+        // The argument reaches the tool as one argument, so $(...) in it is not run by a shell.
+        var output = RepositoryAnalyzer.RunTool("/bin/sh", ["-c", "printf '%s|%s|%s|%s' \"$HTTPS_PROXY\" \"$http_proxy\" \"$GIT_ALLOW_PROTOCOL\" \"$1\"", "sh", "$(echo injected)"]);
+
+        Assert.Equal("http://127.0.0.1:9|http://127.0.0.1:9|file|$(echo injected)", output);
+    }
+
+    [Fact]
+    public void Returns_null_for_a_tool_that_is_not_installed() =>
+        Assert.Null(RepositoryAnalyzer.RunTool("configferret-no-such-tool", ["template"]));
+
     private static AnalysisConnections Connections(string? gitHub) => NoConnections with { GitHubRepository = gitHub };
 
     private static (Profile Profile, List<string> Notes) Build(RepositoryAnalyzer analyzer, AnalysisConnections connections, Action<AnalysisChoices>? adjust = null)

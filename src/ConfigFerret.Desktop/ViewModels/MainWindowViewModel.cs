@@ -41,7 +41,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly TraceRunner _runner;
     private readonly RepositoryAnalyzer _analyzer;
     private readonly Workspace _workspace;
-    private readonly string _downloadRoot;
+    private readonly bool _ownsDownloadRoot;
+    private string? _downloadRoot;
     private List<RepositoryRow> _allRepositories = [];
     private List<SettingRow> _allRows = [];
     private readonly List<UnusedRow> _allUnused = [];
@@ -68,13 +69,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
         _ownsHttp = true;
-        _http = httpHandler is null ? new HttpClient() : new HttpClient(httpHandler, disposeHandler: false);
+        _http = httpHandler is null ? new HttpClient(CreateHttpHandler(), disposeHandler: true) : new HttpClient(httpHandler, disposeHandler: false);
         _http.Timeout = TimeSpan.FromMinutes(5);
         _runner = new TraceRunner(
             credentials,
             httpClientFactory: httpHandler is null ? null : () => new HttpClient(httpHandler, disposeHandler: false));
         _analyzer = analyzer ?? new RepositoryAnalyzer();
-        _downloadRoot = downloadRoot ?? Path.Join(Path.GetTempPath(), "configferret-repos");
+        _downloadRoot = downloadRoot;
+        _ownsDownloadRoot = downloadRoot is null;
 
         try
         {
@@ -689,8 +691,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             var github = CreateGitHub(_credentials.Read(GitHubAccountName) ?? throw new HttpRequestException("Connect GitHub first."));
             var environments = await github.ListEnvironmentsAsync(repository.FullName, cancellationToken).ConfigureAwait(true);
-            Directory.CreateDirectory(_downloadRoot);
-            var folder = await github.DownloadAsync(repository.FullName, repository.Info.DefaultBranch, _downloadRoot, cancellationToken).ConfigureAwait(true);
+            var folder = await github.DownloadAsync(repository.FullName, repository.Info.DefaultBranch, DownloadRoot(), cancellationToken).ConfigureAwait(true);
             DeleteDownload();
             _currentDownload = folder;
             return new Download(folder, environments);
@@ -1240,11 +1241,46 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// The HTTP handler the app talks to GitHub and Octopus with. It does not follow redirects: the Octopus API key is a
+    /// custom header that the runtime would pass on to whatever host a redirect names, and <see cref="GitHubAccount"/>
+    /// follows GitHub's redirects itself without the token.
+    /// </summary>
+    internal static SocketsHttpHandler CreateHttpHandler() => new() { AllowAutoRedirect = false };
+
+    // A folder only this user can open (mkdtemp, mode 0700 on Unix), made on first use. A fixed name under a shared /tmp
+    // could be created first by another user, who could then read the private repositories or swap folders for links.
+    private string DownloadRoot()
+    {
+        if (_downloadRoot is null)
+        {
+            _downloadRoot = Directory.CreateTempSubdirectory("configferret-repos-").FullName;
+        }
+        else
+        {
+            Directory.CreateDirectory(_downloadRoot);
+        }
+
+        return _downloadRoot;
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
         _work?.Cancel();
         DeleteDownload();
+        if (_ownsDownloadRoot && _downloadRoot is not null)
+        {
+            try
+            {
+                Directory.Delete(_downloadRoot, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Left for the system's temp cleanup.
+            }
+        }
+
         if (_ownsHttp)
         {
             _http.Dispose();

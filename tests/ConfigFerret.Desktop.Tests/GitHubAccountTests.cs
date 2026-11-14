@@ -186,6 +186,128 @@ public class GitHubAccountTests
         Assert.True(File.Exists(Path.Join(folder, ".github", "workflows", "deploy.yml")));
     }
 
+    [Fact]
+    public async Task Follows_a_tarball_redirect_to_another_host_without_the_token()
+    {
+        var tarball = FakeGitHub.Tarball(OrdersRepo.Root);
+        var handler = new RedirectingHandler(request => request.RequestUri!.Host switch
+        {
+            "api.github.com" => Redirect("https://codeload.github.com/contoso/orders/legacy.tar.gz/refs/heads/main?token=short-lived"),
+            "codeload.github.com" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(tarball) },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var http = new HttpClient(handler);
+        using var parent = new TempFolder();
+
+        var folder = await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).DownloadAsync("contoso/orders", "main", parent.Path, TestContext.Current.CancellationToken);
+
+        Assert.True(File.Exists(Path.Join(folder, "src", "Orders.Api", "appsettings.json")));
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(Token, handler.Requests[0].Authorization);
+        Assert.Equal("codeload.github.com", handler.Requests[1].Uri.Host);
+        Assert.Null(handler.Requests[1].Authorization);
+    }
+
+    [Fact]
+    public async Task Keeps_the_token_on_a_redirect_within_the_api_host()
+    {
+        var handler = new RedirectingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/user" => Redirect("/users/ferret-fan"),
+            "/users/ferret-fan" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"login":"ferret-fan"}""") },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var http = new HttpClient(handler);
+
+        Assert.Equal("ferret-fan", await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).GetLoginAsync(TestContext.Current.CancellationToken));
+        Assert.All(handler.Requests, r => Assert.Equal(Token, r.Authorization));
+    }
+
+    [Theory]
+    [InlineData("http://codeload.example.test/x.tar.gz")]
+    [InlineData("https://api.github.com:8443/user")]
+    [InlineData("http://api.github.com/user")]
+    public async Task Never_sends_the_token_to_another_origin_or_over_http(string location)
+    {
+        var handler = new RedirectingHandler(request => request.RequestUri!.Host == "api.github.com" && request.RequestUri.Port == 443
+            ? Redirect(location)
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"login":"ferret-fan"}""") });
+        using var http = new HttpClient(handler);
+
+        try
+        {
+            await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).GetLoginAsync(TestContext.Current.CancellationToken);
+        }
+        catch (HttpRequestException ex)
+        {
+            Assert.DoesNotContain(Token, ex.Message, StringComparison.Ordinal);
+        }
+
+        Assert.All(handler.Requests.Skip(1), r => Assert.Null(r.Authorization));
+        Assert.DoesNotContain(handler.Requests, r => r.Uri.Scheme == "http");
+    }
+
+    [Fact]
+    public async Task Gives_up_after_too_many_redirects()
+    {
+        var handler = new RedirectingHandler(_ => Redirect("/user"));
+        using var http = new HttpClient(handler);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).GetLoginAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(6, handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("contoso/..")]
+    [InlineData("../user")]
+    [InlineData("contoso/orders/extra")]
+    [InlineData("contoso")]
+    [InlineData("contoso/or ders")]
+    [InlineData("contoso/..\\..\\evil")]
+    [InlineData("contoso/%2e%2e")]
+    public async Task Refuses_repository_names_that_could_change_the_path(string fullName)
+    {
+        var handler = new FakeHttpHandler();
+        using var parent = new TempFolder();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Account(handler).DownloadAsync(fullName, "main", parent.Path, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => Account(handler).ListEnvironmentsAsync(fullName, TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.Requests);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(parent.Path));
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public async Task Refuses_a_ref_that_is_a_dot_segment(string gitRef)
+    {
+        var handler = new FakeHttpHandler();
+        using var parent = new TempFolder();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Account(handler).DownloadAsync("contoso/orders", gitRef, parent.Path, TestContext.Current.CancellationToken));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Makes_the_download_folder_readable_by_the_user_only()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var http = new HttpClient(new TarballHandler(FakeGitHub.Tarball(OrdersRepo.Root)));
+        using var parent = new TempFolder();
+
+        var folder = await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).DownloadAsync("contoso/orders", "main", parent.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(folder));
+    }
+
+    private static HttpResponseMessage Redirect(string location) =>
+        new(HttpStatusCode.Found) { Headers = { Location = new Uri(location, UriKind.RelativeOrAbsolute) } };
+
     private static string ReposPath(int page) =>
         $"/user/repos?per_page=100&page={page}&sort=pushed&affiliation=owner,collaborator,organization_member";
 
@@ -200,6 +322,18 @@ public class GitHubAccountTests
         }
 
         return builder.Append(']').ToString();
+    }
+
+    /// <summary>Answers with <paramref name="respond"/> and records each request's address and token.</summary>
+    private sealed class RedirectingHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public List<(Uri Uri, string? Authorization)> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add((request.RequestUri!, request.Headers.Authorization?.Parameter));
+            return Task.FromResult(respond(request));
+        }
     }
 
     private sealed class TarballHandler(byte[] tarball) : HttpMessageHandler

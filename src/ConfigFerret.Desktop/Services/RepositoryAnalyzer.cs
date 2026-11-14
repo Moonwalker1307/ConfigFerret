@@ -51,7 +51,7 @@ public sealed record AnalysisConnections(
 /// <summary>
 /// Turns a scanned repository and the user's choices into a <see cref="Profile"/> for <see cref="TraceRunner"/>. When
 /// <c>helm</c> or <c>kubectl</c> is installed it renders the chart or overlay first, so values link all the way to the
-/// app's settings; the rendering runs in the repository folder with no network access needed.
+/// app's settings; the tools run without a shell and without network access (see <see cref="RunTool"/>).
 /// </summary>
 public sealed partial class RepositoryAnalyzer
 {
@@ -314,15 +314,36 @@ public sealed partial class RepositoryAnalyzer
             ?? candidates.FirstOrDefault(c => name(c).Contains(shortName, StringComparison.OrdinalIgnoreCase));
     }
 
+    // Sends HTTP(S) through a proxy that does not exist, and lets git use local repositories only.
+    private static readonly (string Name, string Value)[] OfflineEnvironment =
+    [
+        ("HTTP_PROXY", "http://127.0.0.1:9"),
+        ("HTTPS_PROXY", "http://127.0.0.1:9"),
+        ("ALL_PROXY", "http://127.0.0.1:9"),
+        ("http_proxy", "http://127.0.0.1:9"),
+        ("https_proxy", "http://127.0.0.1:9"),
+        ("all_proxy", "http://127.0.0.1:9"),
+        ("NO_PROXY", string.Empty),
+        ("no_proxy", string.Empty),
+        ("GIT_ALLOW_PROTOCOL", "file"),
+        ("GIT_TERMINAL_PROMPT", "0"),
+    ];
+
     private static string WriteTemp(string name, string text)
     {
-        var folder = Directory.CreateDirectory(Path.Join(Path.GetTempPath(), "configferret-render", Guid.NewGuid().ToString("N"))).FullName;
+        // A new folder only this user can open: rendered manifests can hold secrets from the chart's values.
+        var folder = Directory.CreateTempSubdirectory("configferret-render-").FullName;
         var path = Path.Join(folder, name);
         File.WriteAllText(path, text);
         return path;
     }
 
-    private static string? RunTool(string tool, IReadOnlyList<string> arguments)
+    /// <summary>
+    /// Runs <paramref name="tool"/> with no shell and returns its output, or null when it is missing, fails or takes over
+    /// a minute. The repository decides what the tool reads, so the tool gets no network: a kustomization may name remote
+    /// bases (git or http URLs), which would otherwise be fetched, with the user's git credentials, from any host.
+    /// </summary>
+    internal static string? RunTool(string tool, IReadOnlyList<string> arguments)
     {
         var start = new ProcessStartInfo(tool)
         {
@@ -334,6 +355,11 @@ public sealed partial class RepositoryAnalyzer
         foreach (var argument in arguments)
         {
             start.ArgumentList.Add(argument);
+        }
+
+        foreach (var (name, value) in OfflineEnvironment)
+        {
+            start.Environment[name] = value;
         }
 
         try

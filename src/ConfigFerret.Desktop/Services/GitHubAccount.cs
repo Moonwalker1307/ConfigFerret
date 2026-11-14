@@ -25,13 +25,21 @@ public sealed record RepositoryInfo(string FullName, string Description, string 
 /// <summary>
 /// The GitHub REST API calls the repository overview needs: who is signed in, which repositories they can read, the
 /// repository's deployment environments, and a download of its files. The token is sent only in the Authorization
-/// header and never appears in an exception message.
+/// header, only to the API address's own scheme, host and port, and never appears in an exception message. Redirects
+/// are followed here rather than by the HTTP client, so a redirect to another host (such as the tarball download
+/// server) never carries the token.
 /// </summary>
 public sealed class GitHubAccount
 {
     /// <summary>The largest repository download accepted, unpacked.</summary>
     public const long MaxDownloadBytes = 512L * 1024 * 1024;
 
+    /// <summary>The most entries (files, folders, links) a repository download may hold.</summary>
+    public const int MaxDownloadEntries = 100_000;
+
+    // Room for the tar headers and padding around the file contents: a pax entry takes at most a few blocks.
+    private const long TarOverheadPerEntry = 4096;
+    private const int MaxRedirects = 5;
     private const int MaxRepositories = 2000;
     private readonly HttpClient _http;
     private readonly Uri _apiBase;
@@ -114,7 +122,7 @@ public sealed class GitHubAccount
     {
         try
         {
-            using var document = await GetJsonAsync($"repos/{Escape(fullName)}/environments?per_page=100", cancellationToken).ConfigureAwait(false);
+            using var document = await GetJsonAsync($"repos/{RepositoryPath(fullName)}/environments?per_page=100", cancellationToken).ConfigureAwait(false);
             if (!document.RootElement.TryGetProperty("environments", out var environments) || environments.ValueKind != JsonValueKind.Array)
             {
                 return [];
@@ -136,24 +144,46 @@ public sealed class GitHubAccount
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fullName);
         ArgumentException.ThrowIfNullOrWhiteSpace(gitRef);
-        using var request = Request($"repos/{Escape(fullName)}/tarball/{Uri.EscapeDataString(gitRef)}");
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        var repository = RepositoryPath(fullName);
+        if (gitRef is "." or "..")
+        {
+            throw new ArgumentException($"'{gitRef}' is not a branch, tag or commit.", nameof(gitRef));
+        }
+
+        using var response = await SendAsync($"repos/{repository}/tarball/{Uri.EscapeDataString(gitRef)}", HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, fullName);
-        var target = Directory.CreateDirectory(Path.Join(parentDirectory, $"{fullName.Replace('/', '_')}-{Guid.NewGuid():N}")).FullName;
+        var folder = Path.Join(parentDirectory, $"{repository.Replace('/', '_')}-{Guid.NewGuid():N}");
+
+        // Private repositories: only the signed-in user may read the files, even under a shared temp folder.
+        var target = (OperatingSystem.IsWindows()
+            ? Directory.CreateDirectory(folder)
+            : Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)).FullName;
         await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await ExtractAsync(body, target, cancellationToken).ConfigureAwait(false);
         return target;
     }
 
-    /// <summary>Extracts a GitHub tarball (.tar.gz with one top folder) into <paramref name="target"/>, dropping the top folder.</summary>
-    internal static async Task ExtractAsync(Stream gzip, string target, CancellationToken cancellationToken)
+    /// <summary>
+    /// Extracts a GitHub tarball (.tar.gz with one top folder) into <paramref name="target"/>, dropping the top folder.
+    /// Stops with an error once the unpacked files pass <paramref name="maxBytes"/>, the archive holds more than
+    /// <paramref name="maxEntries"/> entries, or more is unpacked than those could need, skipped entries included.
+    /// </summary>
+    internal static async Task ExtractAsync(Stream gzip, string target, CancellationToken cancellationToken, long maxBytes = MaxDownloadBytes, int maxEntries = MaxDownloadEntries)
     {
         var root = Path.GetFullPath(target) + Path.DirectorySeparatorChar;
+        var tooLarge = $"The repository is larger than {maxBytes / 1024 / 1024} MB unpacked or has more than {maxEntries} files. Clone it and open the folder instead.";
         long written = 0;
+        var entries = 0;
         await using var unzipped = new GZipStream(gzip, CompressionMode.Decompress);
-        await using var reader = new TarReader(unzipped);
+        await using var limited = new ReadLimitStream(unzipped, maxBytes + (maxEntries * TarOverheadPerEntry), tooLarge);
+        await using var reader = new TarReader(limited);
         while (await reader.GetNextEntryAsync(copyData: false, cancellationToken).ConfigureAwait(false) is { } entry)
         {
+            if (++entries > maxEntries)
+            {
+                throw new InvalidOperationException(tooLarge);
+            }
+
             if (entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile) || entry.DataStream is null)
             {
                 continue;
@@ -175,9 +205,9 @@ public sealed class GitHubAccount
             }
 
             written += entry.Length;
-            if (written > MaxDownloadBytes)
+            if (written > maxBytes)
             {
-                throw new InvalidOperationException($"The repository is larger than {MaxDownloadBytes / 1024 / 1024} MB unpacked. Clone it and open the folder instead.");
+                throw new InvalidOperationException(tooLarge);
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -188,22 +218,56 @@ public sealed class GitHubAccount
 
     private async Task<JsonDocument> GetJsonAsync(string path, CancellationToken cancellationToken)
     {
-        using var request = Request(path);
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(path, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, path);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
-    private HttpRequestMessage Request(string path)
+    // Sends a GET and follows up to MaxRedirects redirects itself. The token goes only to the API's own origin, and a
+    // redirect may not leave https (except on loopback, as the API address itself may).
+    private async Task<HttpResponseMessage> SendAsync(string path, HttpCompletionOption completion, CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_apiBase, path));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
-        request.Headers.Accept.ParseAdd("application/vnd.github+json");
-        request.Headers.UserAgent.ParseAdd("ConfigFerret-Desktop");
-        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-        return request;
+        var uri = new Uri(_apiBase, path);
+        for (var redirects = 0; ; redirects++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            if (IsApiOrigin(uri))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
+                request.Headers.Accept.ParseAdd("application/vnd.github+json");
+                request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+            }
+
+            request.Headers.UserAgent.ParseAdd("ConfigFerret-Desktop");
+            var response = await _http.SendAsync(request, completion, cancellationToken).ConfigureAwait(false);
+            if (!IsRedirect(response.StatusCode) || response.Headers.Location is not { } location)
+            {
+                return response;
+            }
+
+            response.Dispose();
+            var next = location.IsAbsoluteUri ? location : new Uri(uri, location);
+            if (redirects >= MaxRedirects)
+            {
+                throw new HttpRequestException($"GitHub redirected more than {MaxRedirects} times.");
+            }
+
+            if (next.Scheme != Uri.UriSchemeHttps && !(next.Scheme == Uri.UriSchemeHttp && next.IsLoopback))
+            {
+                throw new HttpRequestException("GitHub redirected to an address that is not https. The redirect was not followed.");
+            }
+
+            uri = next;
+        }
     }
+
+    private bool IsApiOrigin(Uri uri) =>
+        Uri.Compare(uri, _apiBase, UriComponents.SchemeAndServer, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0;
+
+    private static bool IsRedirect(HttpStatusCode status) =>
+        status is HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther
+            or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect;
 
     private static void EnsureSuccess(HttpResponseMessage response, string what)
     {
@@ -222,10 +286,67 @@ public sealed class GitHubAccount
         throw new HttpRequestException($"Could not read {what} from GitHub: {reason}.", null, response.StatusCode);
     }
 
-    private static string Escape(string fullName) => string.Join('/', fullName.Split('/').Select(Uri.EscapeDataString));
+    // owner/name as GitHub allows them: letters, digits, '-', '_' and '.', and never "." or "..". Anything else could
+    // move the API path (repos/../user) or the download folder, so it is refused rather than escaped.
+    private static string RepositoryPath(string fullName)
+    {
+        var parts = fullName.Split('/');
+        return parts.Length == 2 && parts.All(IsNamePart)
+            ? fullName
+            : throw new ArgumentException($"'{fullName}' is not a repository name of the form owner/name.", nameof(fullName));
+    }
+
+    private static bool IsNamePart(string part) =>
+        part.Length > 0 && part is not ("." or "..") && part.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
     private static string? Text(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+}
+
+/// <summary>Passes reads through until <c>limit</c> bytes were read, then fails, so a decompression bomb stops early.</summary>
+internal sealed class ReadLimitStream(Stream inner, long limit, string message) : Stream
+{
+    private long _read;
+
+    public override bool CanRead => true;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => false;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => _read;
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => Count(inner.Read(buffer, offset, count));
+
+    public override int Read(Span<byte> buffer) => Count(inner.Read(buffer));
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+        Count(await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false));
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    private int Count(int read)
+    {
+        _read += read;
+        return _read > limit ? throw new InvalidOperationException(message) : read;
+    }
 }

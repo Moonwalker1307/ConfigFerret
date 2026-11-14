@@ -47,10 +47,22 @@ public sealed class WorkspaceStore
         var directory = System.IO.Path.GetDirectoryName(Path)!;
         Directory.CreateDirectory(directory);
         var temp = Path + ".tmp";
-        File.WriteAllText(temp, Serialize(workspace));
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
         if (!OperatingSystem.IsWindows())
         {
-            // Paths and repository names are not secret, but they are nobody else's business either.
+            // Paths and repository names are not secret, but they are nobody else's business either. The mode is set
+            // when the file is created, so it is never readable by others, even for a moment.
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        using (var writer = new StreamWriter(temp, new System.Text.UTF8Encoding(false), options))
+        {
+            writer.Write(Serialize(workspace));
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // A .tmp file left by an earlier crash keeps its old mode, so set it again.
             File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 

@@ -126,6 +126,54 @@ public class GitHubAccountExtractTests : IDisposable
         Assert.Equal([".github/workflows/deploy.yml"], scan.Workflows);
     }
 
+    [Fact]
+    public async Task Stops_a_decompression_bomb_even_in_entries_it_skips()
+    {
+        // The big entry is outside the top folder, so it is skipped, but it still has to be unpacked to get past it.
+        var tarball = Tar(t =>
+        {
+            t.File("top/ok.txt", "ok");
+            t.File("bomb.bin", new string('\0', 4 * 1024 * 1024));
+        });
+
+        using var stream = new MemoryStream(tarball);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GitHubAccount.ExtractAsync(stream, _target, TestContext.Current.CancellationToken, maxBytes: 1024 * 1024, maxEntries: 10));
+
+        Assert.Contains("larger than 1 MB", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stops_after_too_many_entries()
+    {
+        var tarball = Tar(t =>
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                t.Directory($"top/d{i}/");
+            }
+        });
+
+        using var stream = new MemoryStream(tarball);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GitHubAccount.ExtractAsync(stream, _target, TestContext.Current.CancellationToken, maxEntries: 10));
+    }
+
+    [Fact]
+    public async Task Stops_when_the_files_are_larger_than_the_limit()
+    {
+        var tarball = Tar(t =>
+        {
+            t.File("top/a.txt", new string('a', 600 * 1024));
+            t.File("top/b.txt", new string('b', 600 * 1024));
+        });
+
+        using var stream = new MemoryStream(tarball);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GitHubAccount.ExtractAsync(stream, _target, TestContext.Current.CancellationToken, maxBytes: 1024 * 1024, maxEntries: 10));
+        Assert.False(File.Exists(Path.Join(_target, "b.txt")));
+    }
+
     private async Task Extract(byte[] tarball)
     {
         using var stream = new MemoryStream(tarball);
