@@ -73,8 +73,9 @@ public sealed class LoadedConfigSource
 /// <param name="Name">The entry's name in the store, for example <c>Db--Password</c> or <c>/orders/prod/Db/Timeout</c>.</param>
 /// <param name="Reference">The reference the resolver puts on steps it creates for this entry, so <see cref="LoadedConfigSource.FindUnused"/> can match them.</param>
 /// <param name="IsSensitive">True when the entry is secret.</param>
-/// <param name="Detail">A short description, for example the scope, the label or the version.</param>
-public sealed record SourceEntry(string Name, SourceRef Reference, bool IsSensitive, string? Detail = null);
+/// <param name="Detail">A short description, for example the content type, the label or the version.</param>
+/// <param name="Location">Where the entry lives, for example the vault, the environment scope or the variable group, so a host can say where an unused entry is.</param>
+public sealed record SourceEntry(string Name, SourceRef Reference, bool IsSensitive, string? Detail = null, string? Location = null);
 
 /// <summary>
 /// Describes a kind of <see cref="IConfigSource"/> and creates one from plain settings, so a host can show a form for it,
@@ -88,6 +89,9 @@ public interface IConfigSourceProvider
     /// <summary>The name shown to people, for example <c>Azure Key Vault</c>.</summary>
     string DisplayName { get; }
 
+    /// <summary>What kind of store this is, so a host can group sources or pick an icon or colour for them.</summary>
+    SourceCategory Category { get; }
+
     /// <summary>The settings a source needs, in the order a form should show them.</summary>
     IReadOnlyList<SourceSetting> Settings { get; }
 
@@ -97,6 +101,28 @@ public interface IConfigSourceProvider
     /// </summary>
     /// <exception cref="ArgumentException">A required setting is missing or a value is not valid.</exception>
     IConfigSource Create(IReadOnlyDictionary<string, string?> values);
+}
+
+/// <summary>What kind of store an <see cref="IConfigSourceProvider"/> reads.</summary>
+public enum SourceCategory
+{
+    /// <summary>A secret store, such as Azure Key Vault, AWS Secrets Manager or HashiCorp Vault.</summary>
+    SecretStore,
+
+    /// <summary>A configuration service, such as Azure App Configuration, AWS Parameter Store or Consul KV.</summary>
+    ConfigurationService,
+
+    /// <summary>CI/CD or deployment tool variables, such as GitHub Actions, GitLab CI, Azure DevOps or Octopus Deploy.</summary>
+    CiCd,
+
+    /// <summary>A GitOps tool or infrastructure as code, such as Argo CD, Flux or Terraform.</summary>
+    GitOps,
+
+    /// <summary>A live cluster, such as Kubernetes.</summary>
+    Cluster,
+
+    /// <summary>Local files, such as dotenv or Docker Compose files.</summary>
+    File,
 }
 
 /// <summary>What kind of value a <see cref="SourceSetting"/> holds, which decides how a form shows it and where it is kept.</summary>
