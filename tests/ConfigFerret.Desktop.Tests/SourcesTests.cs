@@ -206,6 +206,36 @@ public class SourcesTests
     }
 
     [Fact]
+    public void New_sources_start_with_empty_text_everywhere()
+    {
+        var app = new AppSettingsSource();
+        var env = new EnvironmentVariablesSource();
+        var k8s = new KubernetesSource();
+        var helm = new HelmSource();
+        var kustomize = new KustomizeSource();
+        var github = new GitHubSource();
+        var octopus = new OctopusSource();
+
+        Assert.Equal(string.Empty, app.Name);
+        Assert.Equal(string.Empty, app.Folder);
+        Assert.Equal((string.Empty, string.Empty), (env.File, env.Variables));
+        Assert.Equal((string.Empty, string.Empty), (k8s.Workload, k8s.Container));
+        Assert.Equal(string.Empty, helm.ChartFolder);
+        Assert.Equal(string.Empty, kustomize.Folder);
+        Assert.False(kustomize.AllowFilesOutsideFolder);
+        Assert.Equal((string.Empty, string.Empty, string.Empty), (github.Repository, github.Environment, github.ApiUrl));
+        Assert.Equal(string.Empty, github.CredentialVariable);
+        Assert.Equal((string.Empty, string.Empty, string.Empty), (octopus.Server, octopus.Space, octopus.Project));
+        Assert.Equal((string.Empty, string.Empty, string.Empty, string.Empty), (octopus.Environment, octopus.Machine, octopus.Channel, octopus.Step));
+        Assert.Empty(k8s.Paths);
+        Assert.Empty(helm.ValuesFiles);
+        Assert.Empty(helm.SetValues);
+        Assert.Empty(github.Workflows);
+        Assert.Empty(octopus.Roles);
+        Assert.Empty(octopus.TenantTags);
+    }
+
+    [Fact]
     public void A_profile_is_named_and_starts_empty()
     {
         var profile = new Profile();
