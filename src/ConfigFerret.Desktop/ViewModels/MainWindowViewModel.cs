@@ -44,6 +44,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly string _downloadRoot;
     private List<RepositoryRow> _allRepositories = [];
     private List<SettingRow> _allRows = [];
+    private readonly List<UnusedRow> _allUnused = [];
     private RepositoryScan? _scan;
     private string? _currentKey;
     private string? _currentDownload;
@@ -89,6 +90,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         OctopusServer = _workspace.OctopusServer;
         OctopusSpace = _workspace.OctopusSpace;
         IsDarkTheme = _workspace.DarkTheme;
+        IsSidebarOpen = !_workspace.SidebarHidden;
         LayerFilters = [new LayerFilter(null), .. Enum.GetValues<LayerKind>().Select(k => new LayerFilter(k))];
         SelectedLayerFilter = LayerFilters[0];
         IsOctopusConnected = OctopusServer.Length > 0 && HasCredential(OctopusAccountName);
@@ -294,8 +296,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>The secrets audit, red first.</summary>
     public ObservableCollection<SecretRow> SecretRows { get; } = [];
 
-    /// <summary>Values that never win and variables nothing uses.</summary>
+    /// <summary>Dead variables and values that never win, as filtered by <see cref="OnlyDead"/>.</summary>
     public ObservableCollection<UnusedRow> Unused { get; } = [];
+
+    /// <summary>Shows only dead variables in the Unused tab, not values that are overridden.</summary>
+    [ObservableProperty]
+    public partial bool OnlyDead { get; set; }
+
+    /// <summary>Variables nothing reads: settings no code reads, Helm values no template reads, and GitHub or Octopus variables no setting uses.</summary>
+    [ObservableProperty]
+    public partial int DeadCount { get; set; }
+
+    /// <summary>Values that a later layer always overrides.</summary>
+    [ObservableProperty]
+    public partial int NeverWinsCount { get; set; }
+
+    /// <summary>What the dead-variable scan read, such as "Read 12 C# files".</summary>
+    [ObservableProperty]
+    public partial string? DeadScanText { get; set; }
 
     /// <summary>Warnings and source problems from the last trace.</summary>
     public ObservableCollection<ProblemRow> Problems { get; } = [];
@@ -315,6 +333,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool OnlySecrets { get; set; }
 
+    /// <summary>Shows only settings that no code reads.</summary>
+    [ObservableProperty]
+    public partial bool OnlyDeadSettings { get; set; }
+
     /// <summary>Shows only keys whose history includes this kind of layer.</summary>
     [ObservableProperty]
     public partial LayerFilter? SelectedLayerFilter { get; set; }
@@ -330,6 +352,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>The dark theme is on.</summary>
     [ObservableProperty]
     public partial bool IsDarkTheme { get; set; } = true;
+
+    /// <summary>The repository sidebar is shown. Hiding it gives the results the whole window.</summary>
+    [ObservableProperty]
+    public partial bool IsSidebarOpen { get; set; } = true;
 
     /// <summary>How many variables the trace found.</summary>
     [ObservableProperty]
@@ -416,11 +442,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     partial void OnOnlyOverriddenChanged(bool value) => ApplyFilter();
 
+    partial void OnOnlyDeadChanged(bool value) => ApplyUnusedFilter();
+
     partial void OnOnlySecretsChanged(bool value) => ApplyFilter();
+
+    partial void OnOnlyDeadSettingsChanged(bool value) => ApplyFilter();
 
     partial void OnSelectedLayerFilterChanged(LayerFilter? value) => ApplyFilter();
 
     partial void OnRevealSecretsChanged(bool value) => RetraceOnChoice();
+
+    partial void OnIsSidebarOpenChanged(bool value)
+    {
+        if (_workspace.SidebarHidden != !value)
+        {
+            _workspace.SidebarHidden = !value;
+            Save();
+        }
+    }
 
     partial void OnIsDarkThemeChanged(bool value)
     {
@@ -564,6 +603,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ToggleTheme() => IsDarkTheme = !IsDarkTheme;
 
+    /// <summary>Hides or shows the repository sidebar.</summary>
+    [RelayCommand]
+    private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
+
     /// <summary>Clears the search and the filters.</summary>
     [RelayCommand]
     private void ClearFilters()
@@ -571,6 +614,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         FilterText = null;
         OnlyOverridden = false;
         OnlySecrets = false;
+        OnlyDeadSettings = false;
         SelectedLayerFilter = LayerFilters[0];
     }
 
@@ -867,7 +911,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         _lastResult = result;
         var previousKey = SelectedRow?.Key;
-        _allRows = result.Report.Settings.Select(s => new SettingRow(s)).ToList();
+        var dead = result.DeadSettings.ToDictionary(d => d.Key, d => d.Reason, StringComparer.OrdinalIgnoreCase);
+        _allRows = result.Report.Settings.Select(s => new SettingRow(s) { DeadReason = dead.GetValueOrDefault(s.Key) }).ToList();
         TotalCount = _allRows.Count;
         OverriddenCount = _allRows.Count(r => r.IsOverridden);
         UpstreamCount = _allRows.Count(r => r.OriginSource.Length > 0);
@@ -882,10 +927,31 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         CheckCount = result.Secrets.Count(s => s.Rating == SecretRating.Check);
         ExposedCount = result.Secrets.Count(s => s.Rating == SecretRating.Exposed);
 
-        Unused.Clear();
+        _allUnused.Clear();
+        foreach (var setting in result.DeadSettings)
+        {
+            _allUnused.Add(new UnusedRow("bad", "Setting", setting.Key, string.Join(", ", setting.SetBy), setting.Reason, IsDead: true));
+        }
+
+        foreach (var value in result.DeadHelmValues)
+        {
+            _allUnused.Add(new UnusedRow("helm", "Helm value", value.Path, value.File, "No template in the chart reads it", IsDead: true) { CanShow = false });
+        }
+
+        foreach (var variable in result.UnusedVariables)
+        {
+            _allUnused.Add(new UnusedRow(
+                variable.Tool.StartsWith("GitHub", StringComparison.Ordinal) ? "github" : "octopus",
+                variable.Tool,
+                variable.Name,
+                variable.Detail,
+                "No setting in this trace uses it",
+                IsDead: true) { CanShow = false });
+        }
+
         foreach (var value in result.Unused.NeverWinning)
         {
-            Unused.Add(new UnusedRow(
+            _allUnused.Add(new UnusedRow(
                 "dotnet",
                 "Overridden",
                 value.Key,
@@ -893,22 +959,27 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 (value.SameValueAsWinner ? "Same value as " : "Always overridden by ") + value.WonBy.Source));
         }
 
-        foreach (var variable in result.UnusedVariables)
+        DeadCount = _allUnused.Count(u => u.IsDead);
+        NeverWinsCount = _allUnused.Count - DeadCount;
+        UnusedCount = _allUnused.Count;
+        DeadScanText = result.CodeFilesScanned switch
         {
-            Unused.Add(new UnusedRow(
-                variable.Tool.StartsWith("GitHub", StringComparison.Ordinal) ? "github" : "octopus",
-                variable.Tool,
-                variable.Name,
-                variable.Detail,
-                "No setting in this trace uses it"));
-        }
-
-        UnusedCount = Unused.Count;
+            null => "No app code in this trace, so settings were not checked against code.",
+            0 => "No C# code found in the app folder, so settings were not checked against code.",
+            var n => $"Read {n} C# {(n == 1 ? "file" : "files")} for the keys the app reads."
+                + (result.DynamicReads.Count > 0 ? $" {result.DynamicReads.Count} {(result.DynamicReads.Count == 1 ? "read builds its key" : "reads build their key")} at run time, so check before deleting." : string.Empty),
+        };
+        ApplyUnusedFilter();
 
         Problems.Clear();
         foreach (var source in result.Sources.Where(s => s.Problem is not null))
         {
             Problems.Add(new ProblemRow("error", $"{source.Source.Name}: {source.Problem}"));
+        }
+
+        if (result.DynamicReads.Count > 0)
+        {
+            Problems.Add(new ProblemRow("info", $"Code reads configuration with a key built at run time in {string.Join(", ", result.DynamicReads.Take(5))}{(result.DynamicReads.Count > 5 ? $" and {result.DynamicReads.Count - 5} more" : string.Empty)}. A setting marked dead may still be read there."));
         }
 
         foreach (var note in notes.Concat(result.Notes))
@@ -978,12 +1049,23 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _allRows = [];
         Rows.Clear();
         Unused.Clear();
+        _allUnused.Clear();
         Problems.Clear();
         SecretRows.Clear();
-        TotalCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = UnusedCount = ProblemCount = 0;
+        TotalCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = UnusedCount = ProblemCount = DeadCount = NeverWinsCount = 0;
+        DeadScanText = null;
         SelectedRow = null;
         HasResult = false;
         ShownText = null;
+    }
+
+    private void ApplyUnusedFilter()
+    {
+        Unused.Clear();
+        foreach (var row in _allUnused.Where(u => !OnlyDead || u.IsDead))
+        {
+            Unused.Add(row);
+        }
     }
 
     private void ApplyFilter()
@@ -996,6 +1078,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             if (row.Matches(FilterText)
                 && (!OnlyOverridden || row.IsOverridden)
                 && (!OnlySecrets || row.IsSensitive)
+                && (!OnlyDeadSettings || row.IsDead)
                 && (kind is null || row.AllKinds.Contains(kind.Value)))
             {
                 Rows.Add(row);

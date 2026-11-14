@@ -106,13 +106,18 @@ public sealed class SecretRow(SecretFinding finding)
     };
 }
 
-/// <summary>A value that never wins, or a deployment variable nothing uses, for the Unused tab.</summary>
+/// <summary>A dead variable, or a value that never wins, for the Unused tab.</summary>
 /// <param name="Css">The style class for the chip.</param>
-/// <param name="Kind">"Overridden" or the tool name.</param>
+/// <param name="Kind">What it is: "Setting", "Helm value", "Overridden" or the tool name.</param>
 /// <param name="Name">The key or variable name.</param>
 /// <param name="Where">The layer or variable scope.</param>
 /// <param name="Detail">What wins instead, or why it counts as unused.</param>
-public sealed record UnusedRow(string Css, string Kind, string Name, string Where, string Detail);
+/// <param name="IsDead">True for a variable nothing reads: dead, rather than overridden.</param>
+public sealed record UnusedRow(string Css, string Kind, string Name, string Where, string Detail, bool IsDead = false)
+{
+    /// <summary>True when Show can open it in the Configuration tab: a setting, not a Helm value or a deployment variable.</summary>
+    public bool CanShow { get; init; } = true;
+}
 
 /// <summary>A line in the problems list.</summary>
 /// <param name="Severity">"error", "warning" or "info".</param>

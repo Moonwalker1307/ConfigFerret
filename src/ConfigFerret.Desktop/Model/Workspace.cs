@@ -25,6 +25,9 @@ public sealed class Workspace
     /// <summary>The dark theme is on.</summary>
     public bool DarkTheme { get; set; } = true;
 
+    /// <summary>The repository sidebar is hidden.</summary>
+    public bool SidebarHidden { get; set; }
+
     /// <summary>The choices made for each repository (owner/name) or local folder (full path).</summary>
     [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
     public Dictionary<string, Services.AnalysisChoices> Repositories { get; init; } = new(StringComparer.OrdinalIgnoreCase);

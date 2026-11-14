@@ -67,6 +67,20 @@ public sealed class MainWindowTests : IDisposable
         Assert.Contains(viewModel.Unused, u => u.Name == "LEGACY_ENDPOINT");
         Assert.Contains(viewModel.Unused, u => u.Name == "OLD_DEPLOY_KEY");
 
+        // Dead variables: a setting no code reads is flagged in the table and listed first, with Helm values no template reads.
+        Assert.True(viewModel.Rows.Single(r => r.Key == "Payments:ApiKey").IsDead);
+        Assert.False(viewModel.Rows.Single(r => r.Key == "Cache:Ttl").IsDead);
+        Assert.True(viewModel.Unused[0].IsDead);
+        Assert.Contains(viewModel.Unused, u => u.Name == "features.recommendations" && u.IsDead && !u.CanShow);
+        Assert.Contains(viewModel.Unused, u => !u.IsDead);
+        viewModel.OnlyDead = true;
+        Assert.All(viewModel.Unused, u => Assert.True(u.IsDead));
+        Assert.Equal(viewModel.DeadCount, viewModel.Unused.Count);
+        viewModel.OnlyDeadSettings = true;
+        Assert.All(viewModel.Rows, r => Assert.True(r.IsDead));
+        viewModel.OnlyDeadSettings = false;
+        viewModel.OnlyDead = false;
+
         // The token went to GitHub only, and never into the workspace file.
         Assert.All(github.Requests, r => Assert.Equal("api.github.com", r.RequestUri!.Host));
         var saved = File.ReadAllText(Path.Join(_temp.FullName, "workspace.json"));
@@ -87,6 +101,21 @@ public sealed class MainWindowTests : IDisposable
         viewModel.SelectedTab = 1;
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "configuration-light");
+
+        // Ctrl+B hides the sidebar, and the choice is kept for the next start.
+        viewModel.IsDarkTheme = true;
+        window.KeyPressQwerty(Avalonia.Input.PhysicalKey.B, Avalonia.Input.RawInputModifiers.Control);
+        Dispatcher.UIThread.RunJobs();
+        Assert.False(viewModel.IsSidebarOpen);
+        Assert.Contains("\"sidebarHidden\": true", File.ReadAllText(Path.Join(_temp.FullName, "workspace.json")), StringComparison.Ordinal);
+        await Screenshots.SaveAsync(window, "sidebar-hidden");
+        using (var reopened = CreateViewModel(new FakeGitHub(), new InMemoryCredentialStore()))
+        {
+            Assert.False(reopened.IsSidebarOpen);
+        }
+
+        viewModel.ToggleSidebarCommand.Execute(null);
+        Assert.True(viewModel.IsSidebarOpen);
         window.Close();
     }
 
