@@ -29,6 +29,48 @@ public enum LayerKind
 
     /// <summary>An Octopus Deploy project or library variable set variable. Used by the ConfigFerret.Octopus package.</summary>
     OctopusDeploy,
+
+    /// <summary>An Azure Key Vault secret. Used by the ConfigFerret.Azure package.</summary>
+    AzureKeyVault,
+
+    /// <summary>An Azure App Configuration key-value. Used by the ConfigFerret.Azure package.</summary>
+    AzureAppConfiguration,
+
+    /// <summary>An AWS Secrets Manager secret. Used by the ConfigFerret.Aws package.</summary>
+    AwsSecretsManager,
+
+    /// <summary>An AWS Systems Manager Parameter Store parameter. Used by the ConfigFerret.Aws package.</summary>
+    AwsParameterStore,
+
+    /// <summary>A HashiCorp Vault secret. Used by the ConfigFerret.HashiCorp package.</summary>
+    HashiCorpVault,
+
+    /// <summary>A HashiCorp Consul KV entry. Used by the ConfigFerret.HashiCorp package.</summary>
+    Consul,
+
+    /// <summary>A Google Cloud Secret Manager secret. Used by the ConfigFerret.GoogleCloud package.</summary>
+    GcpSecretManager,
+
+    /// <summary>An Azure DevOps (Azure Pipelines) variable group variable. Used by the ConfigFerret.AzureDevOps package.</summary>
+    AzureDevOps,
+
+    /// <summary>A GitLab CI/CD variable (instance, group, project or environment scoped). Used by the ConfigFerret.GitLab package.</summary>
+    GitLabCi,
+
+    /// <summary>An Argo CD Application or Flux HelmRelease/Kustomization that sets Helm values or patches per environment.</summary>
+    GitOps,
+
+    /// <summary>A Terraform output.</summary>
+    Terraform,
+
+    /// <summary>A dotenv (<c>.env</c>) file.</summary>
+    DotEnv,
+
+    /// <summary>A Docker Compose service definition (<c>environment</c>, <c>env_file</c> or interpolation).</summary>
+    DockerCompose,
+
+    /// <summary>Another source, from a third-party <see cref="IOriginResolver"/>.</summary>
+    Other,
 }
 
 /// <summary>A machine-readable pointer to where a step's value came from, used to look further upstream.</summary>
@@ -53,6 +95,21 @@ public sealed record WorkloadEnvRef(string Workload, string Container, string Na
 
 /// <summary>A path in the merged Helm values, for example <c>db.timeout</c>.</summary>
 public sealed record HelmValueRef(string Path) : SourceRef;
+
+/// <summary>
+/// A secret in an external store that an operator copies into a Kubernetes Secret key: an External Secrets Operator
+/// <c>ExternalSecret</c>, or a Secrets Store CSI driver <c>SecretProviderClass</c>. Secret store resolvers (Azure Key
+/// Vault, AWS, Vault, Google Cloud) link it to the secret it names.
+/// </summary>
+/// <param name="Provider">
+/// The store type when known, as External Secrets Operator names it: <c>azurekv</c>, <c>aws</c>, <c>vault</c>,
+/// <c>gcpsm</c> and so on. Null when the SecretStore manifest was not loaded.
+/// </param>
+/// <param name="Store">The SecretStore, ClusterSecretStore or SecretProviderClass name, when known.</param>
+/// <param name="RemoteKey">The secret's name or path in the store, for example <c>db-password</c> or <c>prod/orders/db</c>.</param>
+/// <param name="Property">The property inside a JSON or key-value secret, when the reference picks one.</param>
+/// <param name="Version">The pinned version, when the reference pins one.</param>
+public sealed record ExternalSecretRef(string? Provider, string? Store, string RemoteKey, string? Property = null, string? Version = null) : SourceRef;
 
 /// <summary>
 /// One layer that set a value. Steps in a list are ordered from lowest to highest priority,

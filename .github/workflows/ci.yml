@@ -73,32 +73,38 @@ jobs:
             echo "version=0.1.0-ci.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Every package gets the same version, so ConfigFerret.GitHub and ConfigFerret.Octopus depend on the matching
-      # ConfigFerret, and the ConfigFerret.Tool command bundles the same libraries.
+      # Every package gets the same version, so the extension packages depend on the matching ConfigFerret, and the
+      # ConfigFerret.Tool command bundles the same libraries. Every project under src/ with IsPackable=true is packed
+      # (the desktop app is not), so a new extension package needs no change here.
       - name: Pack
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          for project in ConfigFerret ConfigFerret.GitHub ConfigFerret.Octopus ConfigFerret.Tool; do
-            dotnet pack "src/$project" -c Release -o artifacts -p:Version="$VERSION"
+          for project in src/*/*.csproj; do
+            dotnet pack "$project" -c Release -o artifacts -p:Version="$VERSION"
           done
+          ls artifacts
 
       - name: Check each package holds both target frameworks
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          for id in ConfigFerret ConfigFerret.GitHub ConfigFerret.Octopus; do
+          ids=$(cd artifacts && ls *.nupkg | sed "s/\.$VERSION\.nupkg\$//" | grep -vx 'ConfigFerret.Tool')
+          echo "$ids" | grep -qx ConfigFerret
+          echo "$ids" | grep -qx ConfigFerret.GitHub
+          echo "$ids" | grep -qx ConfigFerret.Octopus
+          for id in $ids; do
             pkg="artifacts/$id.$VERSION.nupkg"
             unzip -l "$pkg" > contents.txt
             cat contents.txt
             grep -q "lib/net10.0/$id.dll" contents.txt
             grep -q "lib/net11.0/$id.dll" contents.txt
-          done
-          # The extension packages must depend on the core package of the same version.
-          for id in ConfigFerret.GitHub ConfigFerret.Octopus; do
-            unzip -p "artifacts/$id.$VERSION.nupkg" "$id.nuspec" | grep -q "id=\"ConfigFerret\" version=\"$VERSION\""
+            # The extension packages must depend on the core package of the same version.
+            if [[ "$id" != ConfigFerret ]]; then
+              unzip -p "$pkg" "$id.nuspec" | grep -q "id=\"ConfigFerret\" version=\"$VERSION\""
+            fi
           done
           # The tool package carries the command and the libraries it traces with, for both target frameworks.
           pkg="artifacts/ConfigFerret.Tool.$VERSION.nupkg"
