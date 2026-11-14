@@ -41,6 +41,7 @@ internal static partial class Targets
         ["octopus"] = new("Octopus Deploy API responses (split by %%), then the Octopus resolver", OctopusApi),
         ["vault"] = new("HashiCorp Vault KV API responses (split by %%), then the Vault resolver", Vault),
         ["consul"] = new("Consul KV API response, then the Consul resolver", Consul),
+        ["kubernetes-cluster"] = new("Kubernetes API responses (split by %%) read as a live workload, then traced", KubernetesClusterApi),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

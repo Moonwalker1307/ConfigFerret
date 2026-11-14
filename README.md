@@ -33,7 +33,7 @@ dotnet package add ConfigFerret
 
 Targets `net10.0` and `net11.0`.
 
-Optional packages read variables and secrets from deployment tools and stores over their REST APIs. They are separate so the core
+Optional packages read variables and secrets from deployment tools, stores and live clusters over their APIs. They are separate so the core
 package stays offline and never handles credentials unless you add one:
 
 | Package | Adds |
@@ -41,6 +41,7 @@ package stays offline and never handles credentials unless you add one:
 | `ConfigFerret.GitHub` | GitHub Actions organization, repository and environment variables, and secret names ([readme](src/ConfigFerret.GitHub/README.md)) |
 | `ConfigFerret.Octopus` | Octopus Deploy project and library variable set variables, matched by scope, read with an API key ([readme](src/ConfigFerret.Octopus/README.md)) |
 | `ConfigFerret.HashiCorp` | HashiCorp Vault KV secrets (names and metadata, values only when asked) and Consul KV keys, read with a token ([readme](src/ConfigFerret.HashiCorp/README.md)) |
+| `ConfigFerret.KubernetesCluster` | A workload, its ConfigMaps, opt-in Secrets, ExternalSecrets and SecretProviderClasses, read from a live cluster through a kubeconfig or the pod's service account ([readme](src/ConfigFerret.KubernetesCluster/README.md)) |
 
 To trace from the command line without writing code, install the `configferret` command instead:
 
@@ -187,6 +188,23 @@ every Vault step is sensitive. Consul keys under the prefix map to configuration
 Winton.Extensions.Configuration.Consul maps them (`config/orders/Db/Timeout` sets `Db:Timeout`). Both register with
 `AddConfigFerretVault` and `AddConfigFerretConsul`, like the packages above.
 
+### With a live Kubernetes cluster
+
+```csharp
+using ConfigFerret.KubernetesCluster;  // dotnet package add ConfigFerret.KubernetesCluster
+
+// Uses KUBECONFIG or ~/.kube/config, with its token, client certificate or exec plugin.
+var cluster = await KubernetesClusterReader.LoadAsync(new KubernetesClusterOptions
+{
+    Context = "prod", Namespace = "orders", Workload = "deployment/orders-api",
+});
+var report = ConfigTracer.For(builder.Configuration).WithKubernetesCluster(cluster).Trace();
+```
+
+Secrets are read only with `IncludeSecrets = true`; otherwise a `secretKeyRef` shows as a secret with an unknown
+value. Register it from configuration with `AddConfigFerretKubernetesCluster(section)` and
+`await tracer.WithKubernetesClusterAsync(app.Services)`.
+
 ### Inside a running pod
 
 ```csharp
@@ -327,6 +345,7 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Octopus Deploy (`ConfigFerret.Octopus`) | The project or library variable set variable whose scope fits the deployment, ordered by scope specificity |
 | HashiCorp Vault (`ConfigFerret.HashiCorp`) | The KV secret (and key, when values are read) behind an External Secrets or CSI reference, an explicit link or the same name, with version and update time |
 | Consul KV (`ConfigFerret.HashiCorp`) | The key under the prefix that sets the configuration key, including keys inside expanded JSON values |
+| Live cluster (`ConfigFerret.KubernetesCluster`) | The same Kubernetes layers, read from the API server for one workload instead of from manifest files |
 
 Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and `List` documents.
 
@@ -370,6 +389,7 @@ dotnet pack src/ConfigFerret -c Release
 dotnet pack src/ConfigFerret.GitHub -c Release
 dotnet pack src/ConfigFerret.Octopus -c Release
 dotnet pack src/ConfigFerret.HashiCorp -c Release
+dotnet pack src/ConfigFerret.KubernetesCluster -c Release
 dotnet pack src/ConfigFerret.Tool -c Release
 ```
 
