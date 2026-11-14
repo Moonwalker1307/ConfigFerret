@@ -90,7 +90,7 @@ public sealed class TraceRunner
 
     /// <summary>Creates a runner.</summary>
     /// <param name="credentials">Where stored connection credentials are read from.</param>
-    /// <param name="getEnvironmentVariable">Reads this process's environment variables, for credentials kept there. Defaults to <see cref="Environment.GetEnvironmentVariable(string)"/>.</param>
+    /// <param name="getEnvironmentVariable">Reads this process's environment variables, for credentials kept there and for the user secrets folder. Defaults to <see cref="Environment.GetEnvironmentVariable(string)"/>.</param>
     /// <param name="httpClientFactory">Creates the HTTP client for GitHub and Octopus. Null lets each library create its own.</param>
     public TraceRunner(ICredentialStore credentials, Func<string, string?>? getEnvironmentVariable = null, Func<HttpClient>? httpClientFactory = null)
     {
@@ -313,7 +313,7 @@ public sealed class TraceRunner
         }
     }
 
-    private static ConfigTracer BuildAppTracer(
+    private ConfigTracer BuildAppTracer(
         List<SourceSettings> sources,
         KubernetesManifests? manifests,
         KubernetesSource? kubernetes,
@@ -407,7 +407,7 @@ public sealed class TraceRunner
         return tracer;
     }
 
-    private static void AddAppSettings(ConfigurationBuilder builder, AppSettingsSource app)
+    private void AddAppSettings(ConfigurationBuilder builder, AppSettingsSource app)
     {
         if (string.IsNullOrWhiteSpace(app.Folder) || !Directory.Exists(app.Folder))
         {
@@ -440,7 +440,7 @@ public sealed class TraceRunner
         }
 
         if (app.UseUserSecrets && string.Equals(environmentName, "Development", StringComparison.OrdinalIgnoreCase)
-            && UserSecrets.FindFile(directory) is { } secrets && File.Exists(secrets))
+            && UserSecrets.FindFile(directory, _getEnvironmentVariable) is { } secrets && File.Exists(secrets))
         {
             builder.AddJsonFile(secrets, optional: false);
         }
@@ -580,7 +580,7 @@ public sealed class TraceRunner
 
     private static bool IsInputError(Exception ex, CancellationToken cancellationToken) =>
         ex is IOException or UnauthorizedAccessException or FormatException or InvalidOperationException or ArgumentException
-            or HttpRequestException or JsonException or XmlException or TraceSetupException or CredentialStoreException
+            or InvalidDataException or HttpRequestException or JsonException or XmlException or TraceSetupException or CredentialStoreException
             or YamlDotNet.Core.YamlException
         || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested);
 }
@@ -625,7 +625,7 @@ internal static class DotEnv
 internal static class UserSecrets
 {
     /// <summary>The secrets.json for the UserSecretsId in the one project file in <paramref name="directory"/>, or null.</summary>
-    public static string? FindFile(string directory)
+    public static string? FindFile(string directory, Func<string, string?> getEnvironmentVariable)
     {
         var projects = Directory.GetFiles(directory, "*.csproj");
         if (projects.Length != 1)
@@ -649,13 +649,13 @@ internal static class UserSecrets
             return null;
         }
 
-        var appData = Environment.GetEnvironmentVariable("APPDATA");
+        var appData = getEnvironmentVariable("APPDATA");
         if (OperatingSystem.IsWindows() && appData is not null)
         {
             return Path.Join(appData, "Microsoft", "UserSecrets", id, "secrets.json");
         }
 
-        var home = Environment.GetEnvironmentVariable("HOME");
+        var home = getEnvironmentVariable("HOME");
         return home is null ? null : Path.Join(home, ".microsoft", "usersecrets", id, "secrets.json");
     }
 }
