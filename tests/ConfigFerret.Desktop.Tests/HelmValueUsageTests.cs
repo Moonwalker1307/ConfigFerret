@@ -177,4 +177,13 @@ public class HelmValueUsageTests
 
         Assert.ThrowsAny<YamlDotNet.Core.YamlException>(() => HelmValueUsage.Leaves(values).ToList());
     }
+
+    [Theory]
+    [InlineData("a: &x\n  b: *x\n")]
+    [InlineData("a: &x\n  - *x\n")]
+    public void Recursive_anchors_in_values_are_a_YamlException_not_a_stack_overflow(string values)
+    {
+        // Found by fuzzing: YamlDotNet hashes a mapping that holds itself until the stack overflows.
+        Assert.ThrowsAny<YamlDotNet.Core.YamlException>(() => HelmValueUsage.Leaves(values).ToList());
+    }
 }
