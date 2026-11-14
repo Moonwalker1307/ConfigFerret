@@ -87,7 +87,8 @@ public sealed class AwsSecrets
     }
 
     /// <summary>Reads the secrets with the AWS SDK, signed in with the default credential chain or the options' credentials.</summary>
-    /// <exception cref="AmazonClientException">AWS refused the request or could not be reached.</exception>
+    /// <exception cref="AmazonServiceException">AWS refused the request.</exception>
+    /// <exception cref="AmazonClientException">AWS could not be reached, or no region or credentials were found.</exception>
     public static async Task<AwsSecrets> LoadAsync(AwsSecretsManagerOptions options, CancellationToken cancellationToken = default)
     {
         using var client = AwsClients.CreateSecretsManager(options);
@@ -95,10 +96,11 @@ public sealed class AwsSecrets
     }
 
     /// <summary>
-    /// Reads the secrets with your own client, for example one with a custom configuration. Only <see cref="AwsSecretsManagerOptions.NamePrefix"/>
+    /// Reads the secrets with your own client, for example one with a custom configuration. ConfigFerret checks the responses of the clients it creates before the SDK reads them; your client's responses are not checked. Only <see cref="AwsSecretsManagerOptions.NamePrefix"/>
     /// and <see cref="AwsSecretsManagerOptions.IncludeValues"/> are used; the client decides the region and credentials.
     /// </summary>
-    /// <exception cref="AmazonClientException">AWS refused the request or could not be reached.</exception>
+    /// <exception cref="AmazonServiceException">AWS refused the request.</exception>
+    /// <exception cref="AmazonClientException">AWS could not be reached, or no region or credentials were found.</exception>
     public static async Task<AwsSecrets> LoadAsync(AwsSecretsManagerOptions options, IAmazonSecretsManager client, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);

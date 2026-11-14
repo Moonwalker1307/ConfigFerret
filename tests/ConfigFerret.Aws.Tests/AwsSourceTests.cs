@@ -143,7 +143,7 @@ public class AwsSourceTests
             .On("ListSecrets", """{"SecretList":[{"Name":"prod/orders/db","ARN":"arn:aws:secretsmanager:eu-west-1:1:secret:prod/orders/db-AbCdEf"},{"Name":"prod/orders/Unused","Description":"old"}]}""")
             .On("BatchGetSecretValue", """{"SecretValues":[{"Name":"prod/orders/db","SecretString":"{\"password\":\"p\",\"user\":\"u\"}"},{"Name":"prod/orders/Unused","SecretString":"x"}]}""");
         var source = (AwsSecretsManagerSource)new AwsSecretsManagerProvider().Create(With(("NamePrefix", "prod/orders/"), ("IncludeValues", "true")));
-        source.ConfigureClient = aws.Configure;
+        aws.Attach(source);
         var configuration = new ConfigurationBuilder().Add(new FakeSecretsManagerSource(new() { ["Db:Password"] = "p" })).Build();
         var tracer = ConfigTracer.For(configuration);
 
@@ -170,7 +170,7 @@ public class AwsSourceTests
             {"Parameters":[{"Name":"/orders/prod/Db/Timeout","Type":"String","Value":"30"},{"Name":"/orders/prod/Db/Password","Type":"SecureString","Value":"cipher"}]}
             """);
         var source = (AwsParameterStoreSource)new AwsParameterStoreProvider().Create(With(("Path", "/orders/prod/"), ("ServiceUrl", "http://127.0.0.1:4566/")));
-        source.ConfigureClient = aws.Configure;
+        aws.Attach(source);
         var configuration = new ConfigurationBuilder().Add(new FakeSystemsManagerSource(new() { ["Db:Timeout"] = "30" })).Build();
         var tracer = ConfigTracer.For(configuration);
 
@@ -214,7 +214,7 @@ public class AwsSourceTests
         Assert.Equal("us-east-1", defaultRegion.Config.AuthenticationRegion);
 
         var configured = false;
-        using var custom = AwsClients.CreateSecretsManager(new AwsSecretsManagerOptions { Region = "eu-west-1" }, _ => configured = true);
+        using var custom = AwsClients.CreateSecretsManager(new AwsSecretsManagerOptions { Region = "eu-west-1" }, configure: _ => configured = true);
         Assert.True(configured);
     }
 

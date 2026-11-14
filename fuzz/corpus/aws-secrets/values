@@ -1,0 +1,5 @@
+{"SecretList":[{"Name":"prod/orders/db","ARN":"arn:aws:secretsmanager:eu-west-1:123456789012:secret:prod/orders/db-AbCdEf","Description":"db","LastChangedDate":1.523477145713E9,"Tags":[{"Key":"team","Value":"orders"}]},{"Name":"prod/orders/Api__Key"},{"Name":"DB_PASSWORD"}],"NextToken":"t1"}
+%%
+{"SecretList":[{"Name":"prod/orders/Cert"}]}
+%%
+{"SecretValues":[{"Name":"prod/orders/db","ARN":"arn:aws:secretsmanager:eu-west-1:123456789012:secret:prod/orders/db-AbCdEf","SecretString":"{\"password\":\"p@ss\",\"db\":{\"host\":\"h\",\"ports\":[1,2]}}"},{"Name":"prod/orders/Api__Key","SecretString":"k"},{"Name":"prod/orders/Cert","SecretBinary":"AAEC"}],"Errors":[{"SecretId":"DB_PASSWORD","ErrorCode":"DecryptionFailure","Message":"m"}]}

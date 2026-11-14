@@ -179,8 +179,8 @@ public class AwsServiceCollectionTests
             .On("ListSecrets", """{"SecretList":[{"Name":"prod/orders/db"}]}""")
             .On("BatchGetSecretValue", """{"SecretValues":[{"Name":"prod/orders/db","SecretString":"{\"password\":\"p\"}"}]}""")
             .On("GetParametersByPath", """{"Parameters":[{"Name":"/orders/prod/Db/Timeout","Type":"String","Value":"30"}]}""");
-        provider.GetRequiredService<AwsSecretsManagerSource>().ConfigureClient = aws.Configure;
-        provider.GetRequiredService<AwsParameterStoreSource>().ConfigureClient = aws.Configure;
+        aws.Attach(provider.GetRequiredService<AwsSecretsManagerSource>());
+        aws.Attach(provider.GetRequiredService<AwsParameterStoreSource>());
         const string prefix = "CFAWSDI_";
 
         // Layers are named by the whole variable name, prefix included.

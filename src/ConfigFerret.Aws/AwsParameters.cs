@@ -87,7 +87,8 @@ public sealed class AwsParameters
     }
 
     /// <summary>Reads the parameters with the AWS SDK, signed in with the default credential chain or the options' credentials.</summary>
-    /// <exception cref="AmazonClientException">AWS refused the request or could not be reached.</exception>
+    /// <exception cref="AmazonServiceException">AWS refused the request.</exception>
+    /// <exception cref="AmazonClientException">AWS could not be reached, or no region or credentials were found.</exception>
     public static async Task<AwsParameters> LoadAsync(AwsParameterStoreOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -97,11 +98,12 @@ public sealed class AwsParameters
     }
 
     /// <summary>
-    /// Reads the parameters with your own client. Only <see cref="AwsParameterStoreOptions.Path"/>,
+    /// Reads the parameters with your own client. ConfigFerret checks the responses of the clients it creates before the SDK reads them; your client's responses are not checked. Only <see cref="AwsParameterStoreOptions.Path"/>,
     /// <see cref="AwsParameterStoreOptions.Recursive"/> and <see cref="AwsParameterStoreOptions.IncludeValues"/> are used;
     /// the client decides the region and credentials.
     /// </summary>
-    /// <exception cref="AmazonClientException">AWS refused the request or could not be reached.</exception>
+    /// <exception cref="AmazonServiceException">AWS refused the request.</exception>
+    /// <exception cref="AmazonClientException">AWS could not be reached, or no region or credentials were found.</exception>
     public static async Task<AwsParameters> LoadAsync(AwsParameterStoreOptions options, IAmazonSimpleSystemsManagement client, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);

@@ -9,17 +9,17 @@ namespace ConfigFerret.Aws;
 /// <summary>Builds AWS SDK clients from <see cref="AwsConnectionOptions"/>.</summary>
 internal static class AwsClients
 {
-    public static AmazonSecretsManagerClient CreateSecretsManager(AwsConnectionOptions options, Action<ClientConfig>? configure = null)
+    public static AmazonSecretsManagerClient CreateSecretsManager(AwsConnectionOptions options, HttpMessageHandler? handler = null, Action<ClientConfig>? configure = null)
     {
         var config = new AmazonSecretsManagerConfig();
-        var credentials = Configure(config, options, configure);
+        var credentials = Configure(config, options, handler, configure);
         return credentials is null ? new AmazonSecretsManagerClient(config) : new AmazonSecretsManagerClient(credentials, config);
     }
 
-    public static AmazonSimpleSystemsManagementClient CreateParameterStore(AwsConnectionOptions options, Action<ClientConfig>? configure = null)
+    public static AmazonSimpleSystemsManagementClient CreateParameterStore(AwsConnectionOptions options, HttpMessageHandler? handler = null, Action<ClientConfig>? configure = null)
     {
         var config = new AmazonSimpleSystemsManagementConfig();
-        var credentials = Configure(config, options, configure);
+        var credentials = Configure(config, options, handler, configure);
         return credentials is null ? new AmazonSimpleSystemsManagementClient(config) : new AmazonSimpleSystemsManagementClient(credentials, config);
     }
 
@@ -60,7 +60,11 @@ internal static class AwsClients
 
     private static string Key(string sectionPath, string name) => string.IsNullOrEmpty(sectionPath) ? name : $"{sectionPath}:{name}";
 
-    private static AWSCredentials? Configure(ClientConfig config, AwsConnectionOptions options, Action<ClientConfig>? configure)
+    /// <param name="config">The client configuration to fill.</param>
+    /// <param name="options">The connection options.</param>
+    /// <param name="handler">Sends the requests instead of a new <see cref="HttpClientHandler"/>, for tests.</param>
+    /// <param name="configure">Changes the configuration last, for tests.</param>
+    private static AWSCredentials? Configure(ClientConfig config, AwsConnectionOptions options, HttpMessageHandler? handler, Action<ClientConfig>? configure)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (CheckAccessKeys(options, string.Empty) is { } keys)
@@ -73,8 +77,9 @@ internal static class AwsClients
             throw new ArgumentException(url, nameof(options));
         }
 
-        // Signed requests must never be replayed to another host.
+        // Signed requests must never be replayed to another host, and responses are checked before the SDK reads them.
         config.AllowAutoRedirect = false;
+        config.HttpClientFactory = new GuardedHttpClientFactory(handler);
         var region = Blank(options.Region);
         var credentials = options.Credentials;
         if (credentials is null && Blank(options.AccessKeyId) is { } id)

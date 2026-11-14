@@ -27,14 +27,18 @@ public sealed class AwsSecretsManagerSource : IConfigSource
         $"AWS Secrets Manager {(string.IsNullOrWhiteSpace(Options.Region) ? "(default region)" : Options.Region.Trim())}"
         + (string.IsNullOrEmpty(Options.NamePrefix) ? string.Empty : $" {Options.NamePrefix}*");
 
-    /// <summary>Lets tests answer requests without a network, for example by setting <see cref="ClientConfig.HttpClientFactory"/>.</summary>
+    /// <summary>Lets tests answer requests without a network.</summary>
+    internal HttpMessageHandler? HttpHandler { get; set; }
+
+    /// <summary>Lets tests change the client configuration, for example to turn off retries.</summary>
     internal Action<ClientConfig>? ConfigureClient { get; set; }
 
     /// <summary>Reads the secrets. Every call reads them again.</summary>
-    /// <exception cref="AmazonClientException">AWS refused the request or could not be reached.</exception>
+    /// <exception cref="AmazonServiceException">AWS refused the request.</exception>
+    /// <exception cref="AmazonClientException">AWS could not be reached, or no region or credentials were found.</exception>
     public async Task<AwsSecrets> LoadAsync(CancellationToken cancellationToken = default)
     {
-        using var client = AwsClients.CreateSecretsManager(Options, ConfigureClient);
+        using var client = AwsClients.CreateSecretsManager(Options, HttpHandler, ConfigureClient);
         return await AwsSecrets.LoadAsync(Options, client, cancellationToken).ConfigureAwait(false);
     }
 
@@ -65,15 +69,19 @@ public sealed class AwsParameterStoreSource : IConfigSource
     public string DisplayName =>
         $"AWS Parameter Store {(string.IsNullOrWhiteSpace(Options.Region) ? "(default region)" : Options.Region.Trim())} {Options.Path}".TrimEnd();
 
-    /// <summary>Lets tests answer requests without a network, for example by setting <see cref="ClientConfig.HttpClientFactory"/>.</summary>
+    /// <summary>Lets tests answer requests without a network.</summary>
+    internal HttpMessageHandler? HttpHandler { get; set; }
+
+    /// <summary>Lets tests change the client configuration, for example to turn off retries.</summary>
     internal Action<ClientConfig>? ConfigureClient { get; set; }
 
     /// <summary>Reads the parameters. Every call reads them again.</summary>
-    /// <exception cref="AmazonClientException">AWS refused the request or could not be reached.</exception>
+    /// <exception cref="AmazonServiceException">AWS refused the request.</exception>
+    /// <exception cref="AmazonClientException">AWS could not be reached, or no region or credentials were found.</exception>
     public async Task<AwsParameters> LoadAsync(CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(Options.Path);
-        using var client = AwsClients.CreateParameterStore(Options, ConfigureClient);
+        using var client = AwsClients.CreateParameterStore(Options, HttpHandler, ConfigureClient);
         return await AwsParameters.LoadAsync(Options, client, cancellationToken).ConfigureAwait(false);
     }
 

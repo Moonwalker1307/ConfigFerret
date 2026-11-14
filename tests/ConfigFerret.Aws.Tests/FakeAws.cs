@@ -1,6 +1,5 @@
 using System.Net;
 using System.Text;
-using Amazon;
 using Amazon.Runtime;
 using Amazon.SecretsManager;
 using Amazon.SimpleSystemsManagement;
@@ -36,25 +35,28 @@ internal sealed class FakeAws : HttpMessageHandler
 
     public IEnumerable<string> Operations(string operation) => Requests.Where(r => r.Operation == operation).Select(r => r.Body);
 
-    public void Configure(ClientConfig config)
+    /// <summary>Sends a source's requests here, with no retries.</summary>
+    public void Attach(AwsSecretsManagerSource source)
     {
-        config.HttpClientFactory = new Factory(this);
-        config.MaxErrorRetry = 0;
+        source.HttpHandler = this;
+        source.ConfigureClient = NoRetries;
     }
 
-    public AmazonSecretsManagerClient SecretsManager()
+    /// <summary>Sends a source's requests here, with no retries.</summary>
+    public void Attach(AwsParameterStoreSource source)
     {
-        var config = new AmazonSecretsManagerConfig { RegionEndpoint = RegionEndpoint.EUWest1 };
-        Configure(config);
-        return new AmazonSecretsManagerClient(new BasicAWSCredentials("AKIDEXAMPLE", SecretKey), config);
+        source.HttpHandler = this;
+        source.ConfigureClient = NoRetries;
     }
 
-    public AmazonSimpleSystemsManagementClient ParameterStore()
-    {
-        var config = new AmazonSimpleSystemsManagementConfig { RegionEndpoint = RegionEndpoint.EUWest1 };
-        Configure(config);
-        return new AmazonSimpleSystemsManagementClient(new BasicAWSCredentials("AKIDEXAMPLE", SecretKey), config);
-    }
+    // Built the way ConfigFerret builds its own clients, so responses go through its guard.
+    public AmazonSecretsManagerClient SecretsManager() => AwsClients.CreateSecretsManager(Options, this, NoRetries);
+
+    public AmazonSimpleSystemsManagementClient ParameterStore() => AwsClients.CreateParameterStore(Options, this, NoRetries);
+
+    private static AwsSecretsManagerOptions Options => new() { Region = "eu-west-1", AccessKeyId = "AKIDEXAMPLE", SecretAccessKey = SecretKey };
+
+    private static void NoRetries(ClientConfig config) => config.MaxErrorRetry = 0;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -75,13 +77,4 @@ internal sealed class FakeAws : HttpMessageHandler
     }
 
     private static bool IsSuccess(HttpStatusCode status) => (int)status is >= 200 and < 300;
-
-    private sealed class Factory(HttpMessageHandler handler) : HttpClientFactory
-    {
-        public override HttpClient CreateHttpClient(IClientConfig clientConfig) => new(handler, disposeHandler: false);
-
-        public override bool UseSDKHttpClientCaching(IClientConfig clientConfig) => false;
-
-        public override bool DisposeHttpClientsAfterUse(IClientConfig clientConfig) => true;
-    }
 }
