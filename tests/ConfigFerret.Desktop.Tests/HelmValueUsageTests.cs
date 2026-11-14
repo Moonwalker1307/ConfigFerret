@@ -168,4 +168,13 @@ public class HelmValueUsageTests
 
         Assert.Equal([("a", "one.yaml"), ("a", "two.yaml")], dead.Select(d => (d.Path, d.File)));
     }
+
+    [Fact]
+    public void Malformed_values_YAML_is_a_YamlException_whatever_YamlDotNet_throws()
+    {
+        // Found by fuzzing: this made YamlDotNet's scanner throw InvalidOperationException.
+        const string values = "replicaCount: 2\nimage:\n  repository: nginx\n  tag: \"1.25\"\n  pullPolra: {{ index .Values \"config\" \"level\" }}\n  {{ index .Values.ingresel: info\n  unusedKey: x\ningress:\n  hosts: [a, b]\n";
+
+        Assert.ThrowsAny<YamlDotNet.Core.YamlException>(() => HelmValueUsage.Leaves(values).ToList());
+    }
 }

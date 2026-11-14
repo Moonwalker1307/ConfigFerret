@@ -673,4 +673,13 @@ public class CodeReadScannerTests
         Assert.True(scanner.Check("A:Key").IsRead);
         Assert.True(scanner.Check("B:Key").IsRead);
     }
+
+    [Fact]
+    public void A_verbatim_string_with_no_content_does_not_throw()
+    {
+        // Found by fuzzing: the argument @" is both the start and the end of a verbatim string.
+        var scanner = Scan("var x = configuration.GetSection(@\"    ); class A { A get; set; } }");
+
+        Assert.False(scanner.Check("A").IsRead && string.IsNullOrEmpty(scanner.Check("A").Reason));
+    }
 }

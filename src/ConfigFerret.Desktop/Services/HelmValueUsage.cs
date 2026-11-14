@@ -130,9 +130,15 @@ public static partial class HelmValueUsage
     internal static IEnumerable<string> Leaves(string yaml)
     {
         var stream = new YamlStream();
-        using (var reader = new StringReader(yaml))
+        try
         {
+            using var reader = new StringReader(yaml);
             stream.Load(reader);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // Found by fuzzing: YamlDotNet throws these, not YamlException, for some malformed input.
+            throw new YamlException($"Malformed YAML: {ex.Message}", ex);
         }
 
         var result = new List<string>();

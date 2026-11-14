@@ -392,7 +392,7 @@ public sealed partial class CodeReadScanner
             return value.Length == 0 || value.Contains('{', StringComparison.Ordinal) ? null : value;
         }
 
-        if (arg.StartsWith("@\"", StringComparison.Ordinal) && arg.EndsWith('"'))
+        if (arg.Length >= 3 && arg.StartsWith("@\"", StringComparison.Ordinal) && arg[^1] == '"')
         {
             return arg[2..^1];
         }
