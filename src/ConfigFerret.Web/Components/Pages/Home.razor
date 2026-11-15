@@ -251,14 +251,30 @@
                                 <input type="search" placeholder="Search keys, values and sources" aria-label="Search keys, values and sources" value="@Vm.FilterText"
                                        @oninput="e => Vm.FilterText = (string?)e.Value" />
                             </label>
-                            <div class="sources">
-                                @foreach (var card in Vm.Discoveries)
+                            <div class="menu sources">
+                                <button class="subtle" title="Turn the sources found in the repository on and off" aria-haspopup="true"
+                                        aria-expanded="@(_sourcesOpen ? "true" : "false")" @onclick="() => _sourcesOpen = !_sourcesOpen">
+                                    <Icon Name="IconLayers" Size="13" Class="muted" /> @Vm.SourcesText <Icon Name="IconArrowDown" Size="10" Class="muted" />
+                                </button>
+                                @if (_sourcesOpen)
                                 {
-                                    <span class="source @(card.Used ? null : "unused")" title="@card.Detail">
-                                        <Icon Name="@card.Icon" Size="12" Class="@("kind-" + card.Css)" />
-                                        <span class="bold">@card.Title</span>
-                                        <span class="muted small">@card.State</span>
-                                    </span>
+                                    <div class="popover-scrim" @onclick="() => _sourcesOpen = false"></div>
+                                    <div class="popover sources-popover" role="dialog" aria-label="Sources">
+                                        <div class="caption">SOURCES IN THE REPOSITORY</div>
+                                        @foreach (var source in Vm.Discoveries)
+                                        {
+                                            <label class="source-row @(source.CanToggle ? null : "fixed")" title="@source.Detail">
+                                                <input type="checkbox" checked="@source.IsOn" disabled="@(!source.CanToggle)" @onchange="e => source.IsOn = e.Value is true" />
+                                                <Icon Name="@source.Icon" Size="13" Class="@("kind-" + source.Css)" />
+                                                <span class="source-text">
+                                                    <span class="bold">@source.Title</span>
+                                                    <span class="muted small ellipsis">@source.Detail</span>
+                                                </span>
+                                                <span class="muted small">@source.State</span>
+                                            </label>
+                                        }
+                                        <p class="muted small">Turning a source off traces again without it. App settings are always on.</p>
+                                    </div>
                                 }
                             </div>
                             <div class="toolbar-end">

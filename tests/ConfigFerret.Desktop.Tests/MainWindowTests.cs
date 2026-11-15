@@ -25,6 +25,13 @@ public sealed class MainWindowTests : IDisposable
             new RepositoryAnalyzer(render: (_, _) => null),
             Path.Join(_temp.FullName, "downloads"));
 
+    // Turning a source on or off starts a trace; awaiting a second one waits for it (it cancels the first).
+    private static async Task WaitForTraceAsync(MainWindowViewModel viewModel)
+    {
+        await viewModel.RetraceAsync();
+        Dispatcher.UIThread.RunJobs();
+    }
+
     [AvaloniaFact]
     public async Task Signs_in_lists_repositories_and_traces_the_selected_one()
     {
@@ -105,6 +112,20 @@ public sealed class MainWindowTests : IDisposable
         Assert.True(viewModel.KeyFilter.IsSorted);
         viewModel.ClearFiltersCommand.Execute(null);
         Assert.False(viewModel.IsFiltered);
+
+        // Turning a source off in the Sources drop-down traces again without it, and the choice is kept.
+        Assert.False(viewModel.Discoveries.Single(d => d.Title == "App settings").CanToggle);
+        var helm = viewModel.Discoveries.Single(d => d.Title == "Helm chart");
+        Assert.Equal("in use", helm.State);
+        helm.IsOn = false;
+        await WaitForTraceAsync(viewModel);
+        Assert.DoesNotContain(viewModel.Rows.Single(r => r.Key == "Db:Timeout").Kinds, k => k.Kind == LayerKind.Helm);
+        Assert.Equal("off", viewModel.Discoveries.Single(d => d.Title == "Helm chart").State);
+        Assert.Contains("Helm chart", File.ReadAllText(Path.Join(_temp.FullName, "workspace.json")), StringComparison.Ordinal);
+        viewModel.Discoveries.Single(d => d.Title == "Helm chart").IsOn = true;
+        await WaitForTraceAsync(viewModel);
+        timeout = viewModel.Rows.Single(r => r.Key == "Db:Timeout");
+        Assert.Contains(timeout.Kinds, k => k.Kind == LayerKind.Helm);
         Assert.Null(viewModel.SortColumn);
         Assert.Equal(viewModel.RowCount, viewModel.Rows.Count);
 

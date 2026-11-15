@@ -176,9 +176,14 @@ button.tile:hover { background: var(--hover); }
 button.tile.selected { background: var(--accent-soft); border-color: var(--accent); border-top-color: var(--accent); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; margin-bottom: 10px; }
 .toolbar .search.wide { width: 300px; max-width: 100%; height: 36px; box-sizing: border-box; }
-.sources { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
-.source { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; background: var(--surface); font-size: 12px; }
-.source.unused { opacity: .55; }
+.sources { flex: 1; min-width: 0; }
+.sources > .subtle { height: 36px; display: inline-flex; align-items: center; gap: 6px; }
+.sources-popover { width: 360px; display: flex; flex-direction: column; gap: 4px; padding: 10px; }
+.source-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px; border-radius: 6px; cursor: pointer; }
+.source-row:hover { background: var(--hover); }
+.source-row.fixed { cursor: default; }
+.source-row input { accent-color: var(--accent); margin: 0; }
+.source-text { display: flex; flex-direction: column; min-width: 0; }
 .kind-dotnet { color: var(--k-dotnet); } .kind-k8s { color: var(--k-k8s); } .kind-helm { color: var(--k-helm); } .kind-kustomize { color: var(--k-kustomize); }
 .toolbar-end { display: flex; align-items: center; gap: 12px; padding-top: 4px; }
 .notes-popover { width: 520px; max-width: 80vw; max-height: 420px; overflow-y: auto; padding: 12px; }

@@ -126,19 +126,6 @@
     <Setter Property="Foreground" Value="{DynamicResource CfAccent}" />
   </Style>
 
-  <!-- Sources found in the repository, as chips under the tiles -->
-  <Style Selector="Border.source">
-    <Setter Property="CornerRadius" Value="999" />
-    <Setter Property="Padding" Value="10,4" />
-    <Setter Property="Margin" Value="0,0,8,8" />
-    <Setter Property="BorderBrush" Value="{DynamicResource CfBorder}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="Background" Value="{DynamicResource CfSurface}" />
-  </Style>
-  <Style Selector="Border.source.unused">
-    <Setter Property="Opacity" Value="0.55" />
-  </Style>
-
   <!-- Chips: one colour per layer family -->
   <Style Selector="Border.chip">
     <Setter Property="CornerRadius" Value="999" />
@@ -222,6 +209,12 @@
   <Style Selector="PathIcon.error"><Setter Property="Foreground" Value="{DynamicResource CfBad}" /></Style>
   <Style Selector="PathIcon.warning"><Setter Property="Foreground" Value="{DynamicResource CfWarn}" /></Style>
   <Style Selector="PathIcon.info"><Setter Property="Foreground" Value="{DynamicResource CfInfo}" /></Style>
+  <Style Selector="PathIcon.dotnet"><Setter Property="Foreground" Value="{DynamicResource CfKindDotnet}" /></Style>
+  <Style Selector="PathIcon.k8s"><Setter Property="Foreground" Value="{DynamicResource CfKindK8s}" /></Style>
+  <Style Selector="PathIcon.helm"><Setter Property="Foreground" Value="{DynamicResource CfKindHelm}" /></Style>
+  <Style Selector="PathIcon.kustomize"><Setter Property="Foreground" Value="{DynamicResource CfKindKustomize}" /></Style>
+  <Style Selector="PathIcon.github"><Setter Property="Foreground" Value="{DynamicResource CfKindGithub}" /></Style>
+  <Style Selector="PathIcon.octopus"><Setter Property="Foreground" Value="{DynamicResource CfKindOctopus}" /></Style>
 
   <!-- Provenance timeline -->
   <Style Selector="Border.node">

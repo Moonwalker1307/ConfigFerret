@@ -20,6 +20,7 @@ public sealed partial class Home
     private IJSObjectReference? _shortcuts;
     private bool _exportOpen;
     private bool _notesOpen;
+    private bool _sourcesOpen;
 
     private static readonly Tile[] Tiles =
     [
@@ -111,6 +112,7 @@ public sealed partial class Home
 
         _exportOpen = false;
         _notesOpen = false;
+        _sourcesOpen = false;
         StateHasChanged();
     }
 

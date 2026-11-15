@@ -227,7 +227,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     public partial bool HasResult { get; set; }
 
     /// <summary>What the scan found.</summary>
-    public ObservableCollection<DiscoveryCard> Discoveries { get; } = [];
+    public ObservableCollection<SourceToggle> Discoveries { get; } = [];
+
+    /// <summary>A label for the Sources drop-down, such as "Sources 4 of 5".</summary>
+    [ObservableProperty]
+    public partial string SourcesText { get; set; } = "Sources";
 
     /// <summary>The app folders found.</summary>
     public ObservableCollection<string> Apps { get; } = [];
@@ -904,6 +908,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         var result = await RunAsync("Tracing the configuration…", async cancellationToken =>
         {
             profile = _analyzer.BuildProfile(scan, choices, connections, notes);
+            foreach (var source in profile.Sources.Where(s => SourceFamily(s) is { } family && choices.TurnedOff.Contains(family, StringComparer.Ordinal)))
+            {
+                source.Enabled = false;
+            }
+
             return await _runner.RunAsync(profile, reveal, cancellationToken).ConfigureAwait(false);
         }).ConfigureAwait(true);
 
@@ -1041,44 +1050,79 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             $"Traced {TotalCount} settings from {used} of {result.Sources.Count} sources at {DateTime.Now:t}.{(RevealSecrets ? " Secret values are shown." : string.Empty)}");
     }
 
+    // The kinds of source the Sources drop-down turns on and off. App settings are the trace's starting point, so null.
+    private static string? SourceFamily(SourceSettings source) => source switch
+    {
+        HelmSource => "Helm chart",
+        KustomizeSource => "Kustomize",
+        KubernetesSource => "Kubernetes manifests",
+        GitHubSource => "GitHub Actions",
+        OctopusSource => "Octopus Deploy",
+        _ => null,
+    };
+
     private void ShowDiscoveries(RepositoryScan scan, Profile? profile)
     {
-        var sources = profile?.Sources ?? [];
+        var sources = profile?.Sources.Where(s => s.Enabled).ToList() ?? [];
+        var turnedOff = _currentKey is not null && _workspace.Repositories.TryGetValue(_currentKey, out var choices) ? choices.TurnedOff : [];
         Discoveries.Clear();
-        foreach (var app in scan.Apps)
+        if (scan.Apps.Count > 0)
         {
-            var detail = app.Environments.Count == 0 ? app.RelativePath : $"{app.RelativePath} · {string.Join(", ", app.Environments)}";
-            Discoveries.Add(new DiscoveryCard("dotnet", "IconBraces", "App settings", detail, app.RelativePath == SelectedApp));
+            Discoveries.Add(new SourceToggle("dotnet", "IconBraces", "App settings", string.Join(", ", scan.Apps.Select(a => a.RelativePath)), scan.Apps.Any(a => a.RelativePath == SelectedApp)));
         }
 
-        foreach (var chart in scan.HelmCharts)
+        if (scan.HelmCharts.Count > 0)
         {
-            var detail = chart.ValuesFiles.Count == 0 ? chart.RelativePath : $"{chart.RelativePath} · {chart.ValuesFiles.Count} values files";
-            Discoveries.Add(new DiscoveryCard("helm", "IconAnchor", "Helm chart", detail, sources.OfType<HelmSource>().Any(h => h.ChartFolder == chart.Folder)));
+            Add("helm", "IconAnchor", "Helm chart", string.Join(", ", scan.HelmCharts.Select(c => c.RelativePath)), sources.OfType<HelmSource>().Any());
         }
 
-        foreach (var kustomization in scan.Kustomizations)
+        if (scan.Kustomizations.Count > 0)
         {
-            Discoveries.Add(new DiscoveryCard("kustomize", "IconLayers", "Kustomize", kustomization, sources.OfType<KustomizeSource>().Any(k => k.Folder == scan.Full(kustomization))));
+            Add("kustomize", "IconLayers", "Kustomize", string.Join(", ", scan.Kustomizations), sources.OfType<KustomizeSource>().Any());
         }
 
         if (scan.Manifests.Count > 0)
         {
-            Discoveries.Add(new DiscoveryCard("k8s", "IconHexagon", "Kubernetes manifests", scan.Manifests.Count == 1 ? scan.Manifests[0] : $"{scan.Manifests.Count} files", sources.OfType<KubernetesSource>().Any(k => k.Name == "Kubernetes manifests")));
+            Add("k8s", "IconHexagon", "Kubernetes manifests", scan.Manifests.Count == 1 ? scan.Manifests[0] : $"{scan.Manifests.Count} files", sources.OfType<KubernetesSource>().Any());
         }
 
         if (scan.Workflows.Count > 0 || IsGitHubSubject)
         {
             var detail = scan.Workflows.Count == 0 ? "Repository variables and secrets" : scan.Workflows.Count == 1 ? "Variables, secrets and 1 workflow" : $"Variables, secrets and {scan.Workflows.Count} workflows";
-            Discoveries.Add(new DiscoveryCard("github", "IconBranch", "GitHub Actions", detail, sources.OfType<GitHubSource>().Any()));
+            Add("github", "IconBranch", "GitHub Actions", detail, sources.OfType<GitHubSource>().Any());
         }
 
         var octopus = sources.OfType<OctopusSource>().FirstOrDefault();
-        if (octopus is not null || scan.HasOctopusConfigAsCode)
+        if (octopus is not null || scan.HasOctopusConfigAsCode || turnedOff.Contains("Octopus Deploy", StringComparer.Ordinal))
         {
-            var detail = octopus is not null ? $"Project {octopus.Project}" : "Config as code found; connect Octopus to read the variables";
-            Discoveries.Add(new DiscoveryCard("octopus", "IconRocket", "Octopus Deploy", detail, octopus is not null));
+            var detail = octopus is not null ? $"Project {octopus.Project}" : scan.HasOctopusConfigAsCode && !IsOctopusConnected ? "Config as code found; connect Octopus to read the variables" : "Octopus project variables";
+            Add("octopus", "IconRocket", "Octopus Deploy", detail, octopus is not null);
         }
+
+        var on = Discoveries.Count(d => d.IsOn);
+        SourcesText = on == Discoveries.Count
+            ? string.Create(CultureInfo.CurrentCulture, $"Sources · {Discoveries.Count}")
+            : string.Create(CultureInfo.CurrentCulture, $"Sources · {on} of {Discoveries.Count}");
+
+        void Add(string css, string icon, string title, string detail, bool used) =>
+            Discoveries.Add(new SourceToggle(css, icon, title, detail, used, !turnedOff.Contains(title, StringComparer.Ordinal), OnSourceToggled));
+    }
+
+    // Turning a source on or off saves the choice for this repository and traces again.
+    private void OnSourceToggled(SourceToggle toggle)
+    {
+        if (_currentKey is null || !_workspace.Repositories.TryGetValue(_currentKey, out var choices))
+        {
+            return;
+        }
+
+        choices.TurnedOff.Remove(toggle.Title);
+        if (!toggle.IsOn)
+        {
+            choices.TurnedOff.Add(toggle.Title);
+        }
+
+        RetraceOnChoice();
     }
 
     private void ClearResult()

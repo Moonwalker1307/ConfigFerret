@@ -346,24 +346,40 @@
                 </Button.Flyout>
               </Button>
             </StackPanel>
-            <ItemsControl ItemsSource="{Binding Discoveries}" VerticalAlignment="Top" Margin="0,2,0,0">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                  <WrapPanel />
-                </ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="vm:DiscoveryCard">
-                  <Border Classes="source" Classes.unused="{Binding !Used}" ToolTip.Tip="{Binding Detail, StringFormat='{}{0}'}">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                      <PathIcon Width="12" Height="12" Data="{Binding Icon, Converter={x:Static ui:Converters.IconGeometry}}" ui:DynamicClasses.Classes="{Binding Css}" />
-                      <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="SemiBold" />
-                      <TextBlock Text="{Binding State}" FontSize="11" Classes="muted" />
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+              <Button Classes="subtle" Padding="10,7" ToolTip.Tip="Turn the sources found in the repository on and off">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <PathIcon Data="{StaticResource IconLayers}" Width="13" Height="13" Foreground="{DynamicResource CfMuted}" />
+                  <TextBlock Text="{Binding SourcesText}" />
+                  <PathIcon Data="{StaticResource IconArrowDown}" Width="10" Height="10" Foreground="{DynamicResource CfMuted}" />
+                </StackPanel>
+                <Button.Flyout>
+                  <Flyout Placement="BottomEdgeAlignedLeft">
+                    <StackPanel Width="340" Spacing="6" Margin="2">
+                      <TextBlock Classes="caption" Text="SOURCES IN THE REPOSITORY" />
+                      <ItemsControl ItemsSource="{Binding Discoveries}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate DataType="vm:SourceToggle">
+                            <CheckBox IsChecked="{Binding IsOn}" IsEnabled="{Binding CanToggle}" Padding="8,4" Margin="0,2"
+                                      ToolTip.Tip="{Binding Detail}">
+                              <Grid ColumnDefinitions="Auto,*,Auto" Width="270">
+                                <PathIcon Width="13" Height="13" Margin="0,2,8,0" VerticalAlignment="Top" Data="{Binding Icon, Converter={x:Static ui:Converters.IconGeometry}}" ui:DynamicClasses.Classes="{Binding Css}" />
+                                <StackPanel Grid.Column="1" Spacing="1">
+                                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                  <TextBlock Classes="muted" FontSize="11" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="2" Classes="muted" FontSize="11" Text="{Binding State}" Margin="8,2,0,0" VerticalAlignment="Top" />
+                              </Grid>
+                            </CheckBox>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Text="Turning a source off traces again without it. App settings are always on." />
                     </StackPanel>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+            </StackPanel>
           </DockPanel>
 
           <!-- The table and the details of the selected row -->

@@ -29,7 +29,9 @@ values to show (sections for KEY, sources for COMES FROM, layer kinds for LAYERS
 
 ![The LAYERS column filter: sort, search and a tick list](../../docs/desktop/column-filter.png)
 
-The chips next to the search show what the scan found in the repository, and the notes button lists warnings, source
+The **Sources** drop-down next to the search lists what the scan found in the repository (Helm chart, Kustomize,
+Kubernetes manifests, GitHub Actions, Octopus Deploy). Untick one to trace again without it; the choice is kept per
+repository. App settings are the starting point of a trace and stay on. The notes button lists warnings, source
 problems and what the dead-variable scan read.
 
 A workflow `env:` entry such as `Db__Host: ${{ vars.DB_HOST }}` counts as an environment variable of the app, so
