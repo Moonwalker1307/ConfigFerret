@@ -252,7 +252,11 @@ public class AwsEdgeCaseTests
     public void Describes_where_requests_go()
     {
         Assert.Equal("https://x.example/", AwsClients.Describe(new Amazon.SecretsManager.AmazonSecretsManagerConfig { ServiceURL = "https://x.example/" }));
-        Assert.Equal("ap-south-1", AwsClients.Describe(new Amazon.SecretsManager.AmazonSecretsManagerConfig { AuthenticationRegion = "ap-south-1" }));
+
+        // Without a ServiceURL the SDK falls back to the machine's region (AWS_REGION, a profile, or the EC2 instance
+        // metadata on a cloud runner), and requests go there. Only a machine with no region shows AuthenticationRegion.
+        var machineRegion = new Amazon.SecretsManager.AmazonSecretsManagerConfig().RegionEndpoint?.SystemName;
+        Assert.Equal(machineRegion ?? "ap-south-1", AwsClients.Describe(new Amazon.SecretsManager.AmazonSecretsManagerConfig { AuthenticationRegion = "ap-south-1" }));
     }
 
     [Fact]

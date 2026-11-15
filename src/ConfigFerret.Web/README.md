@@ -1,10 +1,13 @@
 # ConfigFerret Web
 
 The [desktop app](../ConfigFerret.Desktop/README.md) as a website that runs in a Docker container. It has the same
-screens: the repositories your GitHub token can read, and for the one you pick, the merged configuration with the
-history of every value, dead variables, values that never win, and the secrets audit.
+screen: the repositories your GitHub token can read, and for the one you pick, one table with every setting and the
+history of its value, GitHub and Octopus variables no setting picks up, dead variables and the secrets audit. The stat
+tiles filter the table, and each column header has a sort, search and tick-list filter.
 
 ![The merged configuration of a repository in the web app](../../docs/web/configuration.png)
+
+![A column filter in the web app: sort, search and a tick list](../../docs/web/column-filter.png)
 
 ## Run
 

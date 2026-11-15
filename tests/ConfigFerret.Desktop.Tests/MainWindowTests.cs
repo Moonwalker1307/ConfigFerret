@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using ConfigFerret.Desktop.Credentials;
 using ConfigFerret.Desktop.Services;
 using ConfigFerret.Desktop.ViewModels;
@@ -23,6 +24,13 @@ public sealed class MainWindowTests : IDisposable
             github,
             new RepositoryAnalyzer(render: (_, _) => null),
             Path.Join(_temp.FullName, "downloads"));
+
+    // Turning a source on or off starts a trace; awaiting a second one waits for it (it cancels the first).
+    private static async Task WaitForTraceAsync(MainWindowViewModel viewModel)
+    {
+        await viewModel.RetraceAsync();
+        Dispatcher.UIThread.RunJobs();
+    }
 
     [AvaloniaFact]
     public async Task Signs_in_lists_repositories_and_traces_the_selected_one()
@@ -63,42 +71,89 @@ public sealed class MainWindowTests : IDisposable
         Assert.Contains(viewModel.SecretRows, s => s.Key == "Payments:ApiKey" && s.Css == "bad");
         Assert.Equal("bad", viewModel.SecretRows[0].Css);
 
-        // Unused: overridden values and GitHub variables no setting picks up.
-        Assert.Contains(viewModel.Unused, u => u.Name == "LEGACY_ENDPOINT");
-        Assert.Contains(viewModel.Unused, u => u.Name == "OLD_DEPLOY_KEY");
+        // One table holds everything: GitHub variables no setting picks up are rows of their own, marked dead.
+        var legacy = viewModel.Rows.Single(r => r.Key == "LEGACY_ENDPOINT");
+        Assert.False(legacy.IsSetting);
+        Assert.True(legacy.IsDead);
+        Assert.Contains(legacy.Kinds, k => k.Kind == LayerKind.GitHubActions);
+        Assert.Contains(viewModel.Rows, r => r.Key == "OLD_DEPLOY_KEY" && r.IsDead);
+        Assert.Contains(viewModel.Rows, r => r.Key == "features.recommendations" && r.IsDead && r.What == "Helm value");
+        Assert.Equal(viewModel.RowCount, viewModel.Rows.Count);
 
-        // Dead variables: a setting no code reads is flagged in the table and listed first, with Helm values no template reads.
+        // Dead variables: a setting no code reads is flagged in the table.
         Assert.True(viewModel.Rows.Single(r => r.Key == "Payments:ApiKey").IsDead);
         Assert.False(viewModel.Rows.Single(r => r.Key == "Cache:Ttl").IsDead);
-        Assert.True(viewModel.Unused[0].IsDead);
-        Assert.Contains(viewModel.Unused, u => u.Name == "features.recommendations" && u.IsDead && !u.CanShow);
-        Assert.Contains(viewModel.Unused, u => !u.IsDead);
-        viewModel.OnlyDead = true;
-        Assert.All(viewModel.Unused, u => Assert.True(u.IsDead));
-        Assert.Equal(viewModel.DeadCount, viewModel.Unused.Count);
-        viewModel.OnlyDeadSettings = true;
+
+        // The stat tiles are the filters; picking the active one again shows every row.
+        viewModel.SelectTileCommand.Execute("Dead");
+        Assert.True(viewModel.IsDeadTile);
         Assert.All(viewModel.Rows, r => Assert.True(r.IsDead));
-        viewModel.OnlyDeadSettings = false;
-        viewModel.OnlyDead = false;
+        Assert.Equal(viewModel.DeadCount, viewModel.Rows.Count);
+        viewModel.SelectTileCommand.Execute("Exposed");
+        Assert.Equal("Payments:ApiKey", Assert.Single(viewModel.Rows).Key);
+        viewModel.SelectTileCommand.Execute("Protected");
+        Assert.Contains(viewModel.Rows, r => r.Key == "Db:Password");
+        Assert.Equal(viewModel.ProtectedCount, viewModel.Rows.Count);
+        viewModel.SelectTileCommand.Execute("Overridden");
+        Assert.All(viewModel.Rows, r => Assert.True(r.IsOverridden));
+        viewModel.SelectTileCommand.Execute("Overridden");
+        Assert.True(viewModel.IsAllTile);
+        Assert.Equal(viewModel.RowCount, viewModel.Rows.Count);
+
+        // Column filters: tick the values to show, search, sort.
+        viewModel.LayersFilter.Only("GitHub");
+        Assert.All(viewModel.Rows, r => Assert.Contains(r.Kinds, k => k.Kind == LayerKind.GitHubActions));
+        Assert.True(viewModel.IsFiltered);
+        viewModel.LayersFilter.Clear();
+        viewModel.KeyFilter.Search = "Db";
+        Assert.All(viewModel.Rows, r => Assert.Contains("Db", r.Key, StringComparison.OrdinalIgnoreCase));
+        viewModel.KeyFilter.SortDescendingCommand.Execute(null);
+        Assert.Equal(viewModel.Rows.Select(r => r.Key).OrderDescending(StringComparer.OrdinalIgnoreCase), viewModel.Rows.Select(r => r.Key));
+        Assert.True(viewModel.KeyFilter.IsSorted);
+        viewModel.ClearFiltersCommand.Execute(null);
+        Assert.False(viewModel.IsFiltered);
+
+        // Turning a source off in the Sources drop-down traces again without it, and the choice is kept.
+        Assert.False(viewModel.Discoveries.Single(d => d.Title == "App settings").CanToggle);
+        var helm = viewModel.Discoveries.Single(d => d.Title == "Helm chart");
+        Assert.Equal("in use", helm.State);
+        helm.IsOn = false;
+        await WaitForTraceAsync(viewModel);
+        Assert.DoesNotContain(viewModel.Rows.Single(r => r.Key == "Db:Timeout").Kinds, k => k.Kind == LayerKind.Helm);
+        Assert.Equal("off", viewModel.Discoveries.Single(d => d.Title == "Helm chart").State);
+        Assert.Contains("Helm chart", File.ReadAllText(Path.Join(_temp.FullName, "workspace.json")), StringComparison.Ordinal);
+        viewModel.Discoveries.Single(d => d.Title == "Helm chart").IsOn = true;
+        await WaitForTraceAsync(viewModel);
+        timeout = viewModel.Rows.Single(r => r.Key == "Db:Timeout");
+        Assert.Contains(timeout.Kinds, k => k.Kind == LayerKind.Helm);
+        Assert.Null(viewModel.SortColumn);
+        Assert.Equal(viewModel.RowCount, viewModel.Rows.Count);
 
         // The token went to GitHub only, and never into the workspace file.
         Assert.All(github.Requests, r => Assert.Equal("api.github.com", r.RequestUri!.Host));
         var saved = File.ReadAllText(Path.Join(_temp.FullName, "workspace.json"));
         Assert.DoesNotContain(FakeGitHub.Token, saved, StringComparison.Ordinal);
 
-        await Screenshots.SaveAsync(window, "repository-overview");
-        viewModel.SelectedTab = 1;
         viewModel.SelectedRow = timeout;
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "configuration");
-        viewModel.SelectedTab = 2;
+        viewModel.SelectTileCommand.Execute("Exposed");
+        viewModel.SelectedRow = viewModel.Rows[0];
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "secrets");
-        viewModel.SelectedTab = 3;
+        viewModel.SelectTileCommand.Execute("Dead");
+        viewModel.SelectedRow = viewModel.Rows.First(r => r.Key == "LEGACY_ENDPOINT");
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "unused");
+        viewModel.ClearFiltersCommand.Execute(null);
+        viewModel.SelectedRow = timeout;
+        Dispatcher.UIThread.RunJobs();
+        var layersButton = window.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("headerfilter")).ElementAt(3);
+        layersButton.Flyout!.ShowAt(layersButton);
+        Dispatcher.UIThread.RunJobs();
+        await Screenshots.SaveAsync(window, "column-filter");
+        layersButton.Flyout.Hide();
         viewModel.IsDarkTheme = false;
-        viewModel.SelectedTab = 1;
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "configuration-light");
 
