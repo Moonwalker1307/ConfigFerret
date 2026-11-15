@@ -60,9 +60,8 @@ internal static partial class Targets
                 .Concat(application.SubstituteFrom.Select(s => s.Name))
                 .Take(100)
                 .Select(n => Step(LayerKind.GitOps, new GitOpsVariableRef(application.Name, n), null));
-            foreach (var step in patched.Concat(templated).Concat(variables).ToList())
+            foreach (var resolved in patched.Concat(templated).Concat(variables).ToList().Select(step => resolver.Resolve(step, diagnostics)))
             {
-                var resolved = resolver.Resolve(step, diagnostics);
                 Consume(resolved);
                 foreach (var origin in resolved.Where(o => o.Reference is GitOpsVariableRef))
                 {

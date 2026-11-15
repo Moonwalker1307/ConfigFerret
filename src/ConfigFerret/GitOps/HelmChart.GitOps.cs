@@ -55,7 +55,7 @@ public sealed partial class HelmChart
         var chart = new HelmChart(chartFolder);
         chart._warnings.AddRange(warnings);
 
-        var defaults = chartFolder is null ? null : Path.Combine(chartFolder, "values.yaml");
+        var defaults = chartFolder is null ? null : Path.Join(chartFolder, "values.yaml");
         if (defaults is not null && File.Exists(defaults) && !(source.ValuesFilesReplaceChartValues && source.ValuesFiles.Count > 0))
         {
             chart.AddValuesFile(defaults, "values.yaml (chart default)");
@@ -106,7 +106,7 @@ public sealed partial class HelmChart
         }
         else if (!string.IsNullOrWhiteSpace(options.RepositoryRoot) && source.Path is not null)
         {
-            folder = Path.GetFullPath(Path.Combine(options.RepositoryRoot, source.Path));
+            folder = Path.GetFullPath(Path.Join(options.RepositoryRoot, source.Path));
         }
         else
         {
@@ -147,7 +147,7 @@ public sealed partial class HelmChart
         }
 
         var found = roots
-            .Select(r => (Root: Path.GetFullPath(r), File: Path.GetFullPath(Path.Combine(r, relative))))
+            .Select(r => (Root: Path.GetFullPath(r), File: Path.GetFullPath(Path.Join(r, relative))))
             .FirstOrDefault(c => relative.Length > 0 && File.Exists(c.File));
         if (found.File is null)
         {

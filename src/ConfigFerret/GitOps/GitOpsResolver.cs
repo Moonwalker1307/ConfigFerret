@@ -21,6 +21,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
     private readonly List<KubernetesManifests> _data;
     private bool _warned;
 
+    /// <summary>Creates a resolver for one GitOps object.</summary>
     /// <param name="application">The GitOps object.</param>
     /// <param name="options">Where its files are.</param>
     /// <param name="fileData">ConfigMaps and Secrets read from a provider's data file, looked up after <see cref="GitOpsOptions.Data"/>.</param>
@@ -123,9 +124,9 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         }
 
         var folder = !string.IsNullOrWhiteSpace(options.ChartFolder) ? options.ChartFolder
-            : !string.IsNullOrWhiteSpace(options.RepositoryRoot) ? Path.Combine(options.RepositoryRoot, application.Path)
+            : !string.IsNullOrWhiteSpace(options.RepositoryRoot) ? Path.Join(options.RepositoryRoot, application.Path)
             : null;
-        return folder is not null && File.Exists(Path.Combine(folder, "Chart.yaml"));
+        return folder is not null && File.Exists(Path.Join(folder, "Chart.yaml"));
     }
 
     private List<ProvenanceStep> ResolvePatches(ConfigMapKeyRef cm)
@@ -188,7 +189,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         }
 
         var root = Path.GetFullPath(options.RepositoryRoot);
-        var folder = Path.GetFullPath(Path.Combine(root, _app.Path ?? "."));
+        var folder = Path.GetFullPath(Path.Join(root, _app.Path ?? "."));
         if (!Directory.Exists(folder))
         {
             _warnings.Add($"The folder {folder} that {_app.DisplayName} deploys does not exist.");

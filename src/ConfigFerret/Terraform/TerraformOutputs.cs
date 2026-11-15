@@ -82,7 +82,7 @@ public sealed partial class TerraformOutputs
     {
         if (string.IsNullOrWhiteSpace(stateFile) && string.IsNullOrWhiteSpace(outputsFile) && !string.IsNullOrWhiteSpace(terraformFolder))
         {
-            var local = Path.Combine(terraformFolder, "terraform.tfstate");
+            var local = Path.Join(terraformFolder, "terraform.tfstate");
             stateFile = File.Exists(local)
                 ? local
                 : throw new ArgumentException($"{terraformFolder} has no terraform.tfstate; pass the output of terraform output -json or a state file.", nameof(terraformFolder));
@@ -248,41 +248,34 @@ public sealed partial class TerraformOutputs
             }
 
             int? version = null;
-            JsonDocument? outputs = null;
-            try
+            JsonElement? outputs = null;
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
             {
-                while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+                var property = reader.GetString();
+                reader.Read();
+                if (property == "version" && reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var v))
                 {
-                    var property = reader.GetString();
-                    reader.Read();
-                    if (property == "version" && reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var v))
-                    {
-                        version = v;
-                    }
-                    else if (property == "outputs" && reader.TokenType == JsonTokenType.StartObject && outputs is null)
-                    {
-                        outputs = JsonDocument.ParseValue(ref reader);
-                    }
-                    else
-                    {
-                        // Resources, check results and everything else: skipped token by token, never parsed into values.
-                        reader.Skip();
-                    }
+                    version = v;
                 }
-
-                if (version != 4)
+                else if (property == "outputs" && reader.TokenType == JsonTokenType.StartObject && outputs is null)
                 {
-                    throw new FormatException($"The Terraform state {sourceName} has format version {version?.ToString(CultureInfo.InvariantCulture) ?? "(none)"}; only version 4 is read.");
+                    outputs = JsonElement.ParseValue(ref reader);
                 }
-
-                if (outputs is not null)
+                else
                 {
-                    AddOutputs(outputs.RootElement, sourceName);
+                    // Resources, check results and everything else: skipped token by token, never parsed into values.
+                    reader.Skip();
                 }
             }
-            finally
+
+            if (version != 4)
             {
-                outputs?.Dispose();
+                throw new FormatException($"The Terraform state {sourceName} has format version {version?.ToString(CultureInfo.InvariantCulture) ?? "(none)"}; only version 4 is read.");
+            }
+
+            if (outputs is not null)
+            {
+                AddOutputs(outputs.Value, sourceName);
             }
         }
         catch (JsonException ex)
