@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ConfigFerret.Azure</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>ConfigFerret.Azure</PackageId>
+    <Version>0.2.0</Version>
+    <Description>Azure source for ConfigFerret: links configuration values to the Azure Key Vault secrets and Azure App Configuration key-values (including Key Vault references and feature flags) that set them, read with the Azure SDK.</Description>
+    <PackageTags>configuration;provenance;azure;key-vault;app-configuration;secrets;debugging</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/ConfigFerret</PackageProjectUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <MicrosoftExtensionsVersion>10.0.15</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0'">
+    <MicrosoftExtensionsVersion>11.0.0</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The official Azure SDK: Azure.Identity handles every Microsoft Entra sign-in (managed identity, workload
+         identity, Azure CLI, service principals), and the service clients handle paging, retries and Key Vault's
+         challenge-based authentication. -->
+    <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
+    <PackageReference Include="Azure.Data.AppConfiguration" Version="1.11.1" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.12.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.404" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="ConfigFerret.Azure.Tests" />
+    <InternalsVisibleTo Include="ConfigFerret.Fuzz" />
+  </ItemGroup>
+
+</Project>

@@ -42,6 +42,7 @@ package stays offline and never handles credentials unless you add one:
 | `ConfigFerret.Octopus` | Octopus Deploy project and library variable set variables, matched by scope, read with an API key ([readme](src/ConfigFerret.Octopus/README.md)) |
 | `ConfigFerret.HashiCorp` | HashiCorp Vault KV secrets (names and metadata, values only when asked) and Consul KV keys, read with a token ([readme](src/ConfigFerret.HashiCorp/README.md)) |
 | `ConfigFerret.KubernetesCluster` | A workload, its ConfigMaps, opt-in Secrets, ExternalSecrets and SecretProviderClasses, read from a live cluster through a kubeconfig or the pod's service account ([readme](src/ConfigFerret.KubernetesCluster/README.md)) |
+| `ConfigFerret.Azure` | Azure Key Vault secrets (names and properties, values only when asked) and Azure App Configuration key-values, Key Vault references and feature flags, read with the Azure SDK ([readme](src/ConfigFerret.Azure/README.md)) |
 
 To trace from the command line without writing code, install the `configferret` command instead:
 
@@ -204,6 +205,31 @@ var report = ConfigTracer.For(builder.Configuration).WithKubernetesCluster(clust
 Secrets are read only with `IncludeSecrets = true`; otherwise a `secretKeyRef` shows as a secret with an unknown
 value. Register it from configuration with `AddConfigFerretKubernetesCluster(section)` and
 `await tracer.WithKubernetesClusterAsync(app.Services)`.
+
+### With Azure Key Vault or App Configuration
+
+```csharp
+using ConfigFerret.Azure;   // dotnet package add ConfigFerret.Azure
+
+// Signs in with DefaultAzureCredential (managed identity, workload identity, Azure CLI and so on).
+var vault = await AzureKeyVaultSecrets.LoadAsync(new AzureKeyVaultOptions { VaultUri = new("https://contoso-prod.vault.azure.net/") });
+var store = await AzureAppConfigurationSettings.LoadAsync(new AzureAppConfigurationOptions
+{
+    Endpoint = new("https://contoso.azconfig.io"),
+    Labels = { "base", "production" },   // in the app's Select order: the last label wins
+});
+
+var report = ConfigTracer.For(builder.Configuration)
+    .WithAzureAppConfiguration(store)
+    .WithAzureKeyVault(vault)
+    .Trace();
+```
+
+Key Vault secrets are linked to environment variables, Kubernetes env entries and Secret keys by name (`Db__Password`
+and `Db--Password` both set `Db:Password`), to External Secrets references, to App Configuration Key Vault references,
+and to values from the Key Vault configuration provider. Only names and properties are read unless `IncludeValues` is
+on, and every secret is redacted. `AddConfigFerretAzureKeyVault` and `AddConfigFerretAzureAppConfiguration` set both up
+from configuration; startup fails if a client secret or connection string is in an appsettings file.
 
 ### Inside a running pod
 

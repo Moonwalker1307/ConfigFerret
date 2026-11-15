@@ -1,0 +1,381 @@
+using System.Text.Json;
+using Azure;
+using Azure.Core;
+using Azure.Data.AppConfiguration;
+using ConfigFerret.Sources;
+
+namespace ConfigFerret.Azure;
+
+/// <summary>
+/// A snapshot of the key-values read from one Azure App Configuration store, for the labels the app reads. Load it with
+/// <see cref="LoadAsync(AzureAppConfigurationOptions, CancellationToken)"/>, or build it from settings you already have,
+/// then pass it to <see cref="AzureTracerExtensions.WithAzureAppConfiguration"/>.
+/// </summary>
+public sealed class AzureAppConfigurationSettings
+{
+    /// <summary>The content type App Configuration gives a Key Vault reference.</summary>
+    public const string KeyVaultReferenceContentType = "application/vnd.microsoft.appconfig.keyvaultref+json";
+
+    /// <summary>The key prefix App Configuration gives a feature flag.</summary>
+    public const string FeatureFlagPrefix = ".appconfig.featureflag/";
+
+    // Stop after this many pages (100 key-values each) per selector so a misbehaving server cannot keep a trace looping.
+    internal const int MaxPages = 400;
+
+    private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byStoredKey = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Creates a snapshot from settings you already have.</summary>
+    /// <param name="store">The store name, for example <c>contoso</c>.</param>
+    /// <param name="settings">The settings, lowest priority first: for one key, a later label wins over an earlier one.</param>
+    /// <param name="warnings">Problems found while reading them.</param>
+    public AzureAppConfigurationSettings(string store, IEnumerable<AzureAppConfigurationSetting> settings, IEnumerable<string>? warnings = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(store);
+        ArgumentNullException.ThrowIfNull(settings);
+        Store = store;
+        Settings = [.. settings];
+        foreach (var setting in Settings)
+        {
+            ArgumentNullException.ThrowIfNull(setting, nameof(settings));
+            Add(_byKey, setting.ConfigurationKey, setting);
+            Add(_byStoredKey, setting.Key, setting);
+        }
+
+        Warnings = [.. warnings ?? []];
+    }
+
+    /// <summary>The store name, for example <c>contoso</c>.</summary>
+    public string Store { get; }
+
+    /// <summary>Every setting, lowest priority first.</summary>
+    public IReadOnlyList<AzureAppConfigurationSetting> Settings { get; }
+
+    /// <summary>Problems found while loading, such as a Key Vault reference that could not be read.</summary>
+    public IReadOnlyList<string> Warnings { get; }
+
+    /// <summary>The settings that set the configuration key <paramref name="key"/> (case-insensitive), lowest priority first, so the last one wins.</summary>
+    public IReadOnlyList<AzureAppConfigurationSetting> FindByConfigurationKey(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return _byKey.TryGetValue(key, out var list) ? list : [];
+    }
+
+    /// <summary>The settings stored under the key <paramref name="key"/> (case-insensitive), lowest priority first.</summary>
+    public IReadOnlyList<AzureAppConfigurationSetting> Find(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return _byStoredKey.TryGetValue(key, out var list) ? list : [];
+    }
+
+    /// <summary>Wraps the snapshot for <see cref="ConfigSourceTracerExtensions.WithSource"/>, so unused key-values can be listed.</summary>
+    public LoadedConfigSource ToLoadedSource(AzureAppConfigurationTraceOptions? traceOptions = null) =>
+        new(
+            $"Azure App Configuration {Store}",
+            new AzureAppConfigurationResolver(this, traceOptions ?? new AzureAppConfigurationTraceOptions()),
+            Settings.Select(s => new SourceEntry(
+                s.Key,
+                Reference(s),
+                IsSensitive: s.Kind == AzureAppConfigurationSettingKind.KeyVaultReference,
+                Detail(s),
+                $"{s.Store}, {s.LabelText}")),
+            Warnings);
+
+    /// <summary>Reads the key-values, signing in with the connection string, the service principal or <c>DefaultAzureCredential</c>.</summary>
+    /// <exception cref="RequestFailedException">App Configuration refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
+    public static Task<AzureAppConfigurationSettings> LoadAsync(AzureAppConfigurationOptions options, CancellationToken cancellationToken = default) =>
+        LoadAsync(options, null, new ConfigurationClientOptions(), cancellationToken);
+
+    /// <summary>Reads the key-values from <see cref="AzureAppConfigurationOptions.Endpoint"/>, signing in with <paramref name="credential"/>.</summary>
+    /// <exception cref="RequestFailedException">App Configuration refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
+    public static Task<AzureAppConfigurationSettings> LoadAsync(AzureAppConfigurationOptions options, TokenCredential credential, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        return LoadAsync(options, credential, new ConfigurationClientOptions(), cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the key-values with your own client options, for example a proxy, retry settings, or a <c>Transport</c>
+    /// (<c>new HttpClientTransport(httpClient)</c>) that answers from a test handler. With a null
+    /// <paramref name="credential"/>, signs in with the connection string, the service principal or <c>DefaultAzureCredential</c>.
+    /// </summary>
+    /// <exception cref="RequestFailedException">App Configuration refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
+    public static async Task<AzureAppConfigurationSettings> LoadAsync(
+        AzureAppConfigurationOptions options,
+        TokenCredential? credential,
+        ConfigurationClientOptions clientOptions,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(clientOptions);
+        var (client, store) = CreateClient(options, credential, clientOptions);
+        var labels = options.Labels.Count == 0 ? [null] : options.Labels.Select(l => string.IsNullOrEmpty(l) || l == "\0" ? null : l).Distinct().ToList();
+        var settings = new List<AzureAppConfigurationSetting>();
+        var warnings = new List<string>();
+        foreach (var label in labels)
+        {
+            var keyFilter = string.IsNullOrWhiteSpace(options.KeyFilter) ? SettingSelector.Any : options.KeyFilter.Trim();
+            await ReadAsync(client, store, keyFilter, label, options, settings, warnings, cancellationToken).ConfigureAwait(false);
+            if (options.IncludeFeatureFlags)
+            {
+                await ReadAsync(client, store, FeatureFlagPrefix + "*", label, options, settings, warnings, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return new AzureAppConfigurationSettings(store, settings, warnings);
+    }
+
+    internal static AzureAppConfigurationSettingRef Reference(AzureAppConfigurationSetting setting) =>
+        new(setting.Store, setting.Key, setting.Label, setting.SecretId);
+
+    internal static string? Detail(AzureAppConfigurationSetting setting) => setting.Kind switch
+    {
+        AzureAppConfigurationSettingKind.KeyVaultReference => setting.SecretId is null ? "Key Vault reference" : $"Key Vault reference to {setting.SecretId}",
+        AzureAppConfigurationSettingKind.FeatureFlag => setting.Enabled == true ? "feature flag, on" : "feature flag, off",
+        _ => string.IsNullOrEmpty(setting.ContentType) ? null : $"content type {setting.ContentType}",
+    };
+
+    internal static (ConfigurationClient Client, string Store) CreateClient(AzureAppConfigurationOptions options, TokenCredential? credential, ConfigurationClientOptions clientOptions)
+    {
+        if (credential is null && !string.IsNullOrWhiteSpace(options.ConnectionString))
+        {
+            var endpoint = ReadEndpoint(options.ConnectionString);
+            try
+            {
+                return (new ConfigurationClient(options.ConnectionString, clientOptions), AzureAuth.ShortName(endpoint));
+            }
+            catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
+            {
+                // Never pass on the SDK's message: it may quote the connection string.
+                throw new ArgumentException("ConnectionString is not a valid App Configuration connection string (Endpoint=...;Id=...;Secret=...).", nameof(options));
+            }
+        }
+
+        var uri = RequireEndpoint(options.Endpoint);
+        credential ??= AzureAuth.Create(options.TenantId, options.ClientId, options.ClientSecret);
+        return (new ConfigurationClient(uri, credential, clientOptions), AzureAuth.ShortName(uri));
+    }
+
+    internal static Uri RequireEndpoint(Uri? uri)
+    {
+        if (uri is null || !uri.IsAbsoluteUri || uri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            throw new ArgumentException("Endpoint must be an absolute https URL without credentials, for example https://contoso.azconfig.io, or set ConnectionString.", nameof(uri));
+        }
+
+        return uri;
+    }
+
+    /// <summary>Reads the <c>Endpoint=</c> part of a connection string, without ever quoting the string itself.</summary>
+    internal static Uri ReadEndpoint(string connectionString)
+    {
+        foreach (var pair in connectionString.Split(';').Select(part => part.Split('=', 2)))
+        {
+            if (pair.Length == 2 && string.Equals(pair[0].Trim(), "Endpoint", StringComparison.OrdinalIgnoreCase))
+            {
+                return Uri.TryCreate(pair[1].Trim(), UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(uri.UserInfo)
+                    ? uri
+                    : throw new ArgumentException("The Endpoint in ConnectionString must be an absolute https URL.", nameof(connectionString));
+            }
+        }
+
+        throw new ArgumentException("ConnectionString has no Endpoint=... part.", nameof(connectionString));
+    }
+
+    private static async Task ReadAsync(
+        ConfigurationClient client,
+        string store,
+        string keyFilter,
+        string? label,
+        AzureAppConfigurationOptions options,
+        List<AzureAppConfigurationSetting> into,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var flags = keyFilter.StartsWith(FeatureFlagPrefix, StringComparison.Ordinal);
+        var selector = new SettingSelector { KeyFilter = keyFilter, LabelFilter = label ?? "\0" };
+        try
+        {
+            var pages = 0;
+            await foreach (var page in client.GetConfigurationSettingsAsync(selector, cancellationToken).AsPages().ConfigureAwait(false))
+            {
+                foreach (var setting in page.Values)
+                {
+                    if (setting?.Key is not { Length: > 0 } key || key.StartsWith(FeatureFlagPrefix, StringComparison.Ordinal) != flags)
+                    {
+                        // Feature flags come from their own selector, so the one for plain keys skips them.
+                        continue;
+                    }
+
+                    if (Convert(setting, store, options, warnings) is { } converted)
+                    {
+                        into.Add(converted);
+                    }
+                }
+
+                if (++pages >= MaxPages && page.ContinuationToken is not null)
+                {
+                    warnings.Add($"Stopped listing Azure App Configuration {store} keys {keyFilter} after {MaxPages} pages; some key-values were not read.");
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (AzureKeyVaultSecrets.IsUnreadable(ex))
+        {
+            throw new RequestFailedException($"Azure App Configuration {store} sent a response that could not be read.", ex);
+        }
+    }
+
+    private static AzureAppConfigurationSetting? Convert(ConfigurationSetting setting, string store, AzureAppConfigurationOptions options, List<string> warnings)
+    {
+        var label = string.IsNullOrEmpty(setting.Label) ? null : setting.Label;
+        var contentType = setting.ContentType;
+        var basic = new AzureAppConfigurationSetting(setting.Key, label, store)
+        {
+            ContentType = contentType,
+            LastModified = setting.LastModified,
+            IsReadOnly = setting.IsReadOnly == true,
+            Tags = new Dictionary<string, string>(setting.Tags ?? new Dictionary<string, string>(), StringComparer.Ordinal),
+        };
+        var raw = ReadValue(setting);
+
+        if (setting.Key.StartsWith(FeatureFlagPrefix, StringComparison.Ordinal))
+        {
+            return ToFeatureFlag(basic, raw, warnings);
+        }
+
+        if (IsContentType(contentType, KeyVaultReferenceContentType) || setting is SecretReferenceConfigurationSetting)
+        {
+            if (!options.IncludeKeyVaultReferences)
+            {
+                return null;
+            }
+
+            var secretId = ReadSecretUri(raw);
+            if (secretId is null)
+            {
+                warnings.Add($"Azure App Configuration Key Vault reference {setting.Key} ({basic.LabelText}) in {store} has no valid secret URI.");
+            }
+
+            return basic with { Kind = AzureAppConfigurationSettingKind.KeyVaultReference, SecretId = secretId, ConfigurationKey = Trim(setting.Key, options) };
+        }
+
+        return basic with { Value = raw, ConfigurationKey = Trim(setting.Key, options) };
+    }
+
+    // The SDK turns Key Vault references and feature flags into typed settings; reading Value gives their JSON back.
+    private static string? ReadValue(ConfigurationSetting setting)
+    {
+        try
+        {
+            return setting.Value;
+        }
+        catch (Exception ex) when (AzureKeyVaultSecrets.IsUnreadable(ex))
+        {
+            return null;
+        }
+    }
+
+    private static AzureAppConfigurationSetting ToFeatureFlag(AzureAppConfigurationSetting basic, string? raw, List<string> warnings)
+    {
+        var name = basic.Key[FeatureFlagPrefix.Length..];
+        bool? enabled = null;
+        var filters = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(raw ?? string.Empty);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(id.GetString()))
+                {
+                    name = id.GetString()!;
+                }
+
+                if (root.TryGetProperty("enabled", out var on) && on.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    enabled = on.GetBoolean();
+                }
+
+                if (root.TryGetProperty("conditions", out var conditions) && conditions.ValueKind == JsonValueKind.Object
+                    && conditions.TryGetProperty("client_filters", out var list) && list.ValueKind == JsonValueKind.Array)
+                {
+                    filters.AddRange(list.EnumerateArray()
+                        .Select(filter => filter.ValueKind == JsonValueKind.Object && filter.TryGetProperty("name", out var filterName) && filterName.ValueKind == JsonValueKind.String ? filterName.GetString() : null)
+                        .Where(name => name is not null)
+                        .Select(name => name!));
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Reported below, without the value.
+        }
+
+        if (enabled is null)
+        {
+            warnings.Add($"Azure App Configuration feature flag {basic.Key} ({basic.LabelText}) in {basic.Store} could not be read.");
+        }
+
+        // The .NET provider sets FeatureManagement:<name> to true or false, or, with filters, FeatureManagement:<name>:EnabledFor.
+        var value = enabled is null || (enabled == true && filters.Count > 0) ? null : (enabled == true ? "True" : "False");
+        return basic with
+        {
+            Kind = AzureAppConfigurationSettingKind.FeatureFlag,
+            ConfigurationKey = "FeatureManagement:" + name,
+            Enabled = enabled,
+            Filters = filters,
+            Value = value,
+        };
+    }
+
+    private static Uri? ReadSecretUri(string? raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw ?? string.Empty);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("uri", out var uri)
+                && uri.ValueKind == JsonValueKind.String
+                && Uri.TryCreate(uri.GetString(), UriKind.Absolute, out var parsed)
+                && parsed.Scheme == Uri.UriSchemeHttps
+                && string.IsNullOrEmpty(parsed.UserInfo)
+                ? parsed
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsContentType(string? contentType, string expected) =>
+        contentType is not null && (string.Equals(contentType.Trim(), expected, StringComparison.OrdinalIgnoreCase)
+            || contentType.TrimStart().StartsWith(expected + ";", StringComparison.OrdinalIgnoreCase));
+
+    private static string Trim(string key, AzureAppConfigurationOptions options)
+    {
+        foreach (var prefix in options.TrimKeyPrefixes)
+        {
+            if (!string.IsNullOrEmpty(prefix) && key.StartsWith(prefix, StringComparison.Ordinal) && key.Length > prefix.Length)
+            {
+                return key[prefix.Length..];
+            }
+        }
+
+        return key;
+    }
+
+    private static void Add(Dictionary<string, List<AzureAppConfigurationSetting>> index, string key, AzureAppConfigurationSetting setting)
+    {
+        if (!index.TryGetValue(key, out var list))
+        {
+            index[key] = list = [];
+        }
+
+        list.Add(setting);
+    }
+}
