@@ -66,7 +66,7 @@ public sealed class EdgeCaseTests : IDisposable
         Assert.Equal("x", JsonRead.String(JsonRead.Property(doc.RootElement, "a")));
         Assert.Null(JsonRead.Property(doc.RootElement, "b"));
         Assert.Equal(["a"], JsonRead.Properties(doc.RootElement).Select(p => p.Name));
-        Assert.Null(GitLabVariables.ReadVariable(JsonDocument.Parse("""{"\udc00":1}""").RootElement, GitLabVariableLevel.Project, "p", false));
+        Assert.Null(GitLabVariables.ReadVariable(JsonElement.Parse("""{"\udc00":1}"""), GitLabVariableLevel.Project, "p", false));
     }
 
     [Fact]
