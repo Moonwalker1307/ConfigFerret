@@ -1,0 +1,73 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: billing
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./apps/billing
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  postBuild:
+    substitute:
+      CURRENCY: EUR
+      RETRY_COUNT: "5"
+    substituteFrom:
+      - kind: ConfigMap
+        name: cluster-vars
+      - kind: Secret
+        name: cluster-secrets
+      - kind: ConfigMap
+        name: optional-vars
+        optional: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-vars
+  namespace: flux-system
+data:
+  REGION: eu-west-1
+  RETRY_COUNT: "3"
+  SMTP_HOST: smtp.prod.internal
+  UNUSED_VAR: nobody-reads-this
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-secrets
+  namespace: flux-system
+stringData:
+  STRIPE_KEY: stripe-flux-s3cr3t
+%%
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billing-config
+data:
+  Billing__Currency: ${CURRENCY}
+  Billing__RetryCount: "${RETRY_COUNT}"
+  Billing__Region: ${REGION:=us-east-1}
+  Billing__Tier: ${TIER:=standard}
+  Smtp__Endpoint: ${SMTP_HOST}:${SMTP_PORT:=25}
+  Billing__InvoiceDueDays: "14"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing
+spec:
+  template:
+    spec:
+      containers:
+        - name: billing
+          envFrom:
+            - configMapRef:
+                name: billing-config
+            - secretRef:
+                name: billing-secrets
+          env:
+            - name: Billing__Mode
+              value: ${MODE:=live}

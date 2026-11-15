@@ -56,6 +56,8 @@ internal static partial class Targets
         ["gcp-secrets"] = new("Google Cloud Secret Manager API responses (split by %%), then the Secret Manager resolver", GcpSecrets),
         ["azure-devops"] = new("Azure DevOps variable group API responses (split by %%, with headers), then pipeline YAML and the resolver", AzureDevOpsApi),
         ["gitlab"] = new("GitLab CI/CD variables API responses (split by %%, with headers), then CI YAML and the resolver", GitLabApi),
+        ["gitops"] = new("Argo CD and Flux manifests %% source manifests with ${VAR} placeholders, then the GitOps resolver", GitOpsTarget),
+        ["terraform"] = new("terraform output -json %% state file %% .tf file, then the Terraform resolver", TerraformTarget),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

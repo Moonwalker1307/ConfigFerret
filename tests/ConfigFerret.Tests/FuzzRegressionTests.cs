@@ -2,6 +2,7 @@ using System.Text;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
+using ConfigFerret.Terraform;
 
 namespace ConfigFerret.Tests;
 
@@ -116,5 +117,26 @@ public class FuzzRegressionTests
         }
 
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"Parsing took {watch.Elapsed}.");
+    }
+
+    [Fact]
+    public void A_terraform_output_whose_name_holds_a_colon_is_found_by_that_name()
+    {
+        var outputs = TerraformOutputs.Parse(Read("terraform-colon-in-output-name.json.txt"));
+
+        Assert.Equal("pw", outputs.Find("db:password")!.Value);
+        Assert.Equal("1", outputs.Find("db.a:b")!.Value);
+        Assert.Equal("1", outputs.Find("DB.A:B")!.Value);
+        Assert.Equal("Terraform output db:password", Assert.Single(new TerraformResolver(outputs, new TerraformTraceOptions().Map("PW", "db:password"))
+            .Resolve(new ProvenanceStep { Kind = LayerKind.KubernetesWorkload, Source = "w", Reference = new WorkloadEnvRef("w", "c", "PW") }, new TraceDiagnostics())).Source);
+    }
+
+    [Fact]
+    public void A_terraform_output_named_twice_keeps_the_last_one()
+    {
+        var outputs = TerraformOutputs.Parse(Read("terraform-duplicate-output.json.txt"));
+
+        var output = Assert.Single(outputs.Values);
+        Assert.Equal(("second", false), (output.Value, output.IsSensitive));
     }
 }

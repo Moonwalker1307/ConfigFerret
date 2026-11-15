@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: {name: billing-set}
+spec:
+  template:
+    metadata: {name: 'billing-{{cluster}}'}
+    spec:
+      source:
+        path: overlays/prod
+        kustomize:
+          namePrefix: prod-
+          images: [billing=registry/billing:2.0]
+          commonLabels: {team: payments}
+          patches:
+            - target: {kind: ConfigMap, name: billing-config}
+              patch: |
+                - op: replace
+                  path: /data/Currency
+                  value: EUR
+            - patch: |
+                kind: ConfigMap
+                metadata: {name: other}
+                data: {A: "1"}

@@ -1,0 +1,103 @@
+{
+  "cache": {
+    "sensitive": false,
+    "type": [
+      "object",
+      {
+        "endpoint": "string",
+        "ttl": "number"
+      }
+    ],
+    "value": {
+      "endpoint": "redis.prod.internal:6379",
+      "ttl": 900
+    }
+  },
+  "db_host": {
+    "sensitive": false,
+    "type": "string",
+    "value": "orders-db.abc123.eu-west-1.rds.example.test"
+  },
+  "db_password": {
+    "sensitive": true,
+    "type": "string",
+    "value": "tf-s3cr3t-pw"
+  },
+  "queue_urls": {
+    "sensitive": false,
+    "type": [
+      "list",
+      "string"
+    ],
+    "value": [
+      "https://sqs.example.test/orders",
+      "https://sqs.example.test/orders-dlq"
+    ]
+  },
+  "unused_bucket": {
+    "sensitive": false,
+    "type": "string",
+    "value": "orders-artifacts"
+  }
+}
+%%
+{
+  "version": 4,
+  "terraform_version": "1.9.5",
+  "serial": 12,
+  "lineage": "5d3f0c3e-8f1b-4f0e-9a51-2a8f0b9c1d00",
+  "outputs": {
+    "db_host": {
+      "value": "stale-host-from-state",
+      "type": "string"
+    },
+    "db_port": {
+      "value": 5432,
+      "type": "number"
+    }
+  },
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "orders",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 2,
+          "attributes": {
+            "address": "orders-db.abc123.eu-west-1.rds.example.test",
+            "password": "resource-attribute-s3cr3t"
+          },
+          "sensitive_attributes": []
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
+%%
+output "db_host" {
+  description = "The database endpoint."
+  value       = aws_db_instance.orders.address
+}
+
+output "db_port" {
+  value = aws_db_instance.orders.port
+}
+
+output "db_password" {
+  value     = random_password.db.result
+  sensitive = true
+}
+
+output "cache" {
+  value = {
+    endpoint = "${aws_elasticache_cluster.orders.cache_nodes[0].address}:6379"
+    ttl      = var.cache_ttl
+  }
+}
+
+output "queue_urls" {
+  value = [aws_sqs_queue.orders.url, aws_sqs_queue.dlq.url]
+}

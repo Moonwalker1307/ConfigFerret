@@ -122,9 +122,12 @@ public sealed partial class TerraformOutputs
     public TerraformOutput? Find(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
-        var wanted = name.Replace(':', '.');
-        return _values.FirstOrDefault(v => string.Equals(v.Name, wanted, StringComparison.Ordinal))
-            ?? _values.FirstOrDefault(v => string.Equals(v.Name, wanted, StringComparison.OrdinalIgnoreCase));
+        // Found by fuzzing: an object key may itself hold a colon, so the name as given is tried first.
+        var dotted = name.Replace(':', '.');
+        return _values.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.Ordinal))
+            ?? _values.FirstOrDefault(v => string.Equals(v.Name, dotted, StringComparison.Ordinal))
+            ?? _values.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase))
+            ?? _values.FirstOrDefault(v => string.Equals(v.Name, dotted, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Scans the <c>.tf</c> files in a folder (not its subfolders, which are other modules) for output blocks.</summary>
@@ -201,6 +204,8 @@ public sealed partial class TerraformOutputs
                 continue;
             }
 
+            // Found by fuzzing: JSON may name an output twice. The last one wins, as in most JSON readers.
+            _values.RemoveAll(v => string.Equals(v.Output, output.Name, StringComparison.Ordinal));
             var sensitive = output.Value.TryGetProperty("sensitive", out var s) && s.ValueKind == JsonValueKind.True;
             var type = output.Value.TryGetProperty("type", out var t) ? Render(t) : null;
             Flatten(output.Name, null, value, type, sensitive, sourceName);
