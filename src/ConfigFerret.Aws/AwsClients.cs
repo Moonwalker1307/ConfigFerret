@@ -9,6 +9,9 @@ namespace ConfigFerret.Aws;
 /// <summary>Builds AWS SDK clients from <see cref="AwsConnectionOptions"/>.</summary>
 internal static class AwsClients
 {
+    /// <summary>The shared credentials file to read profiles from instead of the default one, for tests.</summary>
+    internal static string? ProfilesLocation { get; set; }
+
     public static AmazonSecretsManagerClient CreateSecretsManager(AwsConnectionOptions options, HttpMessageHandler? handler = null, Action<ClientConfig>? configure = null)
     {
         var config = new AmazonSecretsManagerConfig();
@@ -90,7 +93,7 @@ internal static class AwsClients
 
         if (Blank(options.Profile) is { } profileName)
         {
-            var chain = new CredentialProfileStoreChain();
+            var chain = ProfilesLocation is null ? new CredentialProfileStoreChain() : new CredentialProfileStoreChain(ProfilesLocation);
             if (!chain.TryGetProfile(profileName, out var profile))
             {
                 throw new InvalidOperationException($"AWS profile {profileName} was not found in the shared config or credentials file.");
