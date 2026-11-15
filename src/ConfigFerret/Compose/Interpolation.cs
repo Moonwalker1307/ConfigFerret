@@ -131,8 +131,9 @@ internal sealed class Interpolation(Func<string, LookupResult?> lookup, string w
             default:
                 if (!isSet)
                 {
-                    // The message is the compose file author's text, not a value, so it is safe to show.
-                    var message = ExpandNested(argument, nesting);
+                    // The message is the file author's text. It is shown as written, not expanded, so no value can
+                    // reach the exception.
+                    var message = argument;
                     throw Error(message.Length > 0 ? $"{name}: {message}" : $"{name} is required but not set");
                 }
 

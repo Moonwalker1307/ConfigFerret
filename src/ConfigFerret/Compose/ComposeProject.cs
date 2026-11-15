@@ -244,15 +244,17 @@ public sealed class ComposeProject
         foreach (var (name, node) in Pairs(file.Root.Get(section)))
         {
             var at = Yaml.Location(file.Display, node.Key);
-            var fileName = Interpolated(node.Value.Str("file"), at, _warnings);
+            var fileName = InterpolatedName(node.Value.Str("file"), at, _warnings);
+            (string Value, bool IsSensitive, IReadOnlyList<DotEnvReference>)? content = node.Value.Str("content") is { } text ? InterpolatedContent(text, at, _warnings) : null;
             into[name] = new MountDefinition(
                 name,
                 at,
                 fileName,
                 fileName is null ? null : FullPath(file.Base, fileName),
-                Interpolated(node.Value.Str("environment"), at, _warnings),
-                Interpolated(node.Value.Str("content"), at, _warnings),
-                string.Equals(node.Value.Str("external"), "true", StringComparison.OrdinalIgnoreCase) || node.Value.Get("external") is YamlMappingNode);
+                InterpolatedName(node.Value.Str("environment"), at, _warnings),
+                content?.Value,
+                string.Equals(node.Value.Str("external"), "true", StringComparison.OrdinalIgnoreCase) || node.Value.Get("external") is YamlMappingNode,
+                content?.IsSensitive ?? false);
         }
     }
 
@@ -278,7 +280,7 @@ public sealed class ComposeProject
                 throw new FormatException($"{at}: includes nest more than {MaxIncludeDepth} deep.");
             }
 
-            var full = paths.Select(p => FullPath(file.Base, Interpolated(p, at, _warnings)!)!).ToList();
+            var full = paths.Select(p => FullPath(file.Base, InterpolatedName(p, at, _warnings)!)!).ToList();
             if (full.Find(p => including.Contains(p, StringComparer.Ordinal)) is { } cycle)
             {
                 throw new FormatException($"{at}: {Display(cycle)} includes itself.");
@@ -291,9 +293,9 @@ public sealed class ComposeProject
                 continue;
             }
 
-            var projectDirectory = Interpolated(item.Str("project_directory"), at, _warnings) is { } dir ? FullPath(file.Base, dir)! : Path.GetDirectoryName(full[0])!;
+            var projectDirectory = InterpolatedName(item.Str("project_directory"), at, _warnings) is { } dir ? FullPath(file.Base, dir)! : Path.GetDirectoryName(full[0])!;
             var envFiles = ItemsOrSelf(item.Get("env_file")).Select(e => e.Scalar()).Where(e => e is not null)
-                .Select(e => FullPath(file.Base, Interpolated(e, at, _warnings)!)!);
+                .Select(e => FullPath(file.Base, InterpolatedName(e, at, _warnings)!)!);
             var texts = full.Select(p => new ComposeText(p, ReadCapped(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
             var sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full]);
             foreach (var name in sub.ServiceNames)
@@ -397,9 +399,9 @@ public sealed class ComposeProject
         if (MergedPairs(part.Node, 0).TryGetValue("extends", out var extends))
         {
             var at = Yaml.Location(part.File.Display, extends.Key);
-            var baseName = Interpolated(extends.Value is YamlMappingNode ? extends.Value.Str("service") : extends.Value.Scalar(), at, warnings)
+            var baseName = InterpolatedName(extends.Value is YamlMappingNode ? extends.Value.Str("service") : extends.Value.Scalar(), at, warnings)
                 ?? throw new FormatException($"{at}: extends needs a service.");
-            var baseFile = Interpolated(extends.Value.Str("file"), at, warnings);
+            var baseFile = InterpolatedName(extends.Value.Str("file"), at, warnings);
             visiting.Add(key);
             if (baseFile is not null)
             {
@@ -476,7 +478,7 @@ public sealed class ComposeProject
         foreach (var item in ItemsOrSelf(node).Where(i => !i.IsNull()))
         {
             var at = Yaml.Location(part.File.Display, item);
-            var path = Interpolated(item is YamlMappingNode ? item.Str("path") : item.Scalar(), at, warnings)
+            var path = InterpolatedName(item is YamlMappingNode ? item.Str("path") : item.Scalar(), at, warnings)
                 ?? throw new FormatException($"{at}: an env_file entry needs a path.");
             var required = !string.Equals(item.Str("required"), "false", StringComparison.OrdinalIgnoreCase);
             var raw = string.Equals(item.Str("format"), "raw", StringComparison.Ordinal);
@@ -676,29 +678,44 @@ public sealed class ComposeProject
             {
                 Location = definition.At,
                 Value = found?.Value,
+                IsSensitive = step.IsSensitive || ComposeSteps.IsSensitiveName(definition.EnvironmentVariable),
                 Note = step.Note + $"; from the variable {definition.EnvironmentVariable}" + (found is null ? ", which is not set" : string.Empty),
             };
         }
 
         if (definition.Content is not null)
         {
-            return step with { Location = definition.At, Value = definition.Content };
+            return step with { Location = definition.At, Value = definition.Content, IsSensitive = step.IsSensitive || definition.ContentIsSensitive };
         }
 
         return step with { Location = definition.At, Note = step.Note + (definition.External ? "; it is external, so its contents are not known" : "; its definition has no file, environment or content") };
     }
 
-    private string? Interpolated(string? text, string at, List<string> warnings)
+    // A path or a name: it ends up in sources, locations and warnings, which are never redacted, so it may not
+    // take its value from a variable named like a secret.
+    private string? InterpolatedName(string? text, string at, List<string> warnings)
     {
         if (text is null)
         {
             return null;
         }
 
+        var expanded = InterpolatedContent(text, at, warnings);
+        if (expanded.IsSensitive)
+        {
+            throw new FormatException($"{at}: a path or a name may not refer to a variable named like a secret ({string.Join(", ", expanded.References.Where(r => ComposeSteps.IsSensitiveName(r.Name)).Select(r => r.Name))}).");
+        }
+
+        return expanded.Value;
+    }
+
+    private (string Value, bool IsSensitive, IReadOnlyList<DotEnvReference> References) InterpolatedContent(string text, string at, List<string> warnings)
+    {
         var interpolation = new Interpolation(Lookup, at);
         var value = interpolation.Expand(text);
         warnings.AddRange(interpolation.Unset.Select(v => UnsetWarning(at, v)));
-        return value;
+        var sensitive = interpolation.References.Any(r => ComposeSteps.IsSensitiveName(r.Name) || (r.From is { } entry && ComposeSteps.IsSensitiveName(entry.Name)));
+        return (value, sensitive, interpolation.References);
     }
 
     private static string UnsetWarning(string at, string name) => $"{at}: the {name} variable is not set, so an empty string is used.";
@@ -801,5 +818,5 @@ public sealed class ComposeProject
 
     private sealed record MountUse(string Name, bool IsSecret, string Path, string At);
 
-    private sealed record MountDefinition(string Name, string At, string? FileName, string? FullPath, string? EnvironmentVariable, string? Content, bool External);
+    private sealed record MountDefinition(string Name, string At, string? FileName, string? FullPath, string? EnvironmentVariable, string? Content, bool External, bool ContentIsSensitive);
 }

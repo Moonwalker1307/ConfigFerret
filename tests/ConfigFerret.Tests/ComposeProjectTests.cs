@@ -611,6 +611,53 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void Configs_that_take_a_secret_named_variable_are_sensitive()
+    {
+        var service = Service(Parse("""
+            services:
+              app:
+                configs: [from_env, from_content, plain]
+            configs:
+              from_env: { environment: DB_PASSWORD }
+              from_content: { content: "password=${DB_PASSWORD}" }
+              plain: { content: "host=${HOST}" }
+            """, o =>
+            {
+                o.Variables["DB_PASSWORD"] = "hunter2";
+                o.Variables["HOST"] = "h";
+            }));
+
+        Assert.True(service.MountLayers("/from_env")[0].IsSensitive);
+        Assert.True(service.MountLayers("/from_content")[0].IsSensitive);
+        Assert.False(service.MountLayers("/plain")[0].IsSensitive);
+        Assert.DoesNotContain("hunter2", ConfigTracer.ForCompose(ComposeProject.Parse([("compose.yaml", "services:\n  app:\n    configs: [c]\nconfigs:\n  c: { environment: API_TOKEN }\n")]), "app").Trace().ToText(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("services:\n  app:\n    env_file: ${DB_PASSWORD}.envfile\n")]
+    [InlineData("services:\n  app:\n    extends: ${API_KEY:-x}\n")]
+    [InlineData("services:\n  app:\n    secrets: [s]\nsecrets:\n  s: { file: \"./${DB_PASSWORD}\" }\n")]
+    public void Rejects_paths_and_names_that_take_a_secret_named_variable(string yaml)
+    {
+        var ex = Assert.Throws<FormatException>(() => Parse(yaml, o =>
+        {
+            o.Variables["DB_PASSWORD"] = "hunter2";
+            o.Variables["API_KEY"] = "hunter2";
+        }));
+
+        Assert.Contains("a path or a name may not refer to a variable named like a secret", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_required_variable_message_is_shown_as_written()
+    {
+        var ex = Assert.Throws<FormatException>(() => Parse("services:\n  app:\n    environment:\n      A: ${MISSING:?needs $DB_PASSWORD}\n", o => o.Variables["DB_PASSWORD"] = "hunter2"));
+
+        Assert.Equal("compose.yaml:4: MISSING: needs $DB_PASSWORD.", ex.Message);
+    }
+
+    [Fact]
     public void Includes_other_compose_projects()
     {
         using var folder = new TempFolder();
