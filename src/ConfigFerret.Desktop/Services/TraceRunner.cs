@@ -58,13 +58,27 @@ public sealed record DeadSetting(string Key, string Reason, IReadOnlyList<string
 /// <param name="Tool">GitHub Actions or Octopus Deploy.</param>
 /// <param name="Name">The variable name.</param>
 /// <param name="Detail">Its scope or variable set, and whether it is secret.</param>
-public sealed record UnusedVariable(string Tool, string Name, string Detail);
+public sealed record UnusedVariable(string Tool, string Name, string Detail)
+{
+    /// <summary>The value, when the tool returns it and it is not secret (or secrets are revealed); otherwise null.</summary>
+    public string? Value { get; init; }
+
+    /// <summary>True for a secret or sensitive variable.</summary>
+    public bool IsSecret { get; init; }
+}
 
 /// <summary>A GitHub variable that a workflow uses directly, while no configuration setting picks it up.</summary>
 /// <param name="Name">The variable name.</param>
 /// <param name="Detail">Its scope, and whether it is secret.</param>
 /// <param name="UsedBy">Where a workflow first uses it, for example <c>deploy.yml line 12</c>.</param>
-public sealed record WorkflowVariable(string Name, string Detail, string UsedBy);
+public sealed record WorkflowVariable(string Name, string Detail, string UsedBy)
+{
+    /// <summary>The value, when GitHub returns it (variables, never secrets); otherwise null.</summary>
+    public string? Value { get; init; }
+
+    /// <summary>True for a GitHub secret.</summary>
+    public bool IsSecret { get; init; }
+}
 
 /// <summary>The profile cannot be traced as set up, for example because it has no app settings source.</summary>
 public sealed class TraceSetupException : Exception
@@ -235,7 +249,7 @@ public sealed class TraceRunner
         }
 
         var workflowVariables = new List<WorkflowVariable>();
-        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, github, octopusVariables, workflowVariables))
+        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, github, octopusVariables, workflowVariables, revealSecrets))
         {
             WorkflowVariables = workflowVariables,
             DeadSettings = dead,
@@ -251,7 +265,8 @@ public sealed class TraceRunner
         ProvenanceReport report,
         Dictionary<GitHubSource, GitHubVariables> github,
         List<OctopusVariables> octopus,
-        List<WorkflowVariable> workflowOnly)
+        List<WorkflowVariable> workflowOnly,
+        bool revealSecrets)
     {
         var used = new HashSet<SourceRef>();
         foreach (var step in report.Settings.SelectMany(s => s.Steps))
@@ -272,14 +287,15 @@ public sealed class TraceRunner
                     continue;
                 }
 
+                var isSecret = variable.Kind == GitHubVariableKind.Secret;
                 var detail = $"{variable.Scope.ToString().ToLowerInvariant()} {(variable.Kind == GitHubVariableKind.Secret ? "secret" : "variable")} ({variable.Owner})";
                 if (workflows.FirstUse(variable.Kind, variable.Name) is { } usedBy)
                 {
-                    workflowOnly.Add(new WorkflowVariable(variable.Name, detail, usedBy));
+                    workflowOnly.Add(new WorkflowVariable(variable.Name, detail, usedBy) { Value = isSecret ? null : variable.Value, IsSecret = isSecret });
                 }
                 else
                 {
-                    unused.Add(new UnusedVariable("GitHub Actions", variable.Name, detail));
+                    unused.Add(new UnusedVariable("GitHub Actions", variable.Name, detail) { Value = isSecret ? null : variable.Value, IsSecret = isSecret });
                 }
             }
         }
@@ -288,7 +304,11 @@ public sealed class TraceRunner
         {
             if (!used.Contains(new OctopusVariableRef(variable.SetName, variable.Name)))
             {
-                unused.Add(new UnusedVariable("Octopus Deploy", variable.Name, $"{variable.SetName}{(variable.IsSensitive ? ", sensitive" : string.Empty)}"));
+                unused.Add(new UnusedVariable("Octopus Deploy", variable.Name, $"{variable.SetName}{(variable.IsSensitive ? ", sensitive" : string.Empty)}")
+                {
+                    Value = variable.IsSensitive && !revealSecrets ? null : variable.Value,
+                    IsSecret = variable.IsSensitive,
+                });
             }
         }
 

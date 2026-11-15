@@ -31,6 +31,9 @@ public sealed class AnalysisChoices
 
     /// <summary>The Octopus environment, or null to match any.</summary>
     public string? OctopusEnvironment { get; set; }
+
+    /// <summary>The kinds of source turned off in the Sources drop-down, such as "Helm chart". The trace leaves them out.</summary>
+    public List<string> TurnedOff { get; set; } = [];
 }
 
 /// <summary>The account connections a repository analysis can use.</summary>

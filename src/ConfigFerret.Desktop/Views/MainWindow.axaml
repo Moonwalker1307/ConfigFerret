@@ -236,365 +236,320 @@
             </StackPanel>
           </WrapPanel>
 
-          <!-- Stat tiles -->
-          <WrapPanel DockPanel.Dock="Top" Margin="0,8,0,4" IsVisible="{Binding HasResult}">
-            <Border Classes="tile" Margin="0,0,10,10">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding TotalCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="settings" />
-              </StackPanel>
-            </Border>
-            <Border Classes="tile" Margin="0,0,10,10">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding OverriddenCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="overridden" />
-              </StackPanel>
-            </Border>
-            <Border Classes="tile" Margin="0,0,10,10">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding UpstreamCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="from upstream" />
-              </StackPanel>
-            </Border>
-            <Border Classes="tile good" Margin="0,0,10,10">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding ProtectedCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="secrets protected" />
-              </StackPanel>
-            </Border>
-            <Border Classes="tile check" Margin="0,0,10,10">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding CheckCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="secrets to check" />
-              </StackPanel>
-            </Border>
-            <Border Classes="tile bad" Margin="0,0,10,10">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding ExposedCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="secrets exposed" />
-              </StackPanel>
-            </Border>
-            <Border Classes="tile bad" Margin="0,0,10,10" ToolTip.Tip="Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses">
-              <StackPanel>
-                <TextBlock Classes="number" Text="{Binding DeadCount, Converter={x:Static ui:Converters.Number}}" />
-                <TextBlock Classes="muted" FontSize="12" Text="dead variables" />
-              </StackPanel>
-            </Border>
+          <!-- Stat tiles: each one filters the table. Picking the active tile again shows every row. -->
+          <WrapPanel DockPanel.Dock="Top" Margin="0,8,0,2" IsVisible="{Binding HasResult}">
+            <Button Classes="tilebutton" Classes.selected="{Binding IsAllTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="All"
+                    ToolTip.Tip="Show every row: settings, plus GitHub and Octopus variables and Helm values no setting picks up">
+              <Border Classes="tile">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding RowCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="all variables" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsOverriddenTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Overridden"
+                    ToolTip.Tip="Keys set by more than one layer">
+              <Border Classes="tile">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding OverriddenCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="overridden" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsUpstreamTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Upstream"
+                    ToolTip.Tip="Values that come from further upstream than the app, such as Helm, Kustomize, GitHub or Octopus">
+              <Border Classes="tile">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding UpstreamCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="from upstream" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsProtectedTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Protected"
+                    ToolTip.Tip="Secrets kept in a secret store">
+              <Border Classes="tile good">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding ProtectedCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="secrets protected" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsCheckTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Check"
+                    ToolTip.Tip="Secrets that may or may not be safe: check them">
+              <Border Classes="tile check">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding CheckCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="secrets to check" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsExposedTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Exposed"
+                    ToolTip.Tip="Secrets in plain configuration">
+              <Border Classes="tile bad">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding ExposedCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="secrets exposed" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsDeadTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Dead"
+                    ToolTip.Tip="Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses">
+              <Border Classes="tile bad">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding DeadCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="dead variables" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsWorkflowTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Workflow"
+                    IsVisible="{Binding HasWorkflowOnly}" ToolTip.Tip="GitHub variables and secrets a workflow uses directly, while no app setting does">
+              <Border Classes="tile">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding WorkflowOnlyCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="used by workflows" />
+                </StackPanel>
+              </Border>
+            </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsDuplicateTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Duplicate"
+                    IsVisible="{Binding HasDuplicates}" ToolTip.Tip="Names set in more than one place, such as a secret set for the repository and for an environment, or Db:Host and DB__HOST">
+              <Border Classes="tile check">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding DuplicateCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="duplicated names" />
+                </StackPanel>
+              </Border>
+            </Button>
           </WrapPanel>
 
-          <!-- Tabs -->
-          <TabControl Classes="main" SelectedIndex="{Binding SelectedTab}">
-
-            <!-- Overview -->
-            <TabItem Header="Overview">
-              <ScrollViewer Margin="0,12,0,0">
-                <StackPanel Spacing="10">
-                  <TextBlock Classes="caption" Text="FOUND IN THE REPOSITORY" />
-                  <ItemsControl ItemsSource="{Binding Discoveries}">
-                    <ItemsControl.ItemsPanel>
-                      <ItemsPanelTemplate>
-                        <WrapPanel />
-                      </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate DataType="vm:DiscoveryCard">
-                        <Border Classes="card" Width="300" Margin="0,0,12,12" Padding="14">
-                          <Grid ColumnDefinitions="Auto,*">
-                            <Border Classes="iconbox" ui:DynamicClasses.Classes="{Binding Css}" VerticalAlignment="Top">
-                              <PathIcon Data="{Binding Icon, Converter={x:Static ui:Converters.IconGeometry}}" />
-                            </Border>
-                            <StackPanel Grid.Column="1" Margin="12,0,0,0" Spacing="3">
-                              <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
-                                <Border Grid.Column="1" Classes="chip" ui:DynamicClasses.Classes="{Binding Css}" IsVisible="{Binding Used}">
-                                  <TextBlock Text="{Binding State}" />
-                                </Border>
-                              </Grid>
-                              <TextBlock Classes="muted" FontSize="12" Text="{Binding Detail}" TextWrapping="Wrap" />
-                            </StackPanel>
-                          </Grid>
-                        </Border>
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                  <TextBlock Classes="caption" Text="NOTES" Margin="0,8,0,0" IsVisible="{Binding ProblemCount, Converter={x:Static ui:Converters.Positive}}" />
-                  <ItemsControl ItemsSource="{Binding Problems}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate DataType="vm:ProblemRow">
-                        <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,8">
-                          <PathIcon Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top" Data="{Binding Severity, Converter={x:Static ui:Converters.SeverityIcon}}" ui:DynamicClasses.Classes="{Binding Severity}" />
-                          <SelectableTextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
-                        </Grid>
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
+          <!-- Search, what the repository holds, and the trace's notes -->
+          <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10" IsVisible="{Binding HasResult}">
+            <TextBox DockPanel.Dock="Left" Classes="search" Width="300" VerticalAlignment="Top" PlaceholderText="Search keys, values and sources" Text="{Binding FilterText}" Margin="0,0,12,0">
+              <TextBox.InnerLeftContent>
+                <PathIcon Data="{StaticResource IconSearch}" Width="14" Height="14" Margin="10,0,2,0" Foreground="{DynamicResource CfMuted}" />
+              </TextBox.InnerLeftContent>
+            </TextBox>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top" Margin="0,8,0,0">
+              <TextBlock Classes="muted" Text="{Binding ShownText}" VerticalAlignment="Center" />
+              <Button Classes="link" Content="Show all" Command="{Binding ClearFiltersCommand}" IsVisible="{Binding IsFiltered}" VerticalAlignment="Center"
+                      ToolTip.Tip="Clear the search, the tile and every column filter" />
+              <Button Classes="subtle" IsVisible="{Binding HasProblems}" Padding="10,5">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <PathIcon Data="{StaticResource IconInfo}" Width="12" Height="12" Foreground="{DynamicResource CfMuted}" />
+                  <TextBlock Text="{Binding ProblemText}" />
                 </StackPanel>
-              </ScrollViewer>
-            </TabItem>
-
-            <!-- Configuration -->
-            <TabItem>
-              <TabItem.Header>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="Configuration" />
-                  <!-- A minimum width: the tab header is measured before the count arrives. -->
-                  <TextBlock MinWidth="30" Text="{Binding TotalCount}" Foreground="{DynamicResource CfMuted}" />
+                <Button.Flyout>
+                  <Flyout Placement="BottomEdgeAlignedRight">
+                    <ScrollViewer MaxHeight="420" Width="520">
+                      <ItemsControl ItemsSource="{Binding Problems}" Margin="4">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate DataType="vm:ProblemRow">
+                            <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,8">
+                              <PathIcon Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top" Data="{Binding Severity, Converter={x:Static ui:Converters.SeverityIcon}}" ui:DynamicClasses.Classes="{Binding Severity}" />
+                              <SelectableTextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+              <Button Classes="subtle" Padding="10,7" ToolTip.Tip="Turn the sources found in the repository on and off">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <PathIcon Data="{StaticResource IconLayers}" Width="13" Height="13" Foreground="{DynamicResource CfMuted}" />
+                  <TextBlock Text="{Binding SourcesText}" />
+                  <PathIcon Data="{StaticResource IconArrowDown}" Width="10" Height="10" Foreground="{DynamicResource CfMuted}" />
                 </StackPanel>
-              </TabItem.Header>
-              <Grid ColumnDefinitions="*,4,420" RowDefinitions="Auto,*" Margin="0,12,0,0">
-                <!-- Filters -->
-                <WrapPanel Grid.ColumnSpan="3" Margin="0,0,0,10">
-                  <TextBox Classes="search" Width="300" PlaceholderText="Search keys, values and sources" Text="{Binding FilterText}" Margin="0,0,8,0">
-                    <TextBox.InnerLeftContent>
-                      <PathIcon Data="{StaticResource IconSearch}" Width="14" Height="14" Margin="10,0,2,0" Foreground="{DynamicResource CfMuted}" />
-                    </TextBox.InnerLeftContent>
-                  </TextBox>
-                  <ComboBox ItemsSource="{Binding LayerFilters}" SelectedItem="{Binding SelectedLayerFilter}" Margin="0,0,8,0" />
-                  <ToggleButton Classes="pill" Content="Overridden" IsChecked="{Binding OnlyOverridden}" Margin="0,0,8,0" />
-                  <ToggleButton Classes="pill" Content="Secrets" IsChecked="{Binding OnlySecrets}" Margin="0,0,8,0" />
-                  <ToggleButton Classes="pill" Content="Dead" IsChecked="{Binding OnlyDeadSettings}" Margin="0,0,8,0" ToolTip.Tip="Settings no code reads" />
-                  <Button Classes="link" Content="Clear" Command="{Binding ClearFiltersCommand}" VerticalAlignment="Center" Margin="4,0,12,0" />
-                  <TextBlock Classes="muted" Text="{Binding ShownText}" VerticalAlignment="Center" />
-                </WrapPanel>
-
-                <Border Grid.Row="1" Classes="card" Padding="0">
-                  <DataGrid ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}" IsReadOnly="True" CanUserSortColumns="True"
-                            HeadersVisibility="Column" SelectionMode="Single" RowHeight="40">
-                    <DataGrid.Columns>
-                      <DataGridTemplateColumn Header="KEY" Width="1.7*" SortMemberPath="Key">
-                        <DataGridTemplateColumn.CellTemplate>
-                          <DataTemplate DataType="vm:SettingRow">
-                            <DockPanel Margin="12,0" VerticalAlignment="Center">
-                              <Border DockPanel.Dock="Right" Classes="chip bad" Margin="6,0,0,0" IsVisible="{Binding IsDead}" ToolTip.Tip="{Binding DeadReason}">
-                                <TextBlock Text="dead" />
-                              </Border>
-                              <TextBlock Classes="mono" Text="{Binding Key}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
-                            </DockPanel>
-                          </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                      </DataGridTemplateColumn>
-                      <DataGridTemplateColumn Header="VALUE" Width="1.4*" SortMemberPath="Value">
-                        <DataGridTemplateColumn.CellTemplate>
-                          <DataTemplate DataType="vm:SettingRow">
-                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="12,0" VerticalAlignment="Center">
-                              <PathIcon Data="{StaticResource IconLock}" Width="11" Height="11" Foreground="{DynamicResource CfKindSecret}" IsVisible="{Binding IsSensitive}" />
-                              <TextBlock Classes="mono" Text="{Binding Value}" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                          </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                      </DataGridTemplateColumn>
-                      <DataGridTemplateColumn Header="COMES FROM" Width="1.5*" SortMemberPath="ComesFrom">
-                        <DataGridTemplateColumn.CellTemplate>
-                          <DataTemplate DataType="vm:SettingRow">
-                            <TextBlock Text="{Binding ComesFrom}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="12,0" ToolTip.Tip="{Binding Story}" />
-                          </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                      </DataGridTemplateColumn>
-                      <DataGridTemplateColumn Header="LAYERS" Width="1.7*" SortMemberPath="LayerCount">
-                        <DataGridTemplateColumn.CellTemplate>
-                          <DataTemplate DataType="vm:SettingRow">
-                            <ItemsControl ItemsSource="{Binding Kinds}" VerticalAlignment="Center" Margin="12,0">
-                              <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                  <StackPanel Orientation="Horizontal" />
-                                </ItemsPanelTemplate>
-                              </ItemsControl.ItemsPanel>
-                              <ItemsControl.ItemTemplate>
-                                <DataTemplate DataType="vm:KindBadge">
-                                  <Border Classes="chip" ui:DynamicClasses.Classes="{Binding Css}">
-                                    <TextBlock Text="{Binding Label}" />
-                                  </Border>
-                                </DataTemplate>
-                              </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                          </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                      </DataGridTemplateColumn>
-                    </DataGrid.Columns>
-                  </DataGrid>
-                </Border>
-
-                <GridSplitter Grid.Row="1" Grid.Column="1" Background="Transparent" ResizeDirection="Columns" />
-
-                <!-- Details -->
-                <Border Grid.Row="1" Grid.Column="2" Classes="card" Padding="0">
-                  <ScrollViewer>
-                    <StackPanel Margin="18" Spacing="12" IsVisible="{Binding HasSelection}">
-                      <TextBlock Classes="caption" Text="SETTING" />
-                      <SelectableTextBlock Classes="mono" FontSize="16" FontWeight="Bold" Text="{Binding SelectedRow.Key, FallbackValue=''}" TextWrapping="Wrap" />
-                      <Border Classes="code">
-                        <SelectableTextBlock Classes="mono" Text="{Binding SelectedRow.Value, FallbackValue=''}" TextWrapping="Wrap" />
-                      </Border>
-                      <Border Classes="rating" ui:DynamicClasses.Classes="{Binding SelectedSecret.Css, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding SelectedSecret.Reason, FallbackValue=''}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <PathIcon Data="{StaticResource IconShield}" Width="12" Height="12" />
-                          <TextBlock Text="{Binding SelectedSecret.Label, FallbackValue=''}" />
-                        </StackPanel>
-                      </Border>
-                      <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding SelectedSecret.Reason, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                      <Border Classes="rating bad" IsVisible="{Binding SelectedRow.IsDead, FallbackValue=False}" HorizontalAlignment="Left">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <PathIcon Data="{StaticResource IconSleep}" Width="12" Height="12" />
-                          <TextBlock Text="Dead: not read by code" />
-                        </StackPanel>
-                      </Border>
-                      <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding SelectedRow.IsDead, FallbackValue=False}"
-                                 Text="{Binding SelectedRow.DeadReason, StringFormat='{}{0}. Safe to delete once no other environment or app reads it.', FallbackValue=''}" />
-                      <TextBlock Classes="caption" Text="STORY" Margin="0,6,0,0" />
-                      <TextBlock TextWrapping="Wrap" Text="{Binding SelectedRow.Story, FallbackValue=''}" LineHeight="20" />
-                      <TextBlock Classes="caption" Text="LAYERS, LOWEST PRIORITY FIRST" Margin="0,6,0,0" />
-                      <TreeView ItemsSource="{Binding Details}" Background="Transparent">
-                        <TreeView.Styles>
-                          <Style Selector="TreeViewItem">
-                            <Setter Property="IsExpanded" Value="True" />
-                            <Setter Property="Padding" Value="0,3" />
-                          </Style>
-                          <Style Selector="TreeViewItem:selected /template/ Border#PART_LayoutRoot">
-                            <Setter Property="Background" Value="Transparent" />
-                          </Style>
-                          <Style Selector="TreeViewItem:pointerover /template/ Border#PART_LayoutRoot">
-                            <Setter Property="Background" Value="Transparent" />
-                          </Style>
-                        </TreeView.Styles>
-                        <TreeView.ItemTemplate>
-                          <TreeDataTemplate DataType="vm:StepNode" ItemsSource="{Binding Children}">
-                            <Border Classes="node" Classes.effective="{Binding IsEffective}" Margin="0,0,4,0">
-                              <StackPanel Spacing="4">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                  <Border Classes="chip" ui:DynamicClasses.Classes="{Binding KindCss}">
-                                    <TextBlock Text="{Binding KindLabel}" />
-                                  </Border>
-                                  <Border Classes="state" Classes.effective="{Binding IsEffective}">
-                                    <TextBlock Text="{Binding State}" />
-                                  </Border>
-                                  <TextBlock Classes="muted" FontSize="11" Text="guessed" IsVisible="{Binding IsInferred}" VerticalAlignment="Center" ToolTip.Tip="Linked by matching names; check it" />
+                <Button.Flyout>
+                  <Flyout Placement="BottomEdgeAlignedLeft">
+                    <StackPanel Width="340" Spacing="6" Margin="2">
+                      <TextBlock Classes="caption" Text="SOURCES IN THE REPOSITORY" />
+                      <ItemsControl ItemsSource="{Binding Discoveries}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate DataType="vm:SourceToggle">
+                            <CheckBox IsChecked="{Binding IsOn}" IsEnabled="{Binding CanToggle}" Padding="8,4" Margin="0,2"
+                                      ToolTip.Tip="{Binding Detail}">
+                              <Grid ColumnDefinitions="Auto,*,Auto" Width="270">
+                                <PathIcon Width="13" Height="13" Margin="0,2,8,0" VerticalAlignment="Top" Data="{Binding Icon, Converter={x:Static ui:Converters.IconGeometry}}" ui:DynamicClasses.Classes="{Binding Css}" />
+                                <StackPanel Grid.Column="1" Spacing="1">
+                                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                  <TextBlock Classes="muted" FontSize="11" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
-                                <TextBlock Text="{Binding Source}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBlock Classes="muted" FontSize="12" Text="{Binding Location}" IsVisible="{Binding HasLocation}" TextWrapping="Wrap" />
-                                <TextBlock Classes="mono" Text="{Binding Value}" TextWrapping="Wrap" />
-                                <TextBlock Classes="muted" FontSize="12" Text="{Binding Note}" IsVisible="{Binding HasNote}" TextWrapping="Wrap" />
-                              </StackPanel>
-                            </Border>
-                          </TreeDataTemplate>
-                        </TreeView.ItemTemplate>
-                      </TreeView>
+                                <TextBlock Grid.Column="2" Classes="muted" FontSize="11" Text="{Binding State}" Margin="8,2,0,0" VerticalAlignment="Top" />
+                              </Grid>
+                            </CheckBox>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Text="Turning a source off traces again without it. App settings are always on." />
                     </StackPanel>
-                  </ScrollViewer>
-                </Border>
-              </Grid>
-            </TabItem>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+            </StackPanel>
+          </DockPanel>
 
-            <!-- Secrets -->
-            <TabItem>
-              <TabItem.Header>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="Secrets" />
-                  <!-- A minimum width: the tab header is measured before the count arrives. -->
-                  <TextBlock MinWidth="30" Text="{Binding ExposedCount}" Foreground="{DynamicResource CfBad}" />
-                </StackPanel>
-              </TabItem.Header>
-              <Grid RowDefinitions="Auto,*" Margin="0,12,0,0">
-                <StackPanel Orientation="Horizontal" Spacing="16" Margin="2,0,0,10">
-                  <StackPanel Orientation="Horizontal" Spacing="6"><Ellipse Width="10" Height="10" Fill="{DynamicResource CfGood}" /><TextBlock Classes="muted" Text="In a secret store" /></StackPanel>
-                  <StackPanel Orientation="Horizontal" Spacing="6"><Ellipse Width="10" Height="10" Fill="{DynamicResource CfAccent}" /><TextBlock Classes="muted" Text="Check: in doubt" /></StackPanel>
-                  <StackPanel Orientation="Horizontal" Spacing="6"><Ellipse Width="10" Height="10" Fill="{DynamicResource CfBad}" /><TextBlock Classes="muted" Text="Exposed in plain configuration" /></StackPanel>
-                </StackPanel>
-                <Border Grid.Row="1" Classes="card" Padding="6">
-                  <Panel>
-                    <ListBox Classes="plain" ItemsSource="{Binding SecretRows}">
-                      <ListBox.ItemTemplate>
-                        <DataTemplate DataType="vm:SecretRow">
-                          <Grid ColumnDefinitions="Auto,Auto,*,Auto">
-                            <Border Classes="stripe" ui:DynamicClasses.Classes="{Binding Css}" />
-                            <Border Grid.Column="1" Classes="rating" Width="112" Margin="12,0" ui:DynamicClasses.Classes="{Binding Css}">
-                              <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
+          <!-- The table and the details of the selected row -->
+          <Grid ColumnDefinitions="*,4,420" Margin="0,0,0,0">
+            <Border Classes="card" Padding="0">
+              <Panel>
+                <DataGrid ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}" IsReadOnly="True" CanUserSortColumns="False"
+                          HeadersVisibility="Column" SelectionMode="Single" RowHeight="40">
+                  <DataGrid.Columns>
+                    <DataGridTemplateColumn Width="1.7*">
+                      <DataGridTemplateColumn.Header>
+                        <ui:ColumnHeader DataContext="{Binding $parent[DataGrid].((vm:MainWindowViewModel)DataContext).KeyFilter}" />
+                      </DataGridTemplateColumn.Header>
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate DataType="vm:SettingRow">
+                          <DockPanel Margin="12,0" VerticalAlignment="Center">
+                            <Border DockPanel.Dock="Right" Classes="chip bad" Margin="6,0,0,0" IsVisible="{Binding IsDead}" ToolTip.Tip="{Binding DeadReason}">
+                              <TextBlock Text="dead" />
                             </Border>
-                            <StackPanel Grid.Column="2" Spacing="3">
-                              <TextBlock Classes="mono" FontWeight="SemiBold" Text="{Binding Key}" />
-                              <TextBlock TextWrapping="Wrap" Text="{Binding Reason}" />
-                              <TextBlock Classes="muted" FontSize="12" Text="{Binding Where}" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                            <Button Grid.Column="3" Classes="link" Content="Show" VerticalAlignment="Center" Margin="12,0"
-                                    Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowKeyCommand}" CommandParameter="{Binding Key}" />
-                          </Grid>
-                        </DataTemplate>
-                      </ListBox.ItemTemplate>
-                    </ListBox>
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" IsVisible="{Binding !SecretRows.Count}">
-                      <PathIcon Data="{StaticResource IconShield}" Width="32" Height="32" Foreground="{DynamicResource CfGood}" />
-                      <TextBlock Classes="muted" Text="Nothing here looks like a secret." />
-                    </StackPanel>
-                  </Panel>
-                </Border>
-              </Grid>
-            </TabItem>
-
-            <!-- Unused -->
-            <TabItem>
-              <TabItem.Header>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="Unused" />
-                  <!-- A minimum width: the tab header is measured before the count arrives. -->
-                  <TextBlock MinWidth="30" Text="{Binding UnusedCount}" Foreground="{DynamicResource CfMuted}" />
-                </StackPanel>
-              </TabItem.Header>
-              <Grid RowDefinitions="Auto,Auto,*" Margin="0,12,0,0">
-                <TextBlock Classes="muted" TextWrapping="Wrap" Margin="2,0,0,10"
-                           Text="Dead variables are set but nothing reads them: settings no code reads, Helm values no template reads, GitHub variables no setting or workflow uses, and Octopus variables no setting uses. Overridden values are set but a later layer always wins. Workflow rows are GitHub variables a workflow uses directly, such as a deploy action's publish profile, that no app setting reads. Check other environments before deleting." />
-                <WrapPanel Grid.Row="1" Margin="0,0,0,10">
-                  <ToggleButton Classes="pill" IsChecked="{Binding OnlyDead}" Margin="0,0,10,0">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                      <TextBlock Text="Dead only" />
-                      <TextBlock Text="{Binding DeadCount}" Foreground="{DynamicResource CfBad}" FontWeight="SemiBold" />
-                    </StackPanel>
-                  </ToggleButton>
-                  <TextBlock Classes="muted" VerticalAlignment="Center" Margin="0,0,10,0">
-                    <Run Text="{Binding NeverWinsCount}" /><Run Text=" overridden" />
-                  </TextBlock>
-                  <TextBlock Classes="muted" VerticalAlignment="Center" Margin="0,0,10,0" IsVisible="{Binding WorkflowOnlyCount, Converter={x:Static ui:Converters.Positive}}">
-                    <Run Text="{Binding WorkflowOnlyCount}" /><Run Text=" used only by workflows" />
-                  </TextBlock>
-                  <TextBlock Classes="muted" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding DeadScanText}" />
-                </WrapPanel>
-                <Border Grid.Row="2" Classes="card" Padding="6">
-                  <Panel>
-                    <ListBox Classes="plain" ItemsSource="{Binding Unused}">
-                      <ListBox.ItemTemplate>
-                        <DataTemplate DataType="vm:UnusedRow">
-                          <Grid ColumnDefinitions="96,120,*,Auto">
-                            <Border Classes="chip bad" HorizontalAlignment="Left" IsVisible="{Binding IsDead}">
-                              <TextBlock Text="DEAD" />
+                            <Border DockPanel.Dock="Right" Classes="chip" Margin="6,0,0,0" IsVisible="{Binding IsDuplicate}" ToolTip.Tip="{Binding DuplicateText}">
+                              <TextBlock Text="{Binding NameCount, StringFormat='×{0}'}" />
                             </Border>
-                            <Border Classes="chip" HorizontalAlignment="Left" IsVisible="{Binding IsNeverWins}">
-                              <TextBlock Text="never wins" />
-                            </Border>
-                            <Border Classes="chip" HorizontalAlignment="Left" IsVisible="{Binding IsWorkflowOnly}">
+                            <Border DockPanel.Dock="Right" Classes="chip" Margin="6,0,0,0" IsVisible="{Binding IsWorkflowOnly}" ToolTip.Tip="{Binding WorkflowText}">
                               <TextBlock Text="workflow" />
                             </Border>
-                            <Border Grid.Column="1" Classes="chip" ui:DynamicClasses.Classes="{Binding Css}" HorizontalAlignment="Left">
-                              <TextBlock Text="{Binding Kind}" />
-                            </Border>
-                            <StackPanel Grid.Column="2" Spacing="3">
-                              <TextBlock Classes="mono" FontWeight="SemiBold" Text="{Binding Name}" />
-                              <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap">
-                                <Run Text="{Binding Where}" /><Run Text="  ·  " /><Run Text="{Binding Detail}" />
-                              </TextBlock>
-                            </StackPanel>
-                            <Button Grid.Column="3" Classes="link" Content="Show" VerticalAlignment="Center" Margin="12,0" IsVisible="{Binding CanShow}"
-                                    Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ShowKeyCommand}" CommandParameter="{Binding Name}" />
-                          </Grid>
+                            <TextBlock Classes="mono" Text="{Binding Key}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                          </DockPanel>
                         </DataTemplate>
-                      </ListBox.ItemTemplate>
-                    </ListBox>
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" IsVisible="{Binding !Unused.Count}">
-                      <PathIcon Data="{StaticResource IconSleep}" Width="28" Height="28" Foreground="{DynamicResource CfMuted}" />
-                      <TextBlock Classes="muted" Text="Everything here is used." />
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Width="1.4*">
+                      <DataGridTemplateColumn.Header>
+                        <ui:ColumnHeader DataContext="{Binding $parent[DataGrid].((vm:MainWindowViewModel)DataContext).ValueFilter}" />
+                      </DataGridTemplateColumn.Header>
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate DataType="vm:SettingRow">
+                          <StackPanel Orientation="Horizontal" Spacing="6" Margin="12,0" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource IconLock}" Width="11" Height="11" Foreground="{DynamicResource CfKindSecret}" IsVisible="{Binding IsSensitive}" />
+                            <TextBlock Classes="mono" Text="{Binding Value}" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Width="1.5*">
+                      <DataGridTemplateColumn.Header>
+                        <ui:ColumnHeader DataContext="{Binding $parent[DataGrid].((vm:MainWindowViewModel)DataContext).ComesFromFilter}" />
+                      </DataGridTemplateColumn.Header>
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate DataType="vm:SettingRow">
+                          <TextBlock Text="{Binding ComesFrom}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="12,0" ToolTip.Tip="{Binding Story}" />
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Width="1.5*">
+                      <DataGridTemplateColumn.Header>
+                        <ui:ColumnHeader DataContext="{Binding $parent[DataGrid].((vm:MainWindowViewModel)DataContext).LayersFilter}" />
+                      </DataGridTemplateColumn.Header>
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate DataType="vm:SettingRow">
+                          <ItemsControl ItemsSource="{Binding Kinds}" VerticalAlignment="Center" Margin="12,0">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                              </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate DataType="vm:KindBadge">
+                                <Border Classes="chip" ui:DynamicClasses.Classes="{Binding Css}">
+                                  <TextBlock Text="{Binding Label}" />
+                                </Border>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" IsVisible="{Binding ShowNoMatches}">
+                  <PathIcon Data="{StaticResource IconFilter}" Width="28" Height="28" Foreground="{DynamicResource CfMuted}" />
+                  <TextBlock Classes="muted" Text="No rows match these filters." HorizontalAlignment="Center" />
+                  <Button Classes="link" Content="Show all" HorizontalAlignment="Center" Command="{Binding ClearFiltersCommand}" />
+                </StackPanel>
+              </Panel>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Background="Transparent" ResizeDirection="Columns" />
+
+            <!-- Details -->
+            <Border Grid.Column="2" Classes="card" Padding="0">
+              <ScrollViewer>
+                <StackPanel Margin="18" Spacing="12" IsVisible="{Binding HasSelection}">
+                  <TextBlock Classes="caption" Text="{Binding SelectedRow.Caption, FallbackValue='SETTING'}" />
+                  <SelectableTextBlock Classes="mono" FontSize="16" FontWeight="Bold" Text="{Binding SelectedRow.Key, FallbackValue=''}" TextWrapping="Wrap" />
+                  <Border Classes="code">
+                    <SelectableTextBlock Classes="mono" Text="{Binding SelectedRow.Value, FallbackValue=''}" TextWrapping="Wrap" />
+                  </Border>
+                  <Border Classes="rating" ui:DynamicClasses.Classes="{Binding SelectedSecret.Css, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding SelectedSecret.Reason, FallbackValue=''}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <PathIcon Data="{StaticResource IconShield}" Width="12" Height="12" />
+                      <TextBlock Text="{Binding SelectedSecret.Label, FallbackValue=''}" />
                     </StackPanel>
-                  </Panel>
-                </Border>
-              </Grid>
-            </TabItem>
-          </TabControl>
+                  </Border>
+                  <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding SelectedSecret.Reason, FallbackValue=''}" IsVisible="{Binding SelectedSecret, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                  <Border Classes="rating bad" IsVisible="{Binding SelectedRow.IsDead, FallbackValue=False}" HorizontalAlignment="Left">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <PathIcon Data="{StaticResource IconSleep}" Width="12" Height="12" />
+                      <TextBlock Text="{Binding SelectedRow.DeadLabel, FallbackValue=''}" />
+                    </StackPanel>
+                  </Border>
+                  <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding SelectedRow.IsDead, FallbackValue=False}"
+                             Text="{Binding SelectedRow.DeadReason, StringFormat='{}{0}. Safe to delete once no other environment or app reads it.', FallbackValue=''}" />
+                  <Border Classes="rating" IsVisible="{Binding SelectedRow.IsWorkflowOnly, FallbackValue=False}" HorizontalAlignment="Left">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <PathIcon Data="{StaticResource IconBranch}" Width="12" Height="12" />
+                      <TextBlock Text="Used by a workflow" />
+                    </StackPanel>
+                  </Border>
+                  <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding SelectedRow.IsWorkflowOnly, FallbackValue=False}" Text="{Binding SelectedRow.WorkflowText, FallbackValue=''}" />
+                  <TextBlock Classes="caption" Text="STORY" Margin="0,6,0,0" />
+                  <TextBlock TextWrapping="Wrap" Text="{Binding SelectedRow.Story, FallbackValue=''}" LineHeight="20" />
+                  <TextBlock Classes="caption" Text="LAYERS, LOWEST PRIORITY FIRST" Margin="0,6,0,0" />
+                  <TreeView ItemsSource="{Binding Details}" Background="Transparent">
+                    <TreeView.Styles>
+                      <Style Selector="TreeViewItem">
+                        <Setter Property="IsExpanded" Value="True" />
+                        <Setter Property="Padding" Value="0,3" />
+                      </Style>
+                      <Style Selector="TreeViewItem:selected /template/ Border#PART_LayoutRoot">
+                        <Setter Property="Background" Value="Transparent" />
+                      </Style>
+                      <Style Selector="TreeViewItem:pointerover /template/ Border#PART_LayoutRoot">
+                        <Setter Property="Background" Value="Transparent" />
+                      </Style>
+                    </TreeView.Styles>
+                    <TreeView.ItemTemplate>
+                      <TreeDataTemplate DataType="vm:StepNode" ItemsSource="{Binding Children}">
+                        <Border Classes="node" Classes.effective="{Binding IsEffective}" Margin="0,0,4,0">
+                          <StackPanel Spacing="4">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                              <Border Classes="chip" ui:DynamicClasses.Classes="{Binding KindCss}">
+                                <TextBlock Text="{Binding KindLabel}" />
+                              </Border>
+                              <Border Classes="state" Classes.effective="{Binding IsEffective}">
+                                <TextBlock Text="{Binding State}" />
+                              </Border>
+                              <TextBlock Classes="muted" FontSize="11" Text="guessed" IsVisible="{Binding IsInferred}" VerticalAlignment="Center" ToolTip.Tip="Linked by matching names; check it" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Source}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Classes="muted" FontSize="12" Text="{Binding Location}" IsVisible="{Binding HasLocation}" TextWrapping="Wrap" />
+                            <TextBlock Classes="mono" Text="{Binding Value}" TextWrapping="Wrap" />
+                            <TextBlock Classes="muted" FontSize="12" Text="{Binding Note}" IsVisible="{Binding HasNote}" TextWrapping="Wrap" />
+                          </StackPanel>
+                        </Border>
+                      </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                  </TreeView>
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+          </Grid>
         </DockPanel>
 
         <!-- Busy -->
