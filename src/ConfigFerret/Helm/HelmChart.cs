@@ -49,17 +49,21 @@ public sealed partial class HelmChart
             chart.AddSet(set);
         }
 
+        chart.AddTemplates(chartDirectory);
+        return chart;
+    }
+
+    private void AddTemplates(string chartDirectory)
+    {
         var templates = Path.Combine(chartDirectory, "templates");
         if (Directory.Exists(templates))
         {
             foreach (var file in Directory.EnumerateFiles(templates, "*.*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
             {
                 var relative = Path.GetRelativePath(chartDirectory, file).Replace('\\', '/');
-                chart.AddTemplate(relative, File.ReadAllText(file));
+                AddTemplate(relative, File.ReadAllText(file));
             }
         }
-
-        return chart;
     }
 
     /// <summary>Builds a chart from values text and template text, without touching the disk.</summary>
@@ -92,7 +96,7 @@ public sealed partial class HelmChart
 
     private void AddValuesFile(string path, string displayName) => AddValues(displayName, File.ReadAllText(path));
 
-    private void AddValues(string displayName, string yaml)
+    private void AddValues(string displayName, string yaml, int lineOffset = 0)
     {
         List<YamlNode> docs;
         try
@@ -106,28 +110,29 @@ public sealed partial class HelmChart
 
         foreach (var doc in docs)
         {
-            Walk(doc, prefix: null, displayName);
+            Walk(doc, prefix: null, displayName, lineOffset);
         }
     }
 
-    private void Walk(YamlNode node, string? prefix, string file)
+    private void Walk(YamlNode node, string? prefix, string file, int lineOffset = 0)
     {
         foreach (var (key, value) in node.Pairs())
         {
             var path = prefix is null ? key : prefix + "." + key;
+            var line = value.Line() + lineOffset;
             if (value.IsNull())
             {
-                Remove(path, file, value.Line());
+                Remove(path, file, line);
             }
             else if (value is YamlMappingNode)
             {
-                RemoveLeaf(path, file, value.Line());
-                Walk(value, path, file);
+                RemoveLeaf(path, file, line);
+                Walk(value, path, file, lineOffset);
             }
             else
             {
-                RemoveDescendants(path, file, value.Line());
-                Record(path, new HelmValueStep(file, value.Line(), Yaml.Render(value), IsRemoval: false));
+                RemoveDescendants(path, file, line);
+                Record(path, new HelmValueStep(file, line, Yaml.Render(value), IsRemoval: false));
             }
         }
     }

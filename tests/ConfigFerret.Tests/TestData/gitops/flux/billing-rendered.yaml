@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billing-config
+data:
+  Billing__Currency: EUR
+  Billing__RetryCount: "5"
+  Billing__Region: eu-west-1
+  Billing__Tier: standard
+  Smtp__Endpoint: smtp.prod.internal:25
+  Billing__InvoiceDueDays: "14"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: billing-secrets
+stringData:
+  Stripe__ApiKey: stripe-flux-s3cr3t
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing
+spec:
+  template:
+    spec:
+      containers:
+        - name: billing
+          envFrom:
+            - configMapRef:
+                name: billing-config
+            - secretRef:
+                name: billing-secrets
+          env:
+            - name: Billing__Mode
+              value: live

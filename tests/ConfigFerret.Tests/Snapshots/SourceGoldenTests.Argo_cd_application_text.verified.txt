@@ -1,0 +1,64 @@
+﻿Cache__Ttl = "600"
+  set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.cache.ttl, set in Argo CD Application orders-prod (helm.values) over values.yaml (chart default)
+  [effective]  ConfigMap orders-config (key Cache__Ttl, rendered.yaml:9) = "600"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Helm template templates/configmap.yaml (line 8) = "600" [inferred]
+                    renders .Values.cache.ttl
+      <- [overridden] values.yaml (chart default) (line 7, cache.ttl) = "300"
+      <- [effective]  Argo CD Application orders-prod (helm.values) (line 21, cache.ttl) = "600"
+
+Db__Host = "orders-db.prod.svc"
+  set in Deployment/orders env Db__Host, rendered by Helm template templates/deployment.yaml from .Values.db.host, set in values-prod.yaml over values.yaml (chart default)
+  [effective]  Deployment/orders env Db__Host (rendered.yaml:35) = "orders-db.prod.svc"
+               container orders
+    <- [effective]  Helm template templates/deployment.yaml (line 18) = "orders-db.prod.svc" [inferred]
+                    renders .Values.db.host
+      <- [overridden] values.yaml (chart default) (line 2, db.host) = "postgres.default.svc"
+      <- [effective]  values-prod.yaml (line 2, db.host) = "orders-db.prod.svc"
+
+Db__Password = "***"
+  set in Secret orders-secret, rendered by Helm template templates/secret.yaml from .Values.db.password, set in values.yaml (chart default)
+  [effective]  Secret orders-secret (key Db__Password, rendered.yaml:17) = "***"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Helm template templates/secret.yaml (line 6) = "***" [inferred]
+                    renders .Values.db.password
+      <- [effective]  values.yaml (chart default) (line 5, db.password) = "***"
+
+Db__Pool = "25"
+  set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.db.pool, set in Argo CD Application orders-prod (helm.parameters) over values.yaml (chart default)
+  [effective]  ConfigMap orders-config (key Db__Pool, rendered.yaml:8) = "25"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Helm template templates/configmap.yaml (line 7) = "25" [inferred]
+                    renders .Values.db.pool
+      <- [overridden] values.yaml (chart default) (line 4, db.pool) = "10"
+      <- [effective]  Argo CD Application orders-prod (helm.parameters) (line 26, db.pool) = "25"
+
+Db__Timeout = "45"
+  set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.db.timeout, set in Argo CD Application orders-prod (helm.values) over values.yaml (chart default) and values-prod.yaml and $values/envs/prod/orders.yaml
+  [effective]  ConfigMap orders-config (key Db__Timeout, rendered.yaml:7) = "45"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Helm template templates/configmap.yaml (line 6) = "45" [inferred]
+                    renders .Values.db.timeout
+      <- [overridden] values.yaml (chart default) (line 3, db.timeout) = "30"
+      <- [overridden] values-prod.yaml (line 3, db.timeout) = "40"
+      <- [overridden] $values/envs/prod/orders.yaml (line 3, db.timeout) = "50"
+      <- [effective]  Argo CD Application orders-prod (helm.values) (line 19, db.timeout) = "45"
+
+Features__Search = "true"
+  set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.features.search, set in Argo CD Application orders-prod (helm.parameters) over values.yaml (chart default)
+  [effective]  ConfigMap orders-config (key Features__Search, rendered.yaml:10) = "true"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Helm template templates/configmap.yaml (line 9) = "true" [inferred]
+                    renders .Values.features.search
+      <- [overridden] values.yaml (chart default) (line 9, features.search) = "false"
+      <- [effective]  Argo CD Application orders-prod (helm.parameters) (line 23, features.search) = "true"
+
+Logging__LogLevel__Default = "Warning"
+  set in Deployment/orders env Logging__LogLevel__Default, rendered by Helm template templates/deployment.yaml from .Values.logLevel, set in $values/envs/prod/orders.yaml over values.yaml (chart default)
+  [effective]  Deployment/orders env Logging__LogLevel__Default (rendered.yaml:37) = "Warning"
+               container orders
+    <- [effective]  Helm template templates/deployment.yaml (line 20) = "Warning" [inferred]
+                    renders .Values.logLevel
+      <- [overridden] values.yaml (chart default) (line 10, logLevel) = "Information"
+      <- [effective]  $values/envs/prod/orders.yaml (line 1, logLevel) = "Warning"
+

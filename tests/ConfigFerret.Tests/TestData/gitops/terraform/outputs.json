@@ -1,0 +1,42 @@
+{
+  "cache": {
+    "sensitive": false,
+    "type": [
+      "object",
+      {
+        "endpoint": "string",
+        "ttl": "number"
+      }
+    ],
+    "value": {
+      "endpoint": "redis.prod.internal:6379",
+      "ttl": 900
+    }
+  },
+  "db_host": {
+    "sensitive": false,
+    "type": "string",
+    "value": "orders-db.abc123.eu-west-1.rds.example.test"
+  },
+  "db_password": {
+    "sensitive": true,
+    "type": "string",
+    "value": "tf-s3cr3t-pw"
+  },
+  "queue_urls": {
+    "sensitive": false,
+    "type": [
+      "list",
+      "string"
+    ],
+    "value": [
+      "https://sqs.example.test/orders",
+      "https://sqs.example.test/orders-dlq"
+    ]
+  },
+  "unused_bucket": {
+    "sensitive": false,
+    "type": "string",
+    "value": "orders-artifacts"
+  }
+}

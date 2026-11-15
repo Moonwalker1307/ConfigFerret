@@ -6,7 +6,7 @@
 
 **Why is this value 42?** ConfigFerret traces every effective .NET configuration value back through all the
 layers that set it: appsettings files, environment variables, the command line, Kubernetes ConfigMaps and
-Secrets, Helm values files and Kustomize overlays.
+Secrets, Helm values files, Kustomize overlays, Argo CD and Flux releases, and Terraform outputs.
 
 ```
 Db:Timeout = "42"
@@ -116,6 +116,51 @@ var report = ConfigTracer.For(builder.Configuration)
 
 Console.WriteLine(report.Explain("Db:Timeout"));
 ```
+
+### With Argo CD, Flux or Terraform
+
+These are in the core package and read only local files: the manifests in your Git checkout and the output of
+`terraform output -json`.
+
+```csharp
+using ConfigFerret;
+using ConfigFerret.GitOps;
+using ConfigFerret.Kubernetes;
+using ConfigFerret.Terraform;
+
+// An Argo CD Application or a Flux HelmRelease becomes the Helm layers it deploys: the chart's values.yaml, its
+// values files, then the values and parameters written in the manifest, merged the way Argo CD or Flux merges them.
+var app = GitOpsApplication.Load("deploy/apps/orders-prod.yaml");
+var report = ConfigTracer.ForContainer(KubernetesManifests.LoadFile("rendered.yaml"), workload: "orders")
+    .WithGitOps(app, new GitOpsOptions
+    {
+        RepositoryRoot = "deploy",          // the local checkout: chart paths, values files, $ref/ files
+        ChartFolder = "charts/orders",      // only for a chart from a Helm or OCI repository (helm pull --untar)
+    })
+    // `terraform output -json > outputs.json`; the folder's .tf files say where each output is defined.
+    .WithTerraform(TerraformOutputs.Load(outputsFile: "outputs.json", terraformFolder: "infra"),
+        o => o.Map("ORDERS_DB_HOST", "db.host"))
+    .Trace();
+```
+
+`HelmChart.ForGitOps(app, options)` gives the same chart without the rest, for `WithHelm`. Inline values and
+parameters show as layers named after the object, for example `Argo CD Application orders-prod (helm.values)`, in
+Argo CD's order (`valueFiles`, then `values` or `valuesObject`, then `parameters`) or Flux's (chart `valuesFiles`,
+then each `valuesFrom` ConfigMap or Secret, then `spec.values`). Values from a Secret are sensitive. A chart from a
+remote repository cannot be fetched, so the trace warns and still shows the values the manifest sets.
+
+`WithGitOps` also links ConfigMap keys to inline Argo CD kustomize patches that set them, and, for a Flux
+Kustomization with `postBuild`, links each value to the `${VAR}` placeholder in the manifests under `spec.path` and
+to the `substitute` or `substituteFrom` entry that fills it. Pass the ConfigMaps and Secrets that `valuesFrom` and
+`substituteFrom` read in `GitOpsOptions.Data` when they are not in the same file.
+
+Terraform outputs link to environment variables and ConfigMap or Secret keys by name (`db_timeout` matches
+`DB_TIMEOUT`, `Db__Timeout` and `db.timeout`), marked `[inferred]`, or by explicit link. Object and list outputs are
+split into `name.path` values. From a state file (`TerraformOutputs.Load(stateFile: "terraform.tfstate")`) only the
+outputs are read, never resource attributes. Sensitive outputs are redacted like any other secret.
+
+The same sources are `IConfigSource`s, with the providers `argocd-application`, `flux-helmrelease`,
+`flux-kustomization` and `terraform-outputs` (see [Plugging in another source](#plugging-in-another-source)).
 
 ### With GitHub Actions or Octopus Deploy variables
 
@@ -442,6 +487,9 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Secrets Store CSI driver | The `SecretProviderClass` object behind a mounted CSI file or a key of a Secret it syncs (`secretObjects`), for the `azure`, `aws`, `gcp` and `vault` providers |
 | Helm | The template line that renders the key, and every values file and `--set` that set or removed the value |
 | Kustomize | Every `configMapGenerator` and `secretGenerator` across bases and overlays (`create`, `merge`, `replace`, `literals`, `envs`, `files`, `namePrefix`, `nameSuffix`, hash suffixes) |
+| Argo CD | An Application's or ApplicationSet template's Helm `valueFiles` (also `$ref/` files), `values`, `valuesObject` and `parameters` (with `forceString`), and ConfigMap data set by inline kustomize patches; other kustomize settings (`images`, `namePrefix`, `commonLabels`) become warnings |
+| Flux | A HelmRelease's chart `valuesFiles`, `valuesFrom` ConfigMaps and Secrets (`valuesKey`, `targetPath`, `optional`) and `spec.values`; a Kustomization's `postBuild` `substitute` and `substituteFrom` behind `${VAR}` placeholders |
+| Terraform | The output (or the value nested in an object or list output) with the same or a linked name, and the `.tf` file and line that defines it |
 | GitHub Actions (`ConfigFerret.GitHub`) | The organization, repository or environment variable or secret, from a workflow `env:` line, an explicit link or the same name |
 | Octopus Deploy (`ConfigFerret.Octopus`) | The project or library variable set variable whose scope fits the deployment, ordered by scope specificity |
 | HashiCorp Vault (`ConfigFerret.HashiCorp`) | The KV secret (and key, when values are read) behind an External Secrets or CSI reference, an explicit link or the same name, with version and update time |
@@ -480,6 +528,17 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 - External Secrets Operator and Secrets Store CSI values are never in the manifests, so those Secret keys and files
   show `(unknown)`. The secret store packages link the `ExternalSecretRef` step to the secret in the store.
   `spec.target.template`, `dataFrom.find`, generators and `ClusterExternalSecret` are not expanded.
+- Argo CD and Flux charts from a Helm or OCI repository are not fetched; pass the pulled chart folder. Remote values
+  files (`https://`) and `fileParameters` are not read. Argo CD `$ref/` values files are looked up in the one
+  repository checkout you pass. ApplicationSet generator parameters (`{{cluster}}`) are not filled in.
+- Argo CD kustomize patches are traced only when they are inline and set ConfigMap `data` (strategic merge, or JSON
+  patch on `/data/...`). Patch files, env patches, Flux `spec.patches` and `postRenderers` are not traced.
+- A Flux `${VAR}` link needs the source manifests under `spec.path` in the checkout, and matches the rendered
+  ConfigMap, Secret or workload by the name in Git, so a kustomize `namePrefix` there breaks it. A value with several
+  placeholders links to the source line only, and the `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation is
+  not read. `${VAR}` inside a HelmRelease's values is not linked.
+- Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
+  its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected.
 - Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace

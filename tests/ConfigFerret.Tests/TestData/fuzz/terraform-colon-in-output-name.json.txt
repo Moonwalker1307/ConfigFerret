@@ -1,0 +1,1 @@
+{"db:password": {"sensitive": true, "type": "string", "value": "pw"}, "db": {"value": {"a:b": 1}}}

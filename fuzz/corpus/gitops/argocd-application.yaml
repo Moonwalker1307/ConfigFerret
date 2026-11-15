@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: orders-prod
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://git.example.test/platform/deploy.git
+      targetRevision: main
+      path: charts/orders
+      helm:
+        releaseName: orders
+        valueFiles:
+          - values-prod.yaml
+          - $values/envs/prod/orders.yaml
+        values: |
+          db:
+            timeout: 45
+          cache:
+            ttl: 600
+        parameters:
+          - name: features.search
+            value: "true"
+            forceString: true
+          - name: db.pool
+            value: "25"
+    - repoURL: https://git.example.test/platform/deploy.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: orders

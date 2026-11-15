@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-config
+data:
+  Db__Timeout: "60"
+  Db__Pool: "10"
+  Cache__Ttl: "900"
+  Features__Search: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orders-secret
+stringData:
+  Db__Password: "flux-s3cr3t"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+spec:
+  template:
+    spec:
+      containers:
+        - name: orders
+          envFrom:
+            - configMapRef:
+                name: orders-config
+            - secretRef:
+                name: orders-secret
+          env:
+            - name: Db__Host
+              value: "orders-db.prod.svc"
+            - name: Logging__LogLevel__Default
+              value: "Debug"

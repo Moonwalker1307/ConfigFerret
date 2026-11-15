@@ -1,0 +1,249 @@
+﻿{
+  "settings": [
+    {
+      "key": "Billing__Currency",
+      "value": "EUR",
+      "sensitive": false,
+      "story": "set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (postBuild.substitute)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap billing-config",
+          "location": "key Billing__Currency, billing-rendered.yaml:6",
+          "value": "EUR",
+          "effective": true,
+          "note": "envFrom on Deployment/billing, container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/configmap.yaml",
+              "location": "line 6, ConfigMap billing-config key Billing__Currency",
+              "value": "${CURRENCY}",
+              "effective": true,
+              "note": "Flux Kustomization billing replaces ${CURRENCY} after kustomize build",
+              "origins": [
+                {
+                  "kind": "GitOps",
+                  "source": "Flux Kustomization billing (postBuild.substitute)",
+                  "location": "billing.yaml:15",
+                  "value": "EUR",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Billing__InvoiceDueDays",
+      "value": "14",
+      "sensitive": false,
+      "story": "set in ConfigMap billing-config",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap billing-config",
+          "location": "key Billing__InvoiceDueDays, billing-rendered.yaml:11",
+          "value": "14",
+          "effective": true,
+          "note": "envFrom on Deployment/billing, container billing"
+        }
+      ]
+    },
+    {
+      "key": "Billing__Mode",
+      "value": "live",
+      "sensitive": false,
+      "story": "set in Deployment/billing env Billing__Mode, set in apps/billing/deployment.yaml",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/billing env Billing__Mode",
+          "location": "billing-rendered.yaml:35",
+          "value": "live",
+          "effective": true,
+          "note": "container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/deployment.yaml",
+              "location": "line 16, workload billing, container billing env Billing__Mode",
+              "value": "${MODE:=live}",
+              "effective": true,
+              "note": "Flux Kustomization billing replaces ${MODE} after kustomize build; no loaded substitute sets MODE, so Flux uses the default 'live'"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Billing__Region",
+      "value": "eu-west-1",
+      "sensitive": false,
+      "story": "set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap billing-config",
+          "location": "key Billing__Region, billing-rendered.yaml:8",
+          "value": "eu-west-1",
+          "effective": true,
+          "note": "envFrom on Deployment/billing, container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/configmap.yaml",
+              "location": "line 8, ConfigMap billing-config key Billing__Region",
+              "value": "${REGION:=us-east-1}",
+              "effective": true,
+              "note": "Flux Kustomization billing replaces ${REGION} after kustomize build",
+              "origins": [
+                {
+                  "kind": "GitOps",
+                  "source": "Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)",
+                  "location": "billing.yaml:32",
+                  "value": "eu-west-1",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Billing__RetryCount",
+      "value": "5",
+      "sensitive": false,
+      "story": "set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (postBuild.substitute) over Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap billing-config",
+          "location": "key Billing__RetryCount, billing-rendered.yaml:7",
+          "value": "5",
+          "effective": true,
+          "note": "envFrom on Deployment/billing, container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/configmap.yaml",
+              "location": "line 7, ConfigMap billing-config key Billing__RetryCount",
+              "value": "${RETRY_COUNT}",
+              "effective": true,
+              "note": "Flux Kustomization billing replaces ${RETRY_COUNT} after kustomize build",
+              "origins": [
+                {
+                  "kind": "GitOps",
+                  "source": "Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)",
+                  "location": "billing.yaml:33",
+                  "value": "3",
+                  "effective": false
+                },
+                {
+                  "kind": "GitOps",
+                  "source": "Flux Kustomization billing (postBuild.substitute)",
+                  "location": "billing.yaml:16",
+                  "value": "5",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Billing__Tier",
+      "value": "standard",
+      "sensitive": false,
+      "story": "set in ConfigMap billing-config, set in apps/billing/configmap.yaml",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap billing-config",
+          "location": "key Billing__Tier, billing-rendered.yaml:9",
+          "value": "standard",
+          "effective": true,
+          "note": "envFrom on Deployment/billing, container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/configmap.yaml",
+              "location": "line 9, ConfigMap billing-config key Billing__Tier",
+              "value": "${TIER:=standard}",
+              "effective": true,
+              "note": "Flux Kustomization billing replaces ${TIER} after kustomize build; no loaded substitute sets TIER, so Flux uses the default 'standard'"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Smtp__Endpoint",
+      "value": "smtp.prod.internal:25",
+      "sensitive": false,
+      "story": "set in ConfigMap billing-config, set in apps/billing/configmap.yaml",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap billing-config",
+          "location": "key Smtp__Endpoint, billing-rendered.yaml:10",
+          "value": "smtp.prod.internal:25",
+          "effective": true,
+          "note": "envFrom on Deployment/billing, container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/configmap.yaml",
+              "location": "line 10, ConfigMap billing-config key Smtp__Endpoint",
+              "value": "${SMTP_HOST}:${SMTP_PORT:=25}",
+              "effective": true,
+              "note": "Flux Kustomization billing replaces ${SMTP_HOST}, ${SMTP_PORT} after kustomize build; a value with several variables is not traced further"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Stripe__ApiKey",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in Secret billing-secrets, set in apps/billing/secret.yaml, set in Flux Kustomization billing (substituteFrom Secret cluster-secrets)",
+      "layers": [
+        {
+          "kind": "KubernetesSecret",
+          "source": "Secret billing-secrets",
+          "location": "key Stripe__ApiKey, billing-rendered.yaml:18",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "envFrom on Deployment/billing, container billing",
+          "origins": [
+            {
+              "kind": "GitOps",
+              "source": "apps/billing/secret.yaml",
+              "location": "line 6, Secret billing-secrets key Stripe__ApiKey",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "note": "Flux Kustomization billing replaces ${STRIPE_KEY} after kustomize build",
+              "origins": [
+                {
+                  "kind": "GitOps",
+                  "source": "Flux Kustomization billing (substituteFrom Secret cluster-secrets)",
+                  "location": "billing.yaml:43",
+                  "value": "***",
+                  "effective": true,
+                  "sensitive": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

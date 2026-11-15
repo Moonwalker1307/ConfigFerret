@@ -50,11 +50,11 @@ internal static class StoryWriter
         {
             sb.Append(", rendered by ").Append(effective.Source).Append(" from .Values.").Append(helm.Path);
         }
-        else if (effective.Kind is LayerKind.Helm or LayerKind.Kustomize)
+        else if (effective.Kind is LayerKind.Helm or LayerKind.Kustomize or LayerKind.GitOps)
         {
             sb.Append(", set in ").Append(effective.Source);
             var overridden = step.Origins
-                .Where(o => !ReferenceEquals(o, effective) && !o.IsRemoval && o.Kind == effective.Kind)
+                .Where(o => !ReferenceEquals(o, effective) && !o.IsRemoval && SameFamily(o.Kind, effective.Kind))
                 .Select(o => o.Source)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
@@ -70,4 +70,8 @@ internal static class StoryWriter
 
         AppendUpstream(sb, effective, depth + 1);
     }
+
+    // Values files and the values a GitOps object writes inline are layers of the same Helm values.
+    private static bool SameFamily(LayerKind a, LayerKind b) =>
+        a == b || (a is LayerKind.Helm or LayerKind.GitOps && b is LayerKind.Helm or LayerKind.GitOps);
 }

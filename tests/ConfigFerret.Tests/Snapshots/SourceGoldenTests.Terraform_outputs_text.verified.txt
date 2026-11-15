@@ -1,0 +1,47 @@
+﻿CACHE__TTL = "900"
+  set in ConfigMap orders-infra from Terraform output cache.ttl
+  [effective]  ConfigMap orders-infra (key CACHE__TTL, rendered.yaml:6) = "900"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Terraform output cache.ttl (outputs.tf:15) = "900" [inferred]
+                    matched by name
+
+Cache__Endpoint = "redis.prod.internal:6379"
+  set in ConfigMap orders-infra from Terraform output cache.endpoint
+  [effective]  ConfigMap orders-infra (key Cache__Endpoint, rendered.yaml:7) = "redis.prod.internal:6379"
+               envFrom on Deployment/orders, container orders
+    <- [effective]  Terraform output cache.endpoint (outputs.tf:15) = "redis.prod.internal:6379" [inferred]
+                    matched by name
+
+DB_HOST = "orders-db.abc123.eu-west-1.rds.example.test"
+  set in Deployment/orders env DB_HOST from Terraform output db_host
+  [effective]  Deployment/orders env DB_HOST (rendered.yaml:29) = "orders-db.abc123.eu-west-1.rds.example.test"
+               container orders
+    <- [effective]  Terraform output db_host (outputs.tf:1) = "orders-db.abc123.eu-west-1.rds.example.test" [inferred]
+                    matched by name; value = aws_db_instance.orders.address
+
+DB_PASSWORD = "***"
+  set in Secret orders-db from Terraform output db_password
+  [effective]  Secret orders-db (key DB_PASSWORD, rendered.yaml:14) = "***"
+               secretKeyRef on Deployment/orders, container orders
+    <- [effective]  Terraform output db_password (outputs.tf:10) = "***" [inferred]
+                    matched by name; sensitive output
+
+DB_PORT = "5433"
+  set in Deployment/orders env DB_PORT from Terraform output db_port
+  [effective]  Deployment/orders env DB_PORT (rendered.yaml:31) = "5433"
+               container orders
+    <- [effective]  Terraform output db_port (outputs.tf:6) = "5432" [inferred]
+                    matched by name; value = aws_db_instance.orders.port; the Terraform value differs from the value seen here, so the deployment may be out of date or the value was transformed
+
+ORDERS_BUCKET = "orders-artifacts"
+  set in Deployment/orders env ORDERS_BUCKET
+  [effective]  Deployment/orders env ORDERS_BUCKET (rendered.yaml:40) = "orders-artifacts"
+               container orders
+
+Queue__Urls__1 = "https://sqs.example.test/orders-dlq"
+  set in Deployment/orders env Queue__Urls__1 from Terraform output queue_urls.1
+  [effective]  Deployment/orders env Queue__Urls__1 (rendered.yaml:38) = "https://sqs.example.test/orders-dlq"
+               container orders
+    <- [effective]  Terraform output queue_urls.1 (outputs.tf:22) = "https://sqs.example.test/orders-dlq" [inferred]
+                    matched by name; value = [aws_sqs_queue.orders.url, aws_sqs_queue.dlq.url]
+

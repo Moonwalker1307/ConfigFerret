@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-infra
+data:
+  CACHE__TTL: "900"
+  Cache__Endpoint: redis.prod.internal:6379
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orders-db
+stringData:
+  DB_PASSWORD: tf-s3cr3t-pw
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+spec:
+  template:
+    spec:
+      containers:
+        - name: orders
+          envFrom:
+            - configMapRef:
+                name: orders-infra
+          env:
+            - name: DB_HOST
+              value: orders-db.abc123.eu-west-1.rds.example.test
+            - name: DB_PORT
+              value: "5433"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db
+                  key: DB_PASSWORD
+            - name: Queue__Urls__1
+              value: https://sqs.example.test/orders-dlq
+            - name: ORDERS_BUCKET
+              value: orders-artifacts

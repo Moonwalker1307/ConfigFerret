@@ -1,0 +1,185 @@
+﻿{
+  "settings": [
+    {
+      "key": "CACHE__TTL",
+      "value": "900",
+      "sensitive": false,
+      "story": "set in ConfigMap orders-infra from Terraform output cache.ttl",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap orders-infra",
+          "location": "key CACHE__TTL, rendered.yaml:6",
+          "value": "900",
+          "effective": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Terraform",
+              "source": "Terraform output cache.ttl",
+              "location": "outputs.tf:15",
+              "value": "900",
+              "effective": true,
+              "inferred": true,
+              "note": "matched by name"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Cache__Endpoint",
+      "value": "redis.prod.internal:6379",
+      "sensitive": false,
+      "story": "set in ConfigMap orders-infra from Terraform output cache.endpoint",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap orders-infra",
+          "location": "key Cache__Endpoint, rendered.yaml:7",
+          "value": "redis.prod.internal:6379",
+          "effective": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Terraform",
+              "source": "Terraform output cache.endpoint",
+              "location": "outputs.tf:15",
+              "value": "redis.prod.internal:6379",
+              "effective": true,
+              "inferred": true,
+              "note": "matched by name"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "DB_HOST",
+      "value": "orders-db.abc123.eu-west-1.rds.example.test",
+      "sensitive": false,
+      "story": "set in Deployment/orders env DB_HOST from Terraform output db_host",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/orders env DB_HOST",
+          "location": "rendered.yaml:29",
+          "value": "orders-db.abc123.eu-west-1.rds.example.test",
+          "effective": true,
+          "note": "container orders",
+          "origins": [
+            {
+              "kind": "Terraform",
+              "source": "Terraform output db_host",
+              "location": "outputs.tf:1",
+              "value": "orders-db.abc123.eu-west-1.rds.example.test",
+              "effective": true,
+              "inferred": true,
+              "note": "matched by name; value = aws_db_instance.orders.address"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "DB_PASSWORD",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in Secret orders-db from Terraform output db_password",
+      "layers": [
+        {
+          "kind": "KubernetesSecret",
+          "source": "Secret orders-db",
+          "location": "key DB_PASSWORD, rendered.yaml:14",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "secretKeyRef on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Terraform",
+              "source": "Terraform output db_password",
+              "location": "outputs.tf:10",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "inferred": true,
+              "note": "matched by name; sensitive output"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "DB_PORT",
+      "value": "5433",
+      "sensitive": false,
+      "story": "set in Deployment/orders env DB_PORT from Terraform output db_port",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/orders env DB_PORT",
+          "location": "rendered.yaml:31",
+          "value": "5433",
+          "effective": true,
+          "note": "container orders",
+          "origins": [
+            {
+              "kind": "Terraform",
+              "source": "Terraform output db_port",
+              "location": "outputs.tf:6",
+              "value": "5432",
+              "effective": true,
+              "inferred": true,
+              "note": "matched by name; value = aws_db_instance.orders.port; the Terraform value differs from the value seen here, so the deployment may be out of date or the value was transformed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ORDERS_BUCKET",
+      "value": "orders-artifacts",
+      "sensitive": false,
+      "story": "set in Deployment/orders env ORDERS_BUCKET",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/orders env ORDERS_BUCKET",
+          "location": "rendered.yaml:40",
+          "value": "orders-artifacts",
+          "effective": true,
+          "note": "container orders"
+        }
+      ]
+    },
+    {
+      "key": "Queue__Urls__1",
+      "value": "https://sqs.example.test/orders-dlq",
+      "sensitive": false,
+      "story": "set in Deployment/orders env Queue__Urls__1 from Terraform output queue_urls.1",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/orders env Queue__Urls__1",
+          "location": "rendered.yaml:38",
+          "value": "https://sqs.example.test/orders-dlq",
+          "effective": true,
+          "note": "container orders",
+          "origins": [
+            {
+              "kind": "Terraform",
+              "source": "Terraform output queue_urls.1",
+              "location": "outputs.tf:22",
+              "value": "https://sqs.example.test/orders-dlq",
+              "effective": true,
+              "inferred": true,
+              "note": "matched by name; value = [aws_sqs_queue.orders.url, aws_sqs_queue.dlq.url]"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

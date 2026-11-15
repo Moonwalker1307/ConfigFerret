@@ -1,0 +1,38 @@
+# argocd app manifests orders-prod
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-config
+data:
+  Db__Timeout: "45"
+  Db__Pool: "25"
+  Cache__Ttl: "600"
+  Features__Search: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orders-secret
+stringData:
+  Db__Password: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+spec:
+  template:
+    spec:
+      containers:
+        - name: orders
+          image: registry.example.test/orders:1.4.2
+          envFrom:
+            - configMapRef:
+                name: orders-config
+            - secretRef:
+                name: orders-secret
+          env:
+            - name: Db__Host
+              value: "orders-db.prod.svc"
+            - name: Logging__LogLevel__Default
+              value: "Warning"

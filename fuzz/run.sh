@@ -44,7 +44,7 @@ fi
 
 dict=()
 case "$target" in
-  json|unused|workspace) dict=(-dict="$here/dictionaries/json.dict") ;;
+  json|unused|workspace|terraform) dict=(-dict="$here/dictionaries/json.dict") ;;
   github|octopus|kubernetes-cluster) dict=(-dict="$here/dictionaries/api.dict") ;;
   vault|consul) dict=(-dict="$here/dictionaries/hashicorp.dict") ;;
   azure-keyvault|azure-appconfig) dict=(-dict="$here/dictionaries/azure.dict") ;;

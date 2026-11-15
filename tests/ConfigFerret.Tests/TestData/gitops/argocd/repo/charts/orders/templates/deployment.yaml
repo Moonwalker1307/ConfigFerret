@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  template:
+    spec:
+      containers:
+        - name: orders
+          image: registry.example.test/orders:1.4.2
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+            - secretRef:
+                name: {{ .Release.Name }}-secret
+          env:
+            - name: Db__Host
+              value: {{ .Values.db.host | quote }}
+            - name: Logging__LogLevel__Default
+              value: {{ .Values.logLevel | quote }}
