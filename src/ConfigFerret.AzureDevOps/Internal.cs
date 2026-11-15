@@ -61,12 +61,11 @@ internal static class JsonRead
             yield break;
         }
 
-        foreach (var property in element.EnumerateObject())
+        foreach (var (name, value) in element.EnumerateObject()
+            .Select(property => (Name: Name(property), property.Value))
+            .Where(pair => pair.Name is not null))
         {
-            if (Name(property) is { } name)
-            {
-                yield return (name, property.Value);
-            }
+            yield return (name!, value);
         }
     }
 

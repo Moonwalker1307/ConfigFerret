@@ -40,7 +40,7 @@ public sealed class GitLabVariablesTests : IDisposable
         hidden,
         raw = false,
         environment_scope = scope,
-        description = (string?)null,
+        description = default(string),
     };
 
     internal static string Variables(params object[] items) => JsonSerializer.Serialize(items);

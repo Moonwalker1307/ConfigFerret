@@ -42,13 +42,10 @@ internal sealed class AzureDevOpsOptionsValidator(string sectionPath, IConfigura
             failures.Add($"{patKey} and {bearerKey} are both set. Set only one.");
         }
 
-        foreach (var key in new[] { patKey, bearerKey })
-        {
-            if (CredentialGuard.FindAppSettingsFile(configuration, key) is { } file)
-            {
-                failures.Add(CredentialGuard.InAppSettings(key, file));
-            }
-        }
+        failures.AddRange(new[] { patKey, bearerKey }
+            .Select(key => (Key: key, File: CredentialGuard.FindAppSettingsFile(configuration, key)))
+            .Where(found => found.File is not null)
+            .Select(found => CredentialGuard.InAppSettings(found.Key, found.File!)));
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }

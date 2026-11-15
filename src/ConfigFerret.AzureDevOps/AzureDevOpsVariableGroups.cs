@@ -166,9 +166,10 @@ public sealed class AzureDevOpsVariableGroups
         {
             var groups = new List<AzureDevOpsVariableGroup>();
             string? continuation = null;
+            var query = new StringBuilder();
             for (var page = 0; page < MaxPages; page++)
             {
-                var query = new StringBuilder("?");
+                query.Clear().Append('?');
                 if (groupName is not null)
                 {
                     query.Append("groupName=").Append(Uri.EscapeDataString(groupName)).Append('&');
