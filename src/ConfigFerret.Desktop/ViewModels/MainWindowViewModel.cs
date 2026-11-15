@@ -305,7 +305,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool OnlyDead { get; set; }
 
-    /// <summary>Variables nothing reads: settings no code reads, Helm values no template reads, and GitHub or Octopus variables no setting uses.</summary>
+    /// <summary>Variables nothing reads: settings no code reads, Helm values no template reads, GitHub variables no setting or workflow uses, and Octopus variables no setting uses.</summary>
     [ObservableProperty]
     public partial int DeadCount { get; set; }
 
@@ -946,7 +946,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 variable.Tool,
                 variable.Name,
                 variable.Detail,
-                "No setting in this trace uses it",
+                variable.Tool.StartsWith("GitHub", StringComparison.Ordinal) ? "No setting in this trace or workflow uses it" : "No setting in this trace uses it",
                 IsDead: true) { CanShow = false });
         }
 

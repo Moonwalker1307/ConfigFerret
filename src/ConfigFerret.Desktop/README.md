@@ -11,8 +11,8 @@ it and scans it for `appsettings` files, Helm charts, Kustomize overlays, Kubern
 GitHub Actions variables and Octopus Deploy variables to what it finds, then shows:
 
 - the merged configuration, with the source of each value
-- dead variables, marked in red: settings no code reads, Helm values no template reads, and GitHub or Octopus
-  variables no setting uses
+- dead variables, marked in red: settings no code reads, Helm values no template reads, GitHub variables no
+  setting or workflow uses, and Octopus variables no setting uses
 - values that a later layer always overrides
 - a secrets audit: green means the value is kept in a secret store, orange means check it, red means a secret value
   sits in plain configuration

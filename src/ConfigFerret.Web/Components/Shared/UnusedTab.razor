@@ -1,7 +1,7 @@
 <div class="column pad-top">
     <p class="muted">
-        Dead variables are set but nothing reads them: settings no code reads, Helm values no template reads, and GitHub or Octopus
-        variables no setting uses. Overridden values are set but a later layer always wins. Check other environments before deleting.
+        Dead variables are set but nothing reads them: settings no code reads, Helm values no template reads, GitHub variables no
+        setting or workflow uses, and Octopus variables no setting uses. Overridden values are set but a later layer always wins. Check other environments before deleting.
     </p>
     <div class="filters">
         <button class="pill @(Vm.OnlyDead ? "checked" : null)" aria-pressed="@(Vm.OnlyDead ? "true" : "false")" @onclick="() => Vm.OnlyDead = !Vm.OnlyDead">
