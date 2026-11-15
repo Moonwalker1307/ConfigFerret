@@ -153,4 +153,30 @@ public sealed class VariableRowsTests : IDisposable
         viewModel.FilterText = "deploy.yml";
         Assert.Equal(2, viewModel.Rows.Count);
     }
+
+    [Fact]
+    public void The_duplicated_names_tile_shows_names_set_in_more_than_one_row()
+    {
+        var report = ConfigTracer.For(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Db:Host"] = "a", ["Other"] = "b" }).Build()).Trace();
+        var result = new TraceResult(report, report.FindUnused(), [], [], [],
+        [
+            new UnusedVariable("GitHub Actions", "ELWIZ_DB", "repository secret (contoso/web)") { IsSecret = true },
+            new UnusedVariable("GitHub Actions", "DB__HOST", "repository variable (contoso/web)"),
+        ])
+        {
+            WorkflowVariables = [new WorkflowVariable("elwiz_db", "environment secret (production)", "deploy.yml line 3") { IsSecret = true }],
+        };
+        using var viewModel = Show(result);
+
+        Assert.Equal(4, viewModel.DuplicateCount);
+        Assert.True(viewModel.HasDuplicates);
+        Assert.False(viewModel.Rows.Single(r => r.Key == "Other").IsDuplicate);
+        Assert.Equal(2, viewModel.Rows.Single(r => r.Key == "Db:Host").NameCount);
+
+        viewModel.SelectTileCommand.Execute("Duplicate");
+
+        Assert.True(viewModel.IsDuplicateTile);
+        Assert.Equal(["DB__HOST", "Db:Host"], viewModel.Rows.Take(2).Select(r => r.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(4, viewModel.Rows.Count);
+    }
 }

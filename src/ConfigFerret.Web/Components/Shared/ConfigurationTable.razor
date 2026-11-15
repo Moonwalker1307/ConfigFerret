@@ -70,6 +70,10 @@
                         <span class="cell key">
                             <span class="mono bold ellipsis">@row.Key</span>
                             <span class="flags">
+                                @if (row.IsDuplicate)
+                                {
+                                    <span class="chip" title="@row.DuplicateText">×@row.NameCount</span>
+                                }
                                 @if (row.IsWorkflowOnly)
                                 {
                                     <span class="chip" title="@row.WorkflowText">workflow</span>

@@ -20,8 +20,9 @@ GitHub Actions variables and Octopus Deploy variables to what it finds, then sho
 ### Filters
 
 The stat tiles above the table are the filters: click **overridden**, **from upstream**, **secrets protected**,
-**secrets to check**, **secrets exposed**, **dead variables** or **used by workflows** to show only those rows, and
-click it again (or **all variables**) to show everything. The search box looks in keys, values, sources and variable
+**secrets to check**, **secrets exposed**, **dead variables**, **used by workflows** or **duplicated names** to show only those rows, and
+click it again (or **all variables**) to show everything. **Duplicated names** shows names set in more than one row, such as a secret set for the repository and for an
+environment, or `Db:Host` and `DB__HOST` (`:` and `__` count as the same, case is ignored). The search box looks in keys, values, sources and variable
 names, so `ELWIZ_DB` finds a GitHub secret whether it is a row of its own or a layer of a setting.
 
 Each column header has a filter button, like a spreadsheet: sort A to Z or Z to A, search the column, and tick the

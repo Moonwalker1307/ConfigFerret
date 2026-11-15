@@ -310,6 +310,15 @@
                 </StackPanel>
               </Border>
             </Button>
+            <Button Classes="tilebutton" Classes.selected="{Binding IsDuplicateTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="Duplicate"
+                    IsVisible="{Binding HasDuplicates}" ToolTip.Tip="Names set in more than one place, such as a secret set for the repository and for an environment, or Db:Host and DB__HOST">
+              <Border Classes="tile check">
+                <StackPanel>
+                  <TextBlock Classes="number" Text="{Binding DuplicateCount, Converter={x:Static ui:Converters.Number}}" />
+                  <TextBlock Classes="muted" FontSize="12" Text="duplicated names" />
+                </StackPanel>
+              </Border>
+            </Button>
           </WrapPanel>
 
           <!-- Search, what the repository holds, and the trace's notes -->
@@ -398,6 +407,9 @@
                           <DockPanel Margin="12,0" VerticalAlignment="Center">
                             <Border DockPanel.Dock="Right" Classes="chip bad" Margin="6,0,0,0" IsVisible="{Binding IsDead}" ToolTip.Tip="{Binding DeadReason}">
                               <TextBlock Text="dead" />
+                            </Border>
+                            <Border DockPanel.Dock="Right" Classes="chip" Margin="6,0,0,0" IsVisible="{Binding IsDuplicate}" ToolTip.Tip="{Binding DuplicateText}">
+                              <TextBlock Text="{Binding NameCount, StringFormat='×{0}'}" />
                             </Border>
                             <Border DockPanel.Dock="Right" Classes="chip" Margin="6,0,0,0" IsVisible="{Binding IsWorkflowOnly}" ToolTip.Tip="{Binding WorkflowText}">
                               <TextBlock Text="workflow" />

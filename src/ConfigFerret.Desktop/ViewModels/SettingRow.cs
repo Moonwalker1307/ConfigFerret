@@ -80,6 +80,18 @@ public sealed class SettingRow
     /// <summary>Where a workflow uses this variable, for example "deploy.yml line 12", when only a workflow uses it.</summary>
     public string? WorkflowUse { get; init; }
 
+    /// <summary>How many rows share this row's name, counting <c>:</c> and <c>__</c> as the same and ignoring case. 1 when the name is unique.</summary>
+    public int NameCount { get; internal set; } = 1;
+
+    /// <summary>True when another row has the same name, such as a GitHub secret set both for the repository and an environment.</summary>
+    public bool IsDuplicate => NameCount > 1;
+
+    /// <summary>A tooltip for the duplicate chip.</summary>
+    public string DuplicateText => $"{NameCount} rows have this name";
+
+    /// <summary>The name used to find duplicates: <c>:</c> written as <c>__</c>, upper case.</summary>
+    public string NormalizedName => Key.Replace(":", "__", StringComparison.Ordinal).ToUpperInvariant();
+
     /// <summary>True for a GitHub variable a workflow uses directly while no app setting does.</summary>
     public bool IsWorkflowOnly => WorkflowUse is not null;
 

@@ -314,6 +314,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(HasWorkflowOnly))]
     public partial int WorkflowOnlyCount { get; set; }
 
+    /// <summary>Rows whose name another row also has, such as a secret set for the repository and for an environment.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDuplicates))]
+    public partial int DuplicateCount { get; set; }
+
+    /// <summary>True when some names appear in more than one row, to show their tile.</summary>
+    public bool HasDuplicates => DuplicateCount > 0;
+
+    /// <summary>The duplicated-names tile is the active filter.</summary>
+    public bool IsDuplicateTile => ActiveTile == TileFilter.Duplicate;
+
     /// <summary>True when some GitHub variables are used only by workflows, to show their tile.</summary>
     public bool HasWorkflowOnly => WorkflowOnlyCount > 0;
 
@@ -330,7 +341,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     /// <summary>The stat tile used as a filter. <see cref="TileFilter.All"/> shows every row.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsAllTile), nameof(IsOverriddenTile), nameof(IsUpstreamTile), nameof(IsProtectedTile), nameof(IsCheckTile), nameof(IsExposedTile), nameof(IsDeadTile), nameof(IsWorkflowTile))]
+    [NotifyPropertyChangedFor(nameof(IsAllTile), nameof(IsOverriddenTile), nameof(IsUpstreamTile), nameof(IsProtectedTile), nameof(IsCheckTile), nameof(IsExposedTile), nameof(IsDeadTile), nameof(IsWorkflowTile), nameof(IsDuplicateTile))]
     public partial TileFilter ActiveTile { get; set; }
 
     /// <summary>The "all" tile is the active filter.</summary>
@@ -1000,6 +1011,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         WorkflowOnlyCount = result.WorkflowVariables.Count;
         _allRows.AddRange(VariableRows(result));
         RowCount = _allRows.Count;
+        foreach (var group in _allRows.GroupBy(r => r.NormalizedName, StringComparer.Ordinal))
+        {
+            var count = group.Count();
+            foreach (var row in group)
+            {
+                row.NameCount = count;
+            }
+        }
+
+        DuplicateCount = _allRows.Count(r => r.IsDuplicate);
         foreach (var filter in ColumnFilters)
         {
             filter.Load(_allRows);
@@ -1132,7 +1153,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         Rows.Clear();
         Problems.Clear();
         SecretRows.Clear();
-        TotalCount = RowCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = ProblemCount = DeadCount = WorkflowOnlyCount = 0;
+        TotalCount = RowCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = ProblemCount = DeadCount = WorkflowOnlyCount = DuplicateCount = 0;
         DeadScanText = null;
         SelectedRow = null;
         HasResult = false;
@@ -1185,6 +1206,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         TileFilter.Exposed => row.Rating == SecretRating.Exposed,
         TileFilter.Dead => row.IsDead,
         TileFilter.Workflow => row.IsWorkflowOnly,
+        TileFilter.Duplicate => row.IsDuplicate,
         _ => true,
     };
 
@@ -1197,6 +1219,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         var selected = SelectedRow;
         IEnumerable<SettingRow> shown = _allRows.Where(r => r.Matches(FilterText) && PassesTile(r) && ColumnFilters.All(c => c.Matches(r)));
+        if (SortColumn is null && ActiveTile == TileFilter.Duplicate)
+        {
+            shown = shown.OrderBy(r => r.NormalizedName, StringComparer.Ordinal);
+        }
+
         if (SortColumn is { } column)
         {
             Func<SettingRow, string> text = column switch
@@ -1447,4 +1474,7 @@ public enum TileFilter
 
     /// <summary>GitHub variables only a workflow uses.</summary>
     Workflow,
+
+    /// <summary>Names that more than one row has.</summary>
+    Duplicate,
 }

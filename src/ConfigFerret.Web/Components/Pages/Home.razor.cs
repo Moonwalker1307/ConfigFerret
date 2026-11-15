@@ -32,6 +32,7 @@ public sealed partial class Home
         new(TileFilter.Exposed, "secrets exposed", "bad", "Secrets in plain configuration", vm => vm.ExposedCount),
         new(TileFilter.Dead, "dead variables", "bad", "Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses", vm => vm.DeadCount),
         new(TileFilter.Workflow, "used by workflows", null, "GitHub variables and secrets a workflow uses directly, while no app setting does", vm => vm.WorkflowOnlyCount, vm => vm.HasWorkflowOnly),
+        new(TileFilter.Duplicate, "duplicated names", "check", "Names set in more than one place, such as a secret set for the repository and for an environment, or Db:Host and DB__HOST", vm => vm.DuplicateCount, vm => vm.HasDuplicates),
     ];
 
     /// <summary>This tab's view model.</summary>
