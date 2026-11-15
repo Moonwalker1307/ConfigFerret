@@ -129,6 +129,10 @@ public sealed class GitHubVariables
                 // Organization entries do not exist for a user-owned repository, and secret names need an extra permission.
                 warnings.Add($"Skipped GitHub {Describe(scope)} {(kind == GitHubVariableKind.Secret ? "secrets" : "variables")}: {ex.Message}");
             }
+            catch (HttpRequestException ex) when (ex.StatusCode is HttpStatusCode.UnprocessableEntity && scope == GitHubVariableScope.Organization)
+            {
+                // GitHub answers 422 Validation Failed when the owner is a user, not an organization: there is nothing to read.
+            }
         }
 
         public async Task ReadAsync(
