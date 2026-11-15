@@ -44,6 +44,7 @@ package stays offline and never handles credentials unless you add one:
 | `ConfigFerret.KubernetesCluster` | A workload, its ConfigMaps, opt-in Secrets, ExternalSecrets and SecretProviderClasses, read from a live cluster through a kubeconfig or the pod's service account ([readme](src/ConfigFerret.KubernetesCluster/README.md)) |
 | `ConfigFerret.Azure` | Azure Key Vault secrets (names and properties, values only when asked) and Azure App Configuration key-values, Key Vault references and feature flags, read with the Azure SDK ([readme](src/ConfigFerret.Azure/README.md)) |
 | `ConfigFerret.Aws` | AWS Secrets Manager secrets (and JSON secret properties) and Systems Manager Parameter Store parameters, read with the AWS SDK ([readme](src/ConfigFerret.Aws/README.md)) |
+| `ConfigFerret.GoogleCloud` | Google Cloud Secret Manager secrets (names, labels and version states; values only when asked), read with Application Default Credentials ([readme](src/ConfigFerret.GoogleCloud/README.md)) |
 
 To trace from the command line without writing code, install the `configferret` command instead:
 
@@ -253,6 +254,25 @@ to `:`. Only names and metadata are read unless `IncludeValues` is on; secret an
 redacted. `AddConfigFerretAwsSecretsManager` and `AddConfigFerretAwsParameterStore` register both from configuration;
 startup fails if an access key is in an `appsettings*.json` file.
 
+### With Google Cloud Secret Manager
+
+```csharp
+using ConfigFerret.GoogleCloud;  // dotnet package add ConfigFerret.GoogleCloud
+
+// Signs in with Application Default Credentials unless you pass an access token, a credential or a service account key.
+var gcp = await GcpSecrets.LoadAsync(new GcpSecretManagerOptions { ProjectId = "contoso-prod", IncludeVersions = true });
+
+var report = ConfigTracer.For(builder.Configuration)
+    .WithGcpSecretManager(gcp)
+    .Trace();
+```
+
+Secrets are linked from External Secrets Operator `gcpsm` references and Secrets Store CSI `resourceName` values for
+certain, and from environment variables and keys with the same name (`Db__Timeout` for `Db:Timeout`) as inferred
+links. Only names and metadata are read unless you turn on `IncludeValues`, and every value is marked sensitive. From
+configuration, use `builder.Services.AddConfigFerretGcpSecretManager(builder.Configuration.GetSection("ConfigFerret:GcpSecretManager"))`
+and `await tracer.WithGcpSecretManagerAsync(app.Services)`.
+
 ### Inside a running pod
 
 ```csharp
@@ -395,6 +415,7 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Consul KV (`ConfigFerret.HashiCorp`) | The key under the prefix that sets the configuration key, including keys inside expanded JSON values |
 | Live cluster (`ConfigFerret.KubernetesCluster`) | The same Kubernetes layers, read from the API server for one workload instead of from manifest files |
 | AWS (`ConfigFerret.Aws`) | The Secrets Manager secret or JSON property, or the Parameter Store parameter, from an External Secrets reference, an explicit link, the same name or the AWS configuration providers' key mapping |
+| Google Cloud Secret Manager (`ConfigFerret.GoogleCloud`) | The secret, from an External Secrets Operator or CSI reference, an explicit link or the same name, with its version state |
 
 Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and `List` documents.
 
@@ -439,6 +460,7 @@ dotnet pack src/ConfigFerret.GitHub -c Release
 dotnet pack src/ConfigFerret.Octopus -c Release
 dotnet pack src/ConfigFerret.HashiCorp -c Release
 dotnet pack src/ConfigFerret.KubernetesCluster -c Release
+dotnet pack src/ConfigFerret.GoogleCloud -c Release
 dotnet pack src/ConfigFerret.Tool -c Release
 ```
 

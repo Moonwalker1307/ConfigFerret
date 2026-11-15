@@ -1,0 +1,4 @@
+	{"secrets":[{"name":"projects/1/locations/europe-west1/secrets/Db__Timeout"}]}
+%%
+HTTP 403
+{"error":{"code":403,"message":"Permission denied.","status":"PERMISSION_DENIED"}}

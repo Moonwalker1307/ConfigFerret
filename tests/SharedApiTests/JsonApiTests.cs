@@ -149,6 +149,9 @@ public class JsonApiTests
     [InlineData("""{"errors":["a",1,"b","c","d"]}""", "Example returned 401 Unauthorized for /v1/items. a; b; c")]
     [InlineData("""{"errors":[]}""", "Example returned 401 Unauthorized for /v1/items.")]
     [InlineData("""{"errors":"x"}""", "Example returned 401 Unauthorized for /v1/items.")]
+    [InlineData("""{"error":{"code":403,"message":"Permission denied.","status":"PERMISSION_DENIED"}}""", "Example returned 401 Unauthorized for /v1/items. Permission denied.")]
+    [InlineData("""{"error":{"message":7}}""", "Example returned 401 Unauthorized for /v1/items.")]
+    [InlineData("""{"error":"x"}""", "Example returned 401 Unauthorized for /v1/items.")]
     [InlineData("""{"message":"\ud800"}""", "Example returned 401 Unauthorized for /v1/items.")]
     public async Task Adds_the_servers_error_message_when_there_is_one(string body, string expected)
     {

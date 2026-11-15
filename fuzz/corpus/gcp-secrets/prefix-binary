@@ -1,0 +1,5 @@
+{"secrets":[{"name":"projects/1/secrets/DbPassword"},{"name":"projects/1/secrets/Other"}]}
+%%
+{"versions":[{"name":"projects/1/secrets/DbPassword/versions/1","state":"ENABLED"}]}
+%%
+{"payload":{"data":"//79"}}

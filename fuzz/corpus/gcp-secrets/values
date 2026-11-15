@@ -1,0 +1,9 @@
+{"secrets":[{"name":"projects/1/secrets/Db"},{"name":"projects/1/secrets/Gone"}]}
+%%
+{"versions":[{"name":"projects/1/secrets/Db/versions/2","state":"ENABLED","createTime":"2026-10-01T08:30:00Z"},{"name":"projects/1/secrets/Db/versions/1","state":"DISABLED"}]}
+%%
+{"name":"projects/1/secrets/Db/versions/2","payload":{"data":"eyJhIjoiaHVudGVyMiJ9"}}
+%%
+{"versions":[{"name":"projects/1/secrets/Gone/versions/1","state":"DESTROYED"}],"nextPageToken":"x"}
+%%
+{"versions":[]}
