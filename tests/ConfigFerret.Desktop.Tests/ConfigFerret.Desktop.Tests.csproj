@@ -13,8 +13,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
-    <PackageReference Include="xunit.v3" Version="4.0.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" PrivateAssets="All" />
+    <!-- Stays on xunit.v3 3.x: Avalonia.Headless.XUnit 12.1.6 calls an xunit 3 API that xunit 4 removed, so every
+         [AvaloniaFact] fails discovery with a MissingMethodException. Move to 4.x when Avalonia ships a build for it. -->
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="All" />
     <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.6" />
     <PackageReference Include="Avalonia.Skia" Version="12.1.6" />
   </ItemGroup>
