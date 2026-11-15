@@ -224,9 +224,9 @@ public class AwsServiceCollectionTests
         await Assert.ThrowsAsync<ArgumentNullException>(() => AwsTracerExtensions.WithAwsParameterStoreAsync(null!, provider, ct));
         await Assert.ThrowsAsync<ArgumentNullException>(() => tracer.WithAwsParameterStoreAsync(null!, ct));
         var configuration = new ConfigurationBuilder().Build();
-        Assert.Throws<ArgumentNullException>(() => ((IServiceCollection)null!).AddConfigFerretAwsSecretsManager(configuration));
+        Assert.Throws<ArgumentNullException>(() => AwsServiceCollectionExtensions.AddConfigFerretAwsSecretsManager(null!, configuration));
         Assert.Throws<ArgumentNullException>(() => new ServiceCollection().AddConfigFerretAwsSecretsManager(null!));
-        Assert.Throws<ArgumentNullException>(() => ((IServiceCollection)null!).AddConfigFerretAwsParameterStore(configuration));
+        Assert.Throws<ArgumentNullException>(() => AwsServiceCollectionExtensions.AddConfigFerretAwsParameterStore(null!, configuration));
         Assert.Throws<ArgumentNullException>(() => new ServiceCollection().AddConfigFerretAwsParameterStore(null!));
     }
 }

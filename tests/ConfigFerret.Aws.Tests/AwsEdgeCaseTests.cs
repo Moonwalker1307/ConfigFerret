@@ -379,14 +379,21 @@ public class AwsEdgeCaseTests
 
     private sealed class TrackingHandler : HttpMessageHandler
     {
+        private readonly List<HttpResponseMessage> _sent = [];
+
         public bool Disposed { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            _sent.Add(response);
+            return Task.FromResult(response);
+        }
 
         protected override void Dispose(bool disposing)
         {
             Disposed = true;
+            _sent.ForEach(r => r.Dispose());
             base.Dispose(disposing);
         }
     }

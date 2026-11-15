@@ -12,6 +12,8 @@ namespace ConfigFerret.Aws.Tests;
 /// </summary>
 internal sealed class FakeAws : HttpMessageHandler
 {
+    private readonly List<HttpResponseMessage> _sent = [];
+
     public const string SecretKey = "wJalrXUtnFEMI/K7MDENG/never-printed";
 
     private readonly Dictionary<string, Queue<(HttpStatusCode Status, string Body)>> _responses = new(StringComparer.Ordinal);
@@ -79,7 +81,9 @@ internal sealed class FakeAws : HttpMessageHandler
         SigningHeaders.Add(string.Join(" ", request.Headers.Where(h => h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) || h.Key.Equals("X-Amz-Security-Token", StringComparison.OrdinalIgnoreCase)).SelectMany(h => h.Value)));
         if (_generators.TryGetValue(operation, out var generate))
         {
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(generate(Operations(operation).Count() - 1), Encoding.UTF8, "application/x-amz-json-1.1") };
+            var generated = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(generate(Operations(operation).Count() - 1), Encoding.UTF8, "application/x-amz-json-1.1") };
+            _sent.Add(generated);
+            return generated;
         }
 
         var (status, text) = _responses.TryGetValue(operation, out var queue) && queue.Count > 0
@@ -91,8 +95,19 @@ internal sealed class FakeAws : HttpMessageHandler
             response.Headers.Add("x-amzn-RequestId", "fake-request");
         }
 
+        _sent.Add(response);
         return response;
     }
 
     private static bool IsSuccess(HttpStatusCode status) => (int)status is >= 200 and < 300;
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _sent.ForEach(r => r.Dispose());
+        }
+
+        base.Dispose(disposing);
+    }
 }
