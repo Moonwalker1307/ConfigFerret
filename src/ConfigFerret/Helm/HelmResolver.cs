@@ -5,16 +5,30 @@ namespace ConfigFerret.Helm;
 /// <summary>Links ConfigMap keys and workload env entries to Helm templates and values files.</summary>
 internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
 {
-    public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) => layer.Reference switch
-    {
-        ConfigMapKeyRef cm => ResolveTemplate(cm.Key, layer.Value),
-        SecretKeyRef s => ResolveTemplate(s.Key, layer.Value),
-        WorkloadEnvRef env => ResolveTemplate(env.Name, layer.Value),
-        HelmValueRef v => ResolveValues(v.Path),
-        _ => [],
-    };
+    private bool _warned;
 
-    private List<ProvenanceStep> ResolveTemplate(string name, string? renderedValue)
+    public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
+    {
+        if (!_warned)
+        {
+            _warned = true;
+            foreach (var warning in chart.Warnings)
+            {
+                diagnostics.Warn(warning);
+            }
+        }
+
+        return layer.Reference switch
+        {
+            ConfigMapKeyRef cm => ResolveTemplate(cm.Key, layer.Value, layer.IsSensitive),
+            SecretKeyRef s => ResolveTemplate(s.Key, layer.Value, secret: true),
+            WorkloadEnvRef env => ResolveTemplate(env.Name, layer.Value, layer.IsSensitive),
+            HelmValueRef v => ResolveValues(v.Path),
+            _ => [],
+        };
+    }
+
+    private List<ProvenanceStep> ResolveTemplate(string name, string? renderedValue, bool secret)
     {
         var uses = chart.FindUses(name);
         if (uses.Count == 0)
@@ -27,9 +41,13 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
             ?? uses[0];
         var helmValue = chart.GetValue(use.ValuesPath);
         var note = $"renders .Values.{use.ValuesPath}";
+        var sensitive = chart.IsSensitivePath(use.ValuesPath);
         if (renderedValue is not null && helmValue is not null && !string.Equals(helmValue, renderedValue, StringComparison.Ordinal))
         {
-            note += $"; the values give '{helmValue}' but the manifest has '{renderedValue}', so the release may be out of date or the template transforms it";
+            // Notes are not redacted, so a secret's values are never written into one.
+            note += secret || sensitive
+                ? "; the values differ from the manifest, so the release may be out of date or the template transforms it"
+                : $"; the values give '{helmValue}' but the manifest has '{renderedValue}', so the release may be out of date or the template transforms it";
         }
 
         return
@@ -40,6 +58,7 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
                 Source = $"Helm template {use.Template}",
                 Location = string.Create(CultureInfo.InvariantCulture, $"line {use.Line}"),
                 Value = helmValue,
+                IsSensitive = sensitive,
                 IsInferred = true,
                 Note = note,
                 Reference = new HelmValueRef(use.ValuesPath),
@@ -65,11 +84,12 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
 
         return history.Select(h => new ProvenanceStep
         {
-            Kind = LayerKind.Helm,
+            Kind = chart.KindOf(h.Source),
             Source = h.Source,
             Location = h.Line > 0 ? string.Create(CultureInfo.InvariantCulture, $"line {h.Line}, {path}") : path,
             Value = h.Value,
             IsRemoval = h.IsRemoval,
+            IsSensitive = chart.IsSensitiveSource(h.Source),
         }).ToList();
     }
 }

@@ -1,0 +1,316 @@
+﻿{
+  "settings": [
+    {
+      "key": "Cache__Ttl",
+      "value": "600",
+      "sensitive": false,
+      "story": "set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.cache.ttl, set in Argo CD Application orders-prod (helm.values) over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap orders-config",
+          "location": "key Cache__Ttl, rendered.yaml:9",
+          "value": "600",
+          "effective": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 8",
+              "value": "600",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.cache.ttl",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 7, cache.ttl",
+                  "value": "300",
+                  "effective": false
+                },
+                {
+                  "kind": "GitOps",
+                  "source": "Argo CD Application orders-prod (helm.values)",
+                  "location": "line 21, cache.ttl",
+                  "value": "600",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db__Host",
+      "value": "orders-db.prod.svc",
+      "sensitive": false,
+      "story": "set in Deployment/orders env Db__Host, rendered by Helm template templates/deployment.yaml from .Values.db.host, set in values-prod.yaml over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/orders env Db__Host",
+          "location": "rendered.yaml:35",
+          "value": "orders-db.prod.svc",
+          "effective": true,
+          "note": "container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/deployment.yaml",
+              "location": "line 18",
+              "value": "orders-db.prod.svc",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.db.host",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 2, db.host",
+                  "value": "postgres.default.svc",
+                  "effective": false
+                },
+                {
+                  "kind": "Helm",
+                  "source": "values-prod.yaml",
+                  "location": "line 2, db.host",
+                  "value": "orders-db.prod.svc",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db__Password",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in Secret orders-secret, rendered by Helm template templates/secret.yaml from .Values.db.password, set in values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesSecret",
+          "source": "Secret orders-secret",
+          "location": "key Db__Password, rendered.yaml:17",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/secret.yaml",
+              "location": "line 6",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "inferred": true,
+              "note": "renders .Values.db.password",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 5, db.password",
+                  "value": "***",
+                  "effective": true,
+                  "sensitive": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db__Pool",
+      "value": "25",
+      "sensitive": false,
+      "story": "set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.db.pool, set in Argo CD Application orders-prod (helm.parameters) over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap orders-config",
+          "location": "key Db__Pool, rendered.yaml:8",
+          "value": "25",
+          "effective": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 7",
+              "value": "25",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.db.pool",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 4, db.pool",
+                  "value": "10",
+                  "effective": false
+                },
+                {
+                  "kind": "GitOps",
+                  "source": "Argo CD Application orders-prod (helm.parameters)",
+                  "location": "line 26, db.pool",
+                  "value": "25",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db__Timeout",
+      "value": "45",
+      "sensitive": false,
+      "story": "set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.db.timeout, set in Argo CD Application orders-prod (helm.values) over values.yaml (chart default) and values-prod.yaml and $values/envs/prod/orders.yaml",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap orders-config",
+          "location": "key Db__Timeout, rendered.yaml:7",
+          "value": "45",
+          "effective": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 6",
+              "value": "45",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.db.timeout",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 3, db.timeout",
+                  "value": "30",
+                  "effective": false
+                },
+                {
+                  "kind": "Helm",
+                  "source": "values-prod.yaml",
+                  "location": "line 3, db.timeout",
+                  "value": "40",
+                  "effective": false
+                },
+                {
+                  "kind": "Helm",
+                  "source": "$values/envs/prod/orders.yaml",
+                  "location": "line 3, db.timeout",
+                  "value": "50",
+                  "effective": false
+                },
+                {
+                  "kind": "GitOps",
+                  "source": "Argo CD Application orders-prod (helm.values)",
+                  "location": "line 19, db.timeout",
+                  "value": "45",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Features__Search",
+      "value": "true",
+      "sensitive": false,
+      "story": "set in ConfigMap orders-config, rendered by Helm template templates/configmap.yaml from .Values.features.search, set in Argo CD Application orders-prod (helm.parameters) over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesConfigMap",
+          "source": "ConfigMap orders-config",
+          "location": "key Features__Search, rendered.yaml:10",
+          "value": "true",
+          "effective": true,
+          "note": "envFrom on Deployment/orders, container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/configmap.yaml",
+              "location": "line 9",
+              "value": "true",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.features.search",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 9, features.search",
+                  "value": "false",
+                  "effective": false
+                },
+                {
+                  "kind": "GitOps",
+                  "source": "Argo CD Application orders-prod (helm.parameters)",
+                  "location": "line 23, features.search",
+                  "value": "true",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Logging__LogLevel__Default",
+      "value": "Warning",
+      "sensitive": false,
+      "story": "set in Deployment/orders env Logging__LogLevel__Default, rendered by Helm template templates/deployment.yaml from .Values.logLevel, set in $values/envs/prod/orders.yaml over values.yaml (chart default)",
+      "layers": [
+        {
+          "kind": "KubernetesWorkload",
+          "source": "Deployment/orders env Logging__LogLevel__Default",
+          "location": "rendered.yaml:37",
+          "value": "Warning",
+          "effective": true,
+          "note": "container orders",
+          "origins": [
+            {
+              "kind": "Helm",
+              "source": "Helm template templates/deployment.yaml",
+              "location": "line 20",
+              "value": "Warning",
+              "effective": true,
+              "inferred": true,
+              "note": "renders .Values.logLevel",
+              "origins": [
+                {
+                  "kind": "Helm",
+                  "source": "values.yaml (chart default)",
+                  "location": "line 10, logLevel",
+                  "value": "Information",
+                  "effective": false
+                },
+                {
+                  "kind": "Helm",
+                  "source": "$values/envs/prod/orders.yaml",
+                  "location": "line 1, logLevel",
+                  "value": "Warning",
+                  "effective": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

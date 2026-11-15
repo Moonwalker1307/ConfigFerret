@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billing-config
+data:
+  Billing__Currency: ${CURRENCY}
+  Billing__RetryCount: "${RETRY_COUNT}"
+  Billing__Region: ${REGION:=us-east-1}
+  Billing__Tier: ${TIER:=standard}
+  Smtp__Endpoint: ${SMTP_HOST}:${SMTP_PORT:=25}
+  Billing__InvoiceDueDays: "14"

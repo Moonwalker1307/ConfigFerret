@@ -1,0 +1,59 @@
+﻿Billing__Currency = "EUR"
+  set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (postBuild.substitute)
+  [effective]  ConfigMap billing-config (key Billing__Currency, billing-rendered.yaml:6) = "EUR"
+               envFrom on Deployment/billing, container billing
+    <- [effective]  apps/billing/configmap.yaml (line 6, ConfigMap billing-config key Billing__Currency) = "${CURRENCY}"
+                    Flux Kustomization billing replaces ${CURRENCY} after kustomize build
+      <- [effective]  Flux Kustomization billing (postBuild.substitute) (billing.yaml:15) = "EUR"
+
+Billing__InvoiceDueDays = "14"
+  set in ConfigMap billing-config
+  [effective]  ConfigMap billing-config (key Billing__InvoiceDueDays, billing-rendered.yaml:11) = "14"
+               envFrom on Deployment/billing, container billing
+
+Billing__Mode = "live"
+  set in Deployment/billing env Billing__Mode, set in apps/billing/deployment.yaml
+  [effective]  Deployment/billing env Billing__Mode (billing-rendered.yaml:35) = "live"
+               container billing
+    <- [effective]  apps/billing/deployment.yaml (line 16, workload billing, container billing env Billing__Mode) = "${MODE:=live}"
+                    Flux Kustomization billing replaces ${MODE} after kustomize build; no loaded substitute sets MODE, so Flux uses the default 'live'
+
+Billing__Region = "eu-west-1"
+  set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)
+  [effective]  ConfigMap billing-config (key Billing__Region, billing-rendered.yaml:8) = "eu-west-1"
+               envFrom on Deployment/billing, container billing
+    <- [effective]  apps/billing/configmap.yaml (line 8, ConfigMap billing-config key Billing__Region) = "${REGION:=us-east-1}"
+                    Flux Kustomization billing replaces ${REGION} after kustomize build
+      <- [effective]  Flux Kustomization billing (substituteFrom ConfigMap cluster-vars) (billing.yaml:32) = "eu-west-1"
+
+Billing__RetryCount = "5"
+  set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (postBuild.substitute) over Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)
+  [effective]  ConfigMap billing-config (key Billing__RetryCount, billing-rendered.yaml:7) = "5"
+               envFrom on Deployment/billing, container billing
+    <- [effective]  apps/billing/configmap.yaml (line 7, ConfigMap billing-config key Billing__RetryCount) = "${RETRY_COUNT}"
+                    Flux Kustomization billing replaces ${RETRY_COUNT} after kustomize build
+      <- [overridden] Flux Kustomization billing (substituteFrom ConfigMap cluster-vars) (billing.yaml:33) = "3"
+      <- [effective]  Flux Kustomization billing (postBuild.substitute) (billing.yaml:16) = "5"
+
+Billing__Tier = "standard"
+  set in ConfigMap billing-config, set in apps/billing/configmap.yaml
+  [effective]  ConfigMap billing-config (key Billing__Tier, billing-rendered.yaml:9) = "standard"
+               envFrom on Deployment/billing, container billing
+    <- [effective]  apps/billing/configmap.yaml (line 9, ConfigMap billing-config key Billing__Tier) = "${TIER:=standard}"
+                    Flux Kustomization billing replaces ${TIER} after kustomize build; no loaded substitute sets TIER, so Flux uses the default 'standard'
+
+Smtp__Endpoint = "smtp.prod.internal:25"
+  set in ConfigMap billing-config, set in apps/billing/configmap.yaml
+  [effective]  ConfigMap billing-config (key Smtp__Endpoint, billing-rendered.yaml:10) = "smtp.prod.internal:25"
+               envFrom on Deployment/billing, container billing
+    <- [effective]  apps/billing/configmap.yaml (line 10, ConfigMap billing-config key Smtp__Endpoint) = "${SMTP_HOST}:${SMTP_PORT:=25}"
+                    Flux Kustomization billing replaces ${SMTP_HOST}, ${SMTP_PORT} after kustomize build; a value with several variables is not traced further
+
+Stripe__ApiKey = "***"
+  set in Secret billing-secrets, set in apps/billing/secret.yaml, set in Flux Kustomization billing (substituteFrom Secret cluster-secrets)
+  [effective]  Secret billing-secrets (key Stripe__ApiKey, billing-rendered.yaml:18) = "***"
+               envFrom on Deployment/billing, container billing
+    <- [effective]  apps/billing/secret.yaml (line 6, Secret billing-secrets key Stripe__ApiKey) = "***"
+                    Flux Kustomization billing replaces ${STRIPE_KEY} after kustomize build
+      <- [effective]  Flux Kustomization billing (substituteFrom Secret cluster-secrets) (billing.yaml:43) = "***"
+

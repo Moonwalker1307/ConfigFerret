@@ -1,0 +1,10 @@
+db:
+  host: postgres.default.svc
+  timeout: 30
+  pool: 10
+  password: ""
+cache:
+  ttl: 300
+features:
+  search: false
+logLevel: Information

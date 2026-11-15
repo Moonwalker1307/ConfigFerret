@@ -1,7 +1,9 @@
 using ConfigFerret.DotNet;
+using ConfigFerret.GitOps;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
+using ConfigFerret.Terraform;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret;
@@ -121,6 +123,28 @@ public sealed class ConfigTracer
     {
         ArgumentNullException.ThrowIfNull(kustomization);
         _resolvers.Add(new KustomizeResolver(kustomization));
+        return this;
+    }
+
+    /// <summary>
+    /// Links layers to what an Argo CD Application or a Flux HelmRelease or Kustomization adds: the Helm values it
+    /// passes (see <see cref="HelmChart.ForGitOps"/>), the ConfigMap keys an Argo CD kustomize patch sets, and the
+    /// <c>${VAR}</c> placeholders a Flux Kustomization substitutes. Use it instead of <see cref="WithHelm"/> for the release.
+    /// </summary>
+    public ConfigTracer WithGitOps(GitOpsApplication application, GitOpsOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(application);
+        _resolvers.Add(new GitOpsResolver(application, options));
+        return this;
+    }
+
+    /// <summary>Links environment variables and ConfigMap and Secret keys to the Terraform outputs with the same name, or the ones linked explicitly.</summary>
+    public ConfigTracer WithTerraform(TerraformOutputs outputs, Action<TerraformTraceOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(outputs);
+        var options = new TerraformTraceOptions();
+        configure?.Invoke(options);
+        _resolvers.Add(new TerraformResolver(outputs, options));
         return this;
     }
 

@@ -1,0 +1,46 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: orders
+  namespace: orders
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: orders
+      version: 1.4.x
+      sourceRef:
+        kind: HelmRepository
+        name: platform
+      valuesFiles:
+        - values.yaml
+        - values-prod.yaml
+  valuesFrom:
+    - kind: ConfigMap
+      name: orders-values
+    - kind: Secret
+      name: orders-db
+      valuesKey: password
+      targetPath: db.password
+  values:
+    cache:
+      ttl: 900
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-values
+  namespace: orders
+data:
+  values.yaml: |
+    db:
+      timeout: 60
+    logLevel: Debug
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orders-db
+  namespace: orders
+stringData:
+  password: flux-s3cr3t

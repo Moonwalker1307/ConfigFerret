@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing
+spec:
+  template:
+    spec:
+      containers:
+        - name: billing
+          envFrom:
+            - configMapRef:
+                name: billing-config
+            - secretRef:
+                name: billing-secrets
+          env:
+            - name: Billing__Mode
+              value: ${MODE:=live}
