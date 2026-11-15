@@ -2,8 +2,8 @@
 
 The parsers are fuzzed with [SharpFuzz](https://github.com/Metalnem/sharpfuzz) and libFuzzer, through the
 [libfuzzer-dotnet](https://github.com/Metalnem/libfuzzer-dotnet) driver. The `Fuzz` workflow
-(`.github/workflows/fuzz.yml`) runs every target for 20 minutes each night, and for one minute on pull requests
-that touch `src/` or `fuzz/`. Each night starts from the corpus the previous night grew, kept in the Actions cache.
+(`.github/workflows/fuzz.yml`) runs every target for 20 minutes each night, and not on pull requests. Each night
+starts from the corpus the previous night grew, kept in the Actions cache.
 
 ## Targets
 
