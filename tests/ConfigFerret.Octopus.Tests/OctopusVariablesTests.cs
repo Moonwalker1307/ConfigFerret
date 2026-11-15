@@ -306,6 +306,22 @@ public class OctopusVariablesTests
         Assert.Equal("Octopus space 'Nope' was not found, or the API key cannot see it.", ex.Message);
     }
 
+    [Theory]
+    [InlineData("""{"Variables":[{"Name":"A","Value":"1","\ud800":1}]}""")]
+    [InlineData("""{"Variables":[{"Name":"\udfff"}]}""")]
+    public async Task Reports_a_response_with_a_lone_surrogate_as_an_unexpected_response(string variables)
+    {
+        // TryGetProperty and GetString throw InvalidOperationException on a lone surrogate escape.
+        var handler = new FakeHttpHandler()
+            .Respond("/api/spaces/all", """{"Items":[{"Id":"Spaces-1","Name":"Default","IsDefault":true}]}""")
+            .Respond("/api/Spaces-1/projects/all", """{"Items":[{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1"}]}""")
+            .Respond("/api/Spaces-1/variables/vs-1", variables);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => OctopusVariables.LoadAsync(Options("api"), client, TestContext.Current.CancellationToken));
+        Assert.Contains("not valid UTF-16", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Reads_spaces_and_projects_from_a_paged_Items_list()
     {

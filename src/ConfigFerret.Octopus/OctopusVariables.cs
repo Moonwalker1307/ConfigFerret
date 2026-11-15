@@ -259,7 +259,20 @@ public sealed partial class OctopusVariables
 
     private sealed class Api(HttpClient client, Uri baseAddress, string apiKey)
     {
-        public Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken) =>
-            JsonApi.GetAsync(client, new Uri(baseAddress, path), h => h.Add("X-Octopus-ApiKey", apiKey), "Octopus", cancellationToken);
+        public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken)
+        {
+            var uri = new Uri(baseAddress, path);
+            var doc = await JsonApi.GetAsync(client, uri, h => h.Add("X-Octopus-ApiKey", apiKey), "Octopus", cancellationToken).ConfigureAwait(false);
+            try
+            {
+                JsonApi.RequireValidText(doc, "Octopus", uri);
+                return doc;
+            }
+            catch
+            {
+                doc.Dispose();
+                throw;
+            }
+        }
     }
 }

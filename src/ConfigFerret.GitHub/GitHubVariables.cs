@@ -146,6 +146,7 @@ public sealed class GitHubVariables
             {
                 var uri = new Uri(baseAddress, string.Create(CultureInfo.InvariantCulture, $"{path}?per_page={pageSize}&page={page}"));
                 using var doc = await JsonApi.GetAsync(client, uri, AddHeaders, "GitHub", cancellationToken).ConfigureAwait(false);
+                JsonApi.RequireValidText(doc, "GitHub", uri);
                 var root = doc.RootElement;
                 if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(arrayName, out var items) || items.ValueKind != JsonValueKind.Array)
                 {

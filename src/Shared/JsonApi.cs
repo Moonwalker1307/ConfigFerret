@@ -75,6 +75,51 @@ internal static class JsonApi
         }
     }
 
+    /// <summary>
+    /// Throws <see cref="HttpRequestException"/> when a string or property name in <paramref name="doc"/> holds a lone
+    /// surrogate escape such as <c>"\ud800"</c>. JsonElement throws InvalidOperationException from TryGetProperty, Name
+    /// and GetString on one, so loaders that read with those call this first instead of guarding every read.
+    /// </summary>
+    public static void RequireValidText(JsonDocument doc, string service, Uri uri)
+    {
+        try
+        {
+            RequireValidText(doc.RootElement, depth: 0);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new HttpRequestException($"{service} returned a response for {uri.AbsolutePath} whose text is not valid UTF-16.", ex);
+        }
+    }
+
+    private static void RequireValidText(JsonElement element, int depth)
+    {
+        // JsonDocument already refuses nesting deeper than 64, so this recursion is bounded.
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    _ = property.Name;
+                    RequireValidText(property.Value, depth + 1);
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    RequireValidText(item, depth + 1);
+                }
+
+                break;
+            case JsonValueKind.String:
+                _ = element.GetString();
+                break;
+            default:
+                break;
+        }
+    }
+
     private static string DescribeFailure(HttpStatusCode status, Uri uri, string service, string body)
     {
         var message = $"{service} returned {(int)status} {status} for {uri.AbsolutePath}.";
