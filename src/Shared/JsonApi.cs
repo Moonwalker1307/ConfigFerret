@@ -47,11 +47,25 @@ internal static class JsonApi
         return new HttpClient(handler, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(100) };
     }
 
+    public static Task<JsonDocument> GetAsync(
+        HttpClient client,
+        Uri uri,
+        Action<HttpRequestHeaders> addHeaders,
+        string service,
+        CancellationToken cancellationToken) =>
+        GetAsync(client, uri, addHeaders, service, null, cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="GetAsync(HttpClient, Uri, Action{HttpRequestHeaders}, string, CancellationToken)"/>, and calls
+    /// <paramref name="onSuccess"/> with a successful response before its body is parsed, for example to read a paging
+    /// header or to reject a sign-in page sent with a success status. It may throw <see cref="HttpRequestException"/>.
+    /// </summary>
     public static async Task<JsonDocument> GetAsync(
         HttpClient client,
         Uri uri,
         Action<HttpRequestHeaders> addHeaders,
         string service,
+        Action<HttpResponseMessage>? onSuccess,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -64,6 +78,8 @@ internal static class JsonApi
         {
             throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, body), null, response.StatusCode);
         }
+
+        onSuccess?.Invoke(response);
 
         try
         {

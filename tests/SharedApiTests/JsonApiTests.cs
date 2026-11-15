@@ -231,4 +231,32 @@ public class JsonApiTests
         Assert.Null(CredentialGuard.FindAppSettingsFile(configuration.GetSection("A"), "A:Token"));
         Assert.Null(CredentialGuard.FindAppSettingsFile(null, "A:Token"));
     }
+
+    [Fact]
+    public async Task Hands_a_successful_response_to_the_callback_before_parsing_it()
+    {
+        var handler = new FakeHttpHandler().Respond(Api.PathAndQuery, """{"ok":true}""");
+        using var client = handler.Client();
+        HttpStatusCode? seen = null;
+
+        using var doc = await JsonApi.GetAsync(client, Api, _ => { }, "Example", r => seen = r.StatusCode, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, seen);
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Does_not_call_the_callback_for_a_failure_and_lets_it_reject_a_success()
+    {
+        var failing = new FakeHttpHandler().Respond(Api.PathAndQuery, "{}", HttpStatusCode.Forbidden);
+        using var failingClient = failing.Client();
+        var called = false;
+        await Assert.ThrowsAsync<HttpRequestException>(() => JsonApi.GetAsync(failingClient, Api, _ => { }, "Example", _ => called = true, TestContext.Current.CancellationToken));
+        Assert.False(called);
+
+        var ok = new FakeHttpHandler().Respond(Api.PathAndQuery, "not json");
+        using var okClient = ok.Client();
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => JsonApi.GetAsync(okClient, Api, _ => { }, "Example", _ => throw new HttpRequestException("rejected"), TestContext.Current.CancellationToken));
+        Assert.Equal("rejected", ex.Message);
+    }
 }
