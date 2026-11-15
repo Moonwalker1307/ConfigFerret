@@ -1,0 +1,18 @@
+# Variables for ${VAR} in the compose files: docker compose --env-file project.envfile
+TAG=1.4.2
+DB_HOST=postgres.internal
+DB_PASSWORD="pr0d-s3cret"
+REDIS_PASSWORD='r3dis-pa$$'
+Features__Search=false
+%%
+# Shared by every .NET service.
+export TZ=Europe/Amsterdam
+Cache__Ttl=900 # seconds
+Smtp__Host=smtp.${DOMAIN:-example.test}
+Db__Timeout=15
+%%
+Api__BaseUrl="https://api.example.test"
+Api__Banner="Welcome
+to the ${TAG} shop"
+Jwt__Key=`j$wt-signing-key`
+Cache__Ttl=600

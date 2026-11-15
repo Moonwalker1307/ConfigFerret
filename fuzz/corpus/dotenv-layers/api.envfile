@@ -1,0 +1,5 @@
+Api__BaseUrl="https://api.example.test"
+Api__Banner="Welcome
+to the ${TAG} shop"
+Jwt__Key=`j$wt-signing-key`
+Cache__Ttl=600

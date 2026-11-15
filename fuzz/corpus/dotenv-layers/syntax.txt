@@ -1,0 +1,8 @@
+export A=1
+B="x\ny ${A}"
+C='lit $A'
+D=`tick`
+E=${A:-d} # c
+F=${G-${A}}
+H
+I=${A:+set}${Z}
