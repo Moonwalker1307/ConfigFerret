@@ -17,7 +17,7 @@ It needs the .NET 10 or 11 runtime. Secret values are shown as `***` unless you 
 | --- | --- |
 | `configferret trace [keys]` | An app's configuration, built from its folder the way `WebApplication.CreateBuilder` builds it, and optionally the manifests, chart or overlay it is deployed with |
 | `configferret unused` | The same inputs, listing values a later layer always overrides and, with `--reads`, keys the app never read |
-| `configferret container [names]` | What one Kubernetes container gets, seen from outside the app: environment variables and mounted ConfigMap and Secret files |
+| `configferret container [names]` | What one Kubernetes container or Docker Compose service gets, seen from outside the app: environment variables and mounted ConfigMap, Secret and compose secret files |
 
 Run `configferret <command> --help` for every option.
 
@@ -52,6 +52,13 @@ A running pod, from the cluster, with the release's values:
 kubectl get pod/api-7d9f8c-x2kqp configmap/api-config -o yaml > pod.yaml
 helm get values api -o yaml > release-values.yaml
 configferret container -m pod.yaml -c api --chart charts/api -f release-values.yaml
+```
+
+A Docker Compose service, with the override file. `${VAR}` is filled in from the project's `.env` (or each
+`--compose-env-file`), never from your shell:
+
+```
+configferret container --compose-file compose.yaml --compose-file compose.override.yaml --compose-service api
 ```
 
 `-m -` reads manifests from standard input, for example `kubectl get pod,configmap -o yaml | configferret container -m - -w api-7d9f8c-x2kqp`.
