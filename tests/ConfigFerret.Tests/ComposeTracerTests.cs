@@ -181,30 +181,39 @@ public class ComposeTracerTests
     public async Task Compose_source_links_one_service_and_lists_its_entries()
     {
         using var folder = new TempFolder();
-        var compose = folder.Write("compose.yaml", TwoServices);
-        folder.Write("extra.envfile", "HOST=h\n");
+        var compose = folder.Write("compose/compose.yaml", TwoServices.Replace("secrets:\n  db:", "  web:\n    env_file: web.envfile\n    environment: { HOST: $HOST }\nsecrets:\n  db:", StringComparison.Ordinal));
+        folder.Write("elsewhere/extra.envfile", "HOST=from-extra\n");
+        folder.Write("elsewhere/web.envfile", "W=1\n");
         var provider = new ComposeSourceProvider();
-        var source = provider.Create(new Dictionary<string, string?>
+        var values = new Dictionary<string, string?>
         {
             ["Files"] = compose,
             ["Service"] = " api ",
-            ["EnvFiles"] = Path.Join(folder.Path, "extra.envfile"),
-            ["ProjectDirectory"] = folder.Path,
-        });
+            ["EnvFiles"] = Path.Join(folder.Path, "elsewhere", "extra.envfile"),
+            ["ProjectDirectory"] = Path.Join(folder.Path, "elsewhere"),
+        };
+        var source = provider.Create(values);
 
         var loaded = await source.LoadAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("Docker Compose compose.yaml service api", source.DisplayName);
         Assert.Equal(["A", "DB_PASSWORD", "/run/secrets/db"], loaded.Entries.Select(e => e.Name));
-        Assert.Equal(new SourceEntry("A", new ComposeEnvironmentRef("api", "A"), IsSensitive: false, "compose.yaml:3", "service api"), loaded.Entries[0]);
+        Assert.Equal(new SourceEntry("A", new ComposeEnvironmentRef("api", "A"), IsSensitive: false, compose.Replace('\\', '/') + ":3", "service api"), loaded.Entries[0]);
         Assert.True(loaded.Entries[1].IsSensitive);
         Assert.Equal(new ComposeMountRef("db", IsSecret: true), loaded.Entries[2].Reference);
         Assert.Empty(loaded.Warnings);
 
+        // The env file and the project directory passed in decide ${HOST} and where web.envfile is read from.
+        values["Service"] = "web";
+        var web = await provider.Create(values).LoadAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["HOST", "W"], web.Entries.Select(e => e.Name));
+        Assert.Equal("service web", web.Entries[0].Location);
+        Assert.Empty(web.Warnings);
+
         var only = await new ComposeSource([compose]).LoadAsync(TestContext.Current.CancellationToken);
         Assert.Equal("Docker Compose compose.yaml", new ComposeSource([compose]).DisplayName);
         Assert.Equal("service api", only.Entries[0].Location);
-        Assert.Single(only.Warnings);
+        Assert.Equal("The compose project has 3 services; using api. Pass a service name to pick another.", Assert.Single(only.Warnings));
         await Assert.ThrowsAsync<OperationCanceledException>(() => source.LoadAsync(new CancellationToken(canceled: true)));
     }
 
@@ -244,8 +253,12 @@ public class ComposeTracerTests
         var created = Assert.IsType<ComposeSource>(compose.Create(new Dictionary<string, string?> { ["Files"] = "a.yaml\nb.yaml", ["Service"] = " " }));
         Assert.Equal(["a.yaml", "b.yaml"], created.Files);
         Assert.Null(created.Service);
-        Assert.Throws<ArgumentException>(() => new DotEnvSource([]));
-        Assert.Throws<ArgumentException>(() => new ComposeSource([]));
+        Assert.Equal("Pass at least one dotenv file. (Parameter 'files')", Assert.Throws<ArgumentException>(() => new DotEnvSource([])).Message);
+        Assert.Equal("Pass at least one compose file. (Parameter 'files')", Assert.Throws<ArgumentException>(() => new ComposeSource([])).Message);
+        Assert.Equal("Files is required. (Parameter 'values')", Assert.Throws<ArgumentException>(() => compose.Create(new Dictionary<string, string?>())).Message);
+        Assert.Equal(["Files"], dotenv.Settings.Select(s => s.Label));
+        Assert.Equal(["Compose files", "Service", "Env files", "Project directory"], compose.Settings.Select(s => s.Label));
+        Assert.All(dotenv.Settings.Concat(compose.Settings), s => Assert.False(string.IsNullOrWhiteSpace(s.Help)));
         Assert.Throws<ArgumentNullException>(() => new DotEnvSource(null!));
         Assert.Throws<ArgumentNullException>(() => new ComposeSource(null!));
     }

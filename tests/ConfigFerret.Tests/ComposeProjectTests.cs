@@ -171,7 +171,7 @@ public class ComposeProjectTests
     {
         using var folder = new TempFolder();
         folder.Write("common.envfile", "A=common\nB=common\nREF=${SHARED}\n");
-        folder.Write("app.envfile", "B=app\nC=${A}-app\nexport SHARED=x\n");
+        folder.Write("app.envfile", "B=app\nC=${A}-app\nexport SHARED=x\nSHARED\n");
         folder.Write("raw.envfile", "R='quoted ${A}'\n");
         var compose = folder.Write("compose.yaml", """
             services:
@@ -197,6 +197,10 @@ public class ComposeProjectTests
         Assert.Equal("common-app", service.Environment["C"]);
         Assert.Equal("shell", service.Environment["REF"]);
         Assert.Equal("'quoted ${A}'", service.Environment["R"]);
+        Assert.Equal(new DotEnvEntryRef(Path.Join(folder.Path, "raw.envfile"), "R"), service.Layers("R")[0].Reference);
+        var inherited = service.Layers("SHARED")[^1];
+        Assert.Equal("env_file of service app (compose.yaml:5); a bare key, so the value comes from the shell", inherited.Note);
+        Assert.Equal("shell", inherited.Value);
         var b = service.Layers("B");
         Assert.Equal(["env_file common.envfile", "env_file app.envfile", "compose service app env B"], b.Select(s => s.Source));
         Assert.Equal([LayerKind.DotEnv, LayerKind.DotEnv, LayerKind.DockerCompose], b.Select(s => s.Kind));
@@ -208,6 +212,20 @@ public class ComposeProjectTests
         Assert.Equal("common.envfile", c.Source);
         Assert.Equal("interpolated as ${A} in app.envfile line 2", c.Note);
         Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
+    public void Reports_an_env_file_passed_in_that_does_not_exist()
+    {
+        using var folder = new TempFolder();
+        var compose = folder.Write("compose.yaml", "services: {}\n");
+        var options = new ComposeOptions();
+        options.EnvFiles.Add(Path.Join(folder.Path, "missing.envfile"));
+
+        var ex = Assert.Throws<FileNotFoundException>(() => ComposeProject.Load([compose], options));
+
+        Assert.Equal("The env file missing.envfile does not exist or is larger than 1 MiB.", ex.Message);
+        Assert.Equal("Pass at least one compose file. (Parameter 'files')", Assert.Throws<ArgumentException>(() => ComposeProject.Load()).Message);
     }
 
     [Fact]
@@ -315,14 +333,18 @@ public class ComposeProjectTests
                   C: 3
                 secrets: !reset []
               other:
-                environment: !reset {}
+                environment: !reset { IGNORED: 1 }
+                env_file: !reset [a.envfile]
+                secrets: !reset [s]
             """);
 
         var project = ComposeProject.Load(main, over);
 
         Assert.Equal(["C"], Service(project).Environment.Keys);
+        Assert.DoesNotContain("FROM_FILE", Service(project).Environment.Keys);
         Assert.Equal(["/c"], Service(project).Mounts.Select(m => m.Path));
         Assert.Empty(Service(project, "other").Environment);
+        Assert.Empty(Service(project, "other").Mounts);
     }
 
     [Fact]
@@ -398,6 +420,29 @@ public class ComposeProjectTests
         Assert.Equal("common", Service(project, "web").Environment["LEVEL"]);
         Assert.Equal("worker", Service(project, "worker").Environment["LEVEL"]);
         Assert.Empty(app.Warnings);
+    }
+
+    [Fact]
+    public void Reads_an_extends_file_once_for_every_service_that_uses_it()
+    {
+        using var folder = new TempFolder();
+        folder.Write("base.yaml", "services:\n  base:\n    environment: { A: base }\n");
+        var compose = folder.Write("compose.yaml", "services:\n  a:\n    extends: { file: base.yaml, service: base }\n  b:\n    extends: { file: ./base.yaml, service: base }\n");
+
+        var project = ComposeProject.Load(compose);
+
+        Assert.Equal("base", Service(project, "a").Environment["A"]);
+        Assert.Equal("base.yaml:3", Service(project, "b").Layers("A")[0].Location);
+    }
+
+    [Fact]
+    public void Rejects_extends_nested_too_deep()
+    {
+        var yaml = "services:\n" + string.Concat(Enumerable.Range(0, 20).Select(i => $"  s{i}:\n    extends: s{i + 1}\n")) + "  s20: {}\n";
+
+        var ex = Assert.Throws<FormatException>(() => Parse(yaml));
+
+        Assert.Equal("Service s16 in compose.yaml: extends nests more than 16 deep.", ex.Message);
     }
 
     [Fact]
@@ -686,6 +731,26 @@ public class ComposeProjectTests
         Assert.Equal("db/.env", db.Layers("PORT")[0].Origins[0].Source);
         Assert.Equal("lru", Service(project, "cache").Environment["MODE"]);
         Assert.Equal("compose.yaml:6: the included file missing/compose.yaml does not exist, so its services are not listed.", Assert.Single(project.Warnings));
+    }
+
+    [Fact]
+    public void An_include_resolves_paths_against_its_project_directory_and_keeps_the_options()
+    {
+        using var folder = new TempFolder();
+        folder.Write("cache/compose.yaml", "services:\n  cache:\n    env_file: cache/mode.envfile\n    environment: { TAG: $TAG }\n    secrets: [s]\nsecrets:\n  s: { file: cache/s.txt }\n---\nx: 1\n");
+        folder.Write("cache/mode.envfile", "MODE=lru\n");
+        folder.Write("cache/s.txt", "secret");
+        var compose = folder.Write("compose.yaml", "include:\n  - path: cache/compose.yaml\n    project_directory: .\n");
+        var options = new ComposeOptions { ReadSecretFiles = true, UseProcessEnvironment = false };
+        options.Variables["TAG"] = "v3";
+
+        var project = ComposeProject.Load([compose], options);
+
+        var cache = Service(project, "cache");
+        Assert.Equal("lru", cache.Environment["MODE"]);
+        Assert.Equal("v3", cache.Environment["TAG"]);
+        Assert.Equal("secret", cache.MountLayers("/run/secrets/s")[0].Value);
+        Assert.Equal("cache/compose.yaml holds 2 YAML documents; only the first is read.", Assert.Single(project.Warnings));
     }
 
     [Fact]

@@ -73,6 +73,8 @@ public class DotEnvFileTests
     [InlineData("A_1=1", "1", "A_1")]
     [InlineData("exported=1", "1", "exported")]
     [InlineData("export=1", "1", "export")]
+    [InlineData("A=1\n   ", "1")]
+    [InlineData("A=1\n\t\n", "1")]
     public void Parses_values(string text, string expected, string key = "A") => Assert.Equal(expected, Value(text, key));
 
     [Fact]
@@ -127,7 +129,17 @@ public class DotEnvFileTests
     [InlineData("A=1\nB=\"${A}\"", "1")]
     [InlineData("A=1\nB=x$A-y", "x1-y")]
     [InlineData("A_B=1\nB=$A_B", "1")]
+    [InlineData("B=\"${A:-x\\\"y}\"", "x\\\"y")]
     public void Interpolates_earlier_keys(string text, string expected) => Assert.Equal(expected, Value(text, "B"));
+
+    [Fact]
+    public void A_set_or_alternative_reference_is_recorded()
+    {
+        var reference = Assert.Single(Parse("A=1\nB=${A:+alt}").Entries[1].References);
+
+        Assert.Equal(("A", true, false), (reference.Name, reference.IsSet, reference.UsedDefault));
+        Assert.False(Assert.Single(Parse("B=${A:+alt}").Entries[0].References).IsSet);
+    }
 
     [Fact]
     public void Variables_passed_in_win_over_earlier_keys()
@@ -168,32 +180,38 @@ public class DotEnvFileTests
 
         Assert.Equal(["A", "B"], file.Entries.Select(e => e.Name));
         Assert.True(file.Entries[0].IsInherited);
+        Assert.Equal(new DotEnvReference("A", null, IsSet: true) { Value = "from shell" }, file.Entries[0].References[0]);
+        Assert.Empty(Parse("export").Entries);
+        Assert.Throws<FormatException>(() => Parse("export "));
         Assert.Equal("from shell", file.Variables["A"]);
         Assert.Equal("A", Assert.Single(file.Entries[0].References).Name);
         Assert.False(Parse("A=1").Entries[0].IsInherited);
     }
 
     [Theory]
-    [InlineData("A x", ".env line 1: expected = after A.", null)]
-    [InlineData("=1", ".env line 1: expected a KEY=VALUE line.", null)]
-    [InlineData("A: 1", ".env line 1: expected = after A.", null)]
-    [InlineData("\nA=\"open", ".env line 2: the \" quote is not closed.", null)]
-    [InlineData("A='open", ".env line 1: the ' quote is not closed.", null)]
-    [InlineData("A=`open", ".env line 1: the ` quote is not closed.", null)]
-    [InlineData("A=\"x\" y", ".env line 1: unexpected text after the closing quote.", null)]
-    [InlineData("A='x'y", ".env line 1: unexpected text after the closing quote.", null)]
-    [InlineData("A=${B", ".env line 1: a ${ is not closed with }.", null)]
-    [InlineData("A=\"${B\"", ".env line 1: a ${ is not closed with }.", null)]
-    [InlineData("A=${}", ".env line 1: '${' is not followed by a variable name.", null)]
-    [InlineData("A=${1B}", ".env line 1: '1B' is not a valid variable name.", null)]
-    [InlineData("A=${B*x}", ".env line 1: the reference to B is not valid: after the name, expect }, :-, -, :?, ?, :+ or +.", null)]
-    [InlineData("A=${B:}", ".env line 1: the reference to B is not valid: after the name, expect }, :-, -, :?, ?, :+ or +.", null)]
-    [InlineData("A=${B:?must be set}", ".env line 1: B: must be set.", null)]
-    [InlineData("A=${B?}", ".env line 1: B is required but not set.", null)]
-    [InlineData("C=\nA=${C:?}", ".env line 2: C is required but not set.", null)]
-    public void Rejects_malformed_lines(string text, string message, string? alternative)
+    [InlineData("A x", ".env line 1: expected = after A.")]
+    [InlineData("=1", ".env line 1: expected a KEY=VALUE line.")]
+    [InlineData("A: 1", ".env line 1: expected = after A.")]
+    [InlineData("\nA=\"open", ".env line 2: the \" quote is not closed.")]
+    [InlineData("A='open", ".env line 1: the ' quote is not closed.")]
+    [InlineData("A=`open", ".env line 1: the ` quote is not closed.")]
+    [InlineData("A=\"x\" y", ".env line 1: unexpected text after the closing quote.")]
+    [InlineData("A='x'y", ".env line 1: unexpected text after the closing quote.")]
+    [InlineData("A=${B", ".env line 1: a ${ is not closed with }.")]
+    [InlineData("A=\"${B\"", ".env line 1: a ${ is not closed with }.")]
+    [InlineData("A=${}", ".env line 1: '${' is not followed by a variable name.")]
+    [InlineData("A=${1B}", ".env line 1: '1B' is not a valid variable name.")]
+    [InlineData("A=${B*x}", ".env line 1: the reference to B is not valid: after the name, expect }, :-, -, :?, ?, :+ or +.")]
+    [InlineData("A=${B:}", ".env line 1: the reference to B is not valid: after the name, expect }, :-, -, :?, ?, :+ or +.")]
+    [InlineData("A=${B:?must be set}", ".env line 1: B: must be set.")]
+    [InlineData("A=\"x\\", ".env line 1: the \" quote is not closed.")]
+    [InlineData("A=${B:-$", ".env line 1: a ${ is not closed with }.")]
+    [InlineData("A=${1234567890123456789012345678901234567890123456789}", ".env line 1: '1234567890123456789012345678901234567890...' is not a valid variable name.")]
+    [InlineData("A=${B?}", ".env line 1: B is required but not set.")]
+    [InlineData("C=\nA=${C:?}", ".env line 2: C is required but not set.")]
+    public void Rejects_malformed_lines(string text, string message)
     {
-        var ex = Assert.Throws<FormatException>(() => Parse(alternative ?? text));
+        var ex = Assert.Throws<FormatException>(() => Parse(text));
         Assert.Equal(message, ex.Message);
     }
 
@@ -366,6 +384,24 @@ public class DotEnvLayersTests
         Assert.True(drift.IsInferred);
         Assert.Equal("the dotenv value differs from the value seen here, so the variable may be set somewhere else too", drift.Note);
         Assert.Contains(".env.local line 3: NOPE is not set, so an empty string is used.", report.Warnings);
+    }
+
+    [Fact]
+    public void WithDotEnv_follows_references_only_so_deep()
+    {
+        var text = "A0=x\n" + string.Join("\n", Enumerable.Range(1, 12).Select(i => $"A{i}=${{A{i - 1}}}"));
+        var resolver = new DotEnvResolver(DotEnvLayers.Parse([(".env", text)]));
+
+        var step = Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "x", Reference = new EnvironmentVariableRef("A12") }, new TraceDiagnostics()));
+
+        var depth = 0;
+        for (var current = step; current.Origins.Count > 0; current = current.Origins[0])
+        {
+            depth++;
+        }
+
+        Assert.Equal(8, depth);
+        Assert.Equal("x", Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "x", Reference = new EnvironmentVariableRef("A12") }, new TraceDiagnostics())).Value);
     }
 
     [Fact]

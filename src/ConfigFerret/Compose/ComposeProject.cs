@@ -57,10 +57,7 @@ public sealed class ComposeProject
         {
             foreach (System.Collections.DictionaryEntry entry in System.Environment.GetEnvironmentVariables())
             {
-                if (entry.Key is string name && entry.Value is string value)
-                {
-                    _shell[name] = value;
-                }
+                _shell[(string)entry.Key] = entry.Value as string ?? string.Empty;
             }
         }
 

@@ -45,9 +45,8 @@ public sealed class ComposeSource : IConfigSource
         var diagnostics = new TraceDiagnostics();
         var layers = resolver.ReadLayers(diagnostics);
         var where = $"service {Service ?? (project.ServiceNames.Count > 0 ? project.ServiceNames[0] : null)}";
-        var entries = layers
-            .Where(l => l.Steps.Count > 0 && l.Steps[^1].Reference is not null)
-            .Select(l => new SourceEntry(l.Key, l.Steps[^1].Reference!, l.Steps[^1].IsSensitive, l.Steps[^1].Location, where));
+        // Every compose and env_file step has a reference, so each variable and file is one entry.
+        var entries = layers.Select(l => new SourceEntry(l.Key, l.Steps[^1].Reference!, l.Steps[^1].IsSensitive, l.Steps[^1].Location, where));
         return Task.FromResult(new LoadedConfigSource(DisplayName, resolver, entries, diagnostics.Warnings));
     }
 }
