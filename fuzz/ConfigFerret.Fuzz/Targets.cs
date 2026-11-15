@@ -39,6 +39,8 @@ internal static partial class Targets
         ["env-names"] = new("Environment variable name matching: prefix, key, value, then NAME=VALUE lines", EnvNames),
         ["github"] = new("GitHub Actions variables API responses (split by %%), then the GitHub resolver", GitHubApi),
         ["octopus"] = new("Octopus Deploy API responses (split by %%), then the Octopus resolver", OctopusApi),
+        ["vault"] = new("HashiCorp Vault KV API responses (split by %%), then the Vault resolver", Vault),
+        ["consul"] = new("Consul KV API response, then the Consul resolver", Consul),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

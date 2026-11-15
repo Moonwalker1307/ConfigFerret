@@ -38,7 +38,7 @@ if [[ ! -f "$out/.instrumented" ]]; then
   rm -rf "$out"
   dotnet publish "$here/ConfigFerret.Fuzz" -c Release -f net10.0 -o "$out" -p:TargetFrameworks=net10.0 --nologo -v quiet
   # The harness instruments with the SharpFuzz library it references, so no separate tool is needed.
-  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/YamlDotNet.dll"
+  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/ConfigFerret.HashiCorp.dll" "$out/YamlDotNet.dll"
   touch "$out/.instrumented"
 fi
 
@@ -46,6 +46,7 @@ dict=()
 case "$target" in
   json|unused) dict=(-dict="$here/dictionaries/json.dict") ;;
   github|octopus) dict=(-dict="$here/dictionaries/api.dict") ;;
+  vault|consul) dict=(-dict="$here/dictionaries/hashicorp.dict") ;;
   env-names) ;;
   *) dict=(-dict="$here/dictionaries/yaml.dict") ;;
 esac

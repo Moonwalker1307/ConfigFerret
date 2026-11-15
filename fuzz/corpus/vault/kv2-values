@@ -1,0 +1,8 @@
+	{"data":{"keys":["db","sub/"]}}
+%%
+{"data":{"current_version":2}}
+%%
+{"data":{"data":{"password":"p","Db__Timeout":30,"nested":{"a":[1,2]}},"metadata":{"version":2,"created_time":"2026-01-02T03:04:05Z"}}}
+%%
+HTTP 403
+{"errors":["permission denied"]}
