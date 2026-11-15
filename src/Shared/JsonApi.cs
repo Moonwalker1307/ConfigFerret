@@ -132,7 +132,7 @@ internal static class JsonApi
         return detail is null ? message : $"{message} {detail}";
     }
 
-    // GitHub returns {"message": ...}, Octopus returns {"ErrorMessage": ...}. Neither echoes the credential back.
+    // GitHub returns {"message": ...}, Octopus returns {"ErrorMessage": ...}, Google Cloud {"error": {"message": ...}}. None echoes the credential back.
     private static string? ReadErrorMessage(string body)
     {
         try
@@ -156,6 +156,15 @@ internal static class JsonApi
             {
                 var texts = errors.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()).Take(3).ToList();
                 return texts.Count == 0 ? null : Shorten(string.Join("; ", texts));
+            }
+
+            // Google Cloud APIs return {"error": {"code": 403, "message": "...", "status": "PERMISSION_DENIED"}}.
+            if (doc.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("message", out var errorMessage)
+                && errorMessage.ValueKind == JsonValueKind.String)
+            {
+                return Shorten(errorMessage.GetString() ?? string.Empty);
             }
         }
         catch (InvalidOperationException)
