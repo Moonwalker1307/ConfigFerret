@@ -1,6 +1,7 @@
 using ConfigFerret.Desktop.Credentials;
 using ConfigFerret.Desktop.Model;
 using ConfigFerret.Desktop.Services;
+using ConfigFerret.GitHub;
 using ConfigFerret.Tests.Shared;
 
 namespace ConfigFerret.Desktop.Tests;
@@ -159,6 +160,72 @@ public class TraceRunnerTests
         Assert.DoesNotContain("FEATURES_SEARCH", names);
         Assert.All(result.UnusedVariables, v => Assert.Equal("GitHub Actions", v.Tool));
         Assert.Contains("secret", result.UnusedVariables.Single(v => v.Name == "OLD_DEPLOY_KEY").Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Traces_the_settings_a_workflow_sets_from_github_variables_when_nothing_else_sets_them()
+    {
+        using var repo = new TempFolder();
+        repo.Write("src/Api/appsettings.json", """{ "Db": { "Host": "localhost", "Password": "" }, "Mode": "dev" }""");
+        repo.Write(".github/workflows/deploy.yml", """
+            jobs:
+              deploy:
+                env:
+                  Db__Host: ${{ vars.DB_HOST }}
+                  Db__Password: ${{ secrets.DB_PASSWORD }}
+                  Mode: ${{ vars.MODE }}
+                  NODE_VERSION: ${{ vars.NODE_VERSION }}
+                steps:
+                  - run: echo deploying
+            """);
+        var profile = new Profile { Name = "api", Mode = TraceMode.App };
+        profile.Sources.Add(new AppSettingsSource { Name = "app", Folder = repo.Full("src/Api"), UseUserSecrets = false });
+        var github = new GitHubSource { Name = "github", Repository = "contoso/api", Workflows = [repo.Full(".github/workflows/deploy.yml")] };
+        profile.Sources.Add(github);
+        var store = new InMemoryCredentialStore();
+        store.Write(github.CredentialAccount, Token);
+        const string api = "/repos/contoso/api";
+        var handler = new FakeHttpHandler()
+            .Respond($"{api}/actions/organization-variables?per_page=30&page=1", """{"total_count":0,"variables":[]}""")
+            .Respond($"{api}/actions/organization-secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""")
+            .Respond($"{api}/actions/variables?per_page=30&page=1", """
+                {"total_count":3,"variables":[
+                  {"name":"DB_HOST","value":"db.prod.internal"},
+                  {"name":"MODE","value":"prod"},
+                  {"name":"NODE_VERSION","value":"22"}]}
+                """)
+            .Respond($"{api}/actions/secrets?per_page=100&page=1", """{"total_count":1,"secrets":[{"name":"DB_PASSWORD"}]}""");
+
+        var result = await new TraceRunner(store, httpClientFactory: handler.Client).RunAsync(profile, revealSecrets: true, TestContext.Current.CancellationToken);
+
+        Assert.All(result.Sources, s => Assert.Null(s.Problem));
+        var host = result.Report.Find("Db:Host")!;
+        Assert.Equal("db.prod.internal", host.Value);
+        Assert.Contains(host.Steps.SelectMany(s => s.Origins), o => o.Reference is GitHubVariableRef { Name: "DB_HOST" });
+        Assert.Equal("prod", result.Report.Find("Mode")!.Value);
+        var password = result.Report.Find("Db:Password")!;
+        Assert.Equal(TraceRunner.SecretStandIn, password.Value);
+        Assert.Contains(password.Steps.SelectMany(s => s.Origins), o => o.Reference is GitHubVariableRef { Name: "DB_PASSWORD", Kind: GitHubVariableKind.Secret });
+        Assert.Null(result.Report.Find("NODE_VERSION"));
+        var unused = result.UnusedVariables.Select(v => v.Name).ToList();
+        Assert.DoesNotContain("DB_HOST", unused);
+        Assert.DoesNotContain("DB_PASSWORD", unused);
+        Assert.Contains("NODE_VERSION", unused);
+        Assert.DoesNotContain(result.Secrets, s => s.Key == "Db:Password" && s.Rating == SecretRating.Exposed);
+    }
+
+    [Fact]
+    public async Task A_workflow_entry_does_not_replace_a_value_the_manifests_set()
+    {
+        var profile = OrdersProfile();
+        var github = AddGitHub(profile);
+        var store = new InMemoryCredentialStore();
+        store.Write(github.CredentialAccount, Token);
+
+        var result = await new TraceRunner(store, httpClientFactory: GitHubHandler().Client).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal("orders-db.prod.svc", result.Report.Find("Db:Host")!.Value);
+        Assert.Equal("true", result.Report.Find("Features:Search")!.Value);
     }
 
     [Fact]
