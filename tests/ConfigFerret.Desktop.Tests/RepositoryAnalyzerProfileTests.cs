@@ -6,7 +6,17 @@ namespace ConfigFerret.Desktop.Tests;
 public class RepositoryAnalyzerProfileTests : IDisposable
 {
     private static readonly AnalysisConnections NoConnections = new(null, string.Empty, "github", string.Empty, string.Empty, "octopus");
-    private readonly DirectoryInfo _temp = Directory.CreateTempSubdirectory("configferret-profile-");
+    private readonly DirectoryInfo _temp;
+
+    // The analyzer matches container names against the repository folder's name, so the scanned folder has a fixed
+    // name. The random temp folder name could otherwise contain a short container name, such as cxa, and change the pick.
+    private readonly DirectoryInfo _root;
+
+    public RepositoryAnalyzerProfileTests()
+    {
+        _temp = Directory.CreateTempSubdirectory("configferret-profile-");
+        _root = _temp.CreateSubdirectory("checkout");
+    }
 
     public void Dispose()
     {
@@ -16,7 +26,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
 
     private string Write(string relativePath, string text)
     {
-        var path = Path.Join(_temp.FullName, relativePath);
+        var path = Path.Join(_root.FullName, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, text);
         return path;
@@ -43,7 +53,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
 
     private (Profile Profile, List<string> Notes) Build(RepositoryAnalyzer analyzer, AnalysisChoices? choices = null, AnalysisConnections? connections = null)
     {
-        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var scan = RepositoryScanner.Scan(_root.FullName);
         var notes = new List<string>();
         return (analyzer.BuildProfile(scan, choices ?? new AnalysisChoices(), connections ?? NoConnections, notes), notes);
     }
@@ -53,7 +63,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     [Fact]
     public void Building_needs_a_scan_choices_connections_and_notes()
     {
-        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var scan = RepositoryScanner.Scan(_root.FullName);
         var analyzer = NoTools();
 
         Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(null!, new AnalysisChoices(), NoConnections, []));
@@ -67,7 +77,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     {
         var (profile, notes) = Build(NoTools());
 
-        Assert.Equal(Path.GetFileName(_temp.FullName), profile.Name);
+        Assert.Equal(Path.GetFileName(_root.FullName), profile.Name);
         Assert.Empty(profile.Sources);
         Assert.Equal(TraceMode.App, profile.Mode);
         Assert.Empty(notes);
@@ -77,7 +87,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     public void An_app_gets_an_app_settings_source_with_the_chosen_environment()
     {
         Write("src/Api/appsettings.json", "{}");
-        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var scan = RepositoryScanner.Scan(_root.FullName);
 
         var profile = NoTools().BuildProfile(scan, new AnalysisChoices { App = "src/Api", Environment = "Staging" }, NoConnections, []);
 
@@ -136,7 +146,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             calls.Add((tool, [.. arguments]));
             return Deployment("api", Container("api"));
         });
-        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var scan = RepositoryScanner.Scan(_root.FullName);
 
         var notes = new List<string>();
         var profile = analyzer.BuildProfile(scan, new AnalysisChoices { HelmChart = "deploy/chart", HelmValues = "deploy/values-prod.yaml" }, NoConnections, notes);
@@ -166,7 +176,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
 
         var (profile, notes) = Build(analyzer, new AnalysisChoices { HelmChart = "chart" });
 
-        Assert.Equal(["template", "release", Path.Join(_temp.FullName, "chart")], Assert.Single(calls));
+        Assert.Equal(["template", "release", Path.Join(_root.FullName, "chart")], Assert.Single(calls));
         Assert.Empty(Assert.IsType<HelmSource>(profile.Sources.Single()).ValuesFiles);
         Assert.StartsWith("Install helm", Assert.Single(notes), StringComparison.Ordinal);
     }
@@ -193,7 +203,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             calls.Add((tool, [.. arguments]));
             return Deployment("api", Container("api"));
         });
-        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var scan = RepositoryScanner.Scan(_root.FullName);
 
         var profile = analyzer.BuildProfile(scan, new AnalysisChoices { Kustomization = "k8s/overlay" }, NoConnections, []);
 
@@ -218,7 +228,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             calls.Add((tool, [.. arguments]));
             return tool == "kustomize" ? Deployment("api", Container("api")) : null;
         });
-        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var scan = RepositoryScanner.Scan(_root.FullName);
 
         var profile = analyzer.BuildProfile(scan, new AnalysisChoices { Kustomization = "k8s/overlay" }, NoConnections, []);
 
@@ -287,7 +297,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         var github = Assert.IsType<GitHubSource>(profile.Sources[0]);
         Assert.Equal("GitHub Actions variables", github.Name);
         Assert.Equal(("contoso/orders", "production", "https://ghe.example.test/api/v3/", "gh-account"), (github.Repository, github.Environment, github.ApiUrl, github.CredentialAccountName));
-        Assert.Equal([Path.Join(_temp.FullName, ".github", "workflows", "ci.yml")], github.Workflows);
+        Assert.Equal([Path.Join(_root.FullName, ".github", "workflows", "ci.yml")], github.Workflows);
         var octopus = Assert.IsType<OctopusSource>(profile.Sources[1]);
         Assert.Equal("Octopus project Orders", octopus.Name);
         Assert.Equal(("Orders", "Prod", "Spaces-2", "octo-account"), (octopus.Project, octopus.Environment, octopus.Space, octopus.CredentialAccountName));

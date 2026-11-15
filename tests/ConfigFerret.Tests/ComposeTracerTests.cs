@@ -37,6 +37,22 @@ public class ComposeTracerTests
     }
 
     [Fact]
+    public void ForCompose_traces_a_mount_whose_target_holds_a_backslash()
+    {
+        var project = Parse("""
+            services:
+              api:
+                configs: [{ source: app, target: 'C:\app\settings.json' }]
+            configs:
+              app: { content: x }
+            """);
+
+        var report = ConfigTracer.ForCompose(project, "api").Trace();
+
+        Assert.Equal("x", Assert.Single(report.Settings).Value);
+    }
+
+    [Fact]
     public void ForCompose_picks_the_first_service_and_says_so()
     {
         var report = ConfigTracer.ForCompose(Parse(TwoServices)).Trace();

@@ -1,0 +1,42 @@
+name: Dependency blast radius
+
+# PackageBat (https://github.com/Moonwalker1307/PackageBat) compares the public API of each NuGet package a pull request
+# bumps, old version against new, and reports which of the changed APIs ConfigFerret's code actually calls, and where.
+# It posts one PR comment (updated on each push) and writes the job summary. Dependabot PRs get the comment too.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/packagebat.yml'
+      - '**/*.csproj'
+      - '**/*.props'
+      - '**/*.targets'
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  blast-radius:
+    name: PackageBat
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # to post the report as a PR comment
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # PackageBat needs the base commit to see what changed and to build the code before the bump
+          persist-credentials: false
+
+      # PackageBat builds ConfigFerret.slnx at the PR's base commit, which still compiles, and fails the check when the
+      # bump breaks an API our code uses. The 8.0 runtime is for PackageBat itself (it targets net8.0).
+      - uses: Moonwalker1307/PackageBat@8c57544ce8f9fffc509237e802a9fc77168acbba # main, 2026-11-15
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+            11.0.x
+          fail-on: breaking

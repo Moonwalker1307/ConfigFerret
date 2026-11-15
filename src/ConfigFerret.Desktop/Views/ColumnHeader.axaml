@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ConfigFerret.Desktop.ViewModels"
+             xmlns:ui="using:ConfigFerret.Desktop.Views"
+             x:Class="ConfigFerret.Desktop.Views.ColumnHeader"
+             x:DataType="vm:ColumnFilter">
+  <!-- A column header with a spreadsheet-style filter: sort, search, and a tick list of the column's values. -->
+  <DockPanel HorizontalAlignment="Stretch" LastChildFill="True">
+    <Button DockPanel.Dock="Right" Classes="headerfilter" Classes.active="{Binding IsActive}" Margin="4,0,4,0"
+            ToolTip.Tip="Sort and filter" AutomationProperties.Name="{Binding Header, StringFormat='Sort and filter {0}'}">
+      <PathIcon Data="{StaticResource IconFilter}" Width="12" Height="12" />
+      <Button.Flyout>
+        <Flyout Placement="BottomEdgeAlignedLeft">
+          <StackPanel Width="280" Spacing="6" Margin="2">
+            <Button Classes="menuitem" Classes.checked="{Binding IsSorted}" Command="{Binding SortAscendingCommand}">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource IconArrowUp}" Width="12" Height="12" />
+                <TextBlock Text="Sort A to Z" />
+              </StackPanel>
+            </Button>
+            <Button Classes="menuitem" Command="{Binding SortDescendingCommand}">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource IconArrowDown}" Width="12" Height="12" />
+                <TextBlock Text="Sort Z to A" />
+              </StackPanel>
+            </Button>
+            <Border Height="1" Background="{DynamicResource CfBorder}" Margin="0,2" />
+            <TextBox Classes="search" PlaceholderText="Search" Text="{Binding Search}">
+              <TextBox.InnerLeftContent>
+                <PathIcon Data="{StaticResource IconSearch}" Width="12" Height="12" Margin="10,0,2,0" Foreground="{DynamicResource CfMuted}" />
+              </TextBox.InnerLeftContent>
+            </TextBox>
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBlock Classes="caption" Text="{Binding ChoicesLabel}" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Classes="link" Content="All" Margin="0,0,12,0" Command="{Binding SelectAllCommand}" />
+              <Button Grid.Column="2" Classes="link" Content="None" Command="{Binding SelectNoneCommand}" />
+            </Grid>
+            <Border Classes="code" Padding="4">
+              <ScrollViewer MaxHeight="260">
+                <ItemsControl ItemsSource="{Binding Choices}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:FilterChoice">
+                      <CheckBox IsChecked="{Binding IsChecked}" Padding="6,0" MinHeight="28">
+                        <Grid ColumnDefinitions="*,Auto" Width="210">
+                          <TextBlock Text="{Binding Text}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text}" />
+                          <TextBlock Grid.Column="1" Classes="muted" Text="{Binding Count}" Margin="8,0,0,0" />
+                        </Grid>
+                      </CheckBox>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Border>
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="muted" FontSize="12" Text="{Binding TickedText}" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Classes="link" Content="Clear filter" Command="{Binding ClearCommand}" />
+            </Grid>
+          </StackPanel>
+        </Flyout>
+      </Button.Flyout>
+    </Button>
+    <PathIcon DockPanel.Dock="Right" Width="10" Height="10" Foreground="{DynamicResource CfAccent}" IsVisible="{Binding IsSorted}"
+              Data="{Binding IsDescending, Converter={x:Static ui:Converters.SortIcon}}" />
+    <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
+  </DockPanel>
+</UserControl>

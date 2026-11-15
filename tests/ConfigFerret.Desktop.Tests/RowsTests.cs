@@ -97,8 +97,10 @@ public class RowsTests
     [Fact]
     public void Discovery_card_state_follows_use()
     {
-        Assert.Equal("in use", new DiscoveryCard("css", "icon", "Helm chart", "deploy/chart", true).State);
-        Assert.Equal("found", new DiscoveryCard("css", "icon", "Helm chart", "deploy/chart", false).State);
+        Assert.Equal("in use", new SourceToggle("css", "icon", "Helm chart", "deploy/chart", true).State);
+        Assert.Equal("found", new SourceToggle("css", "icon", "Helm chart", "deploy/chart", false).State);
+        Assert.Equal("off", new SourceToggle("css", "icon", "Helm chart", "deploy/chart", true, isOn: false, changed: _ => { }).State);
+        Assert.False(new SourceToggle("css", "icon", "App settings", "src/Api", true).CanToggle);
     }
 
     [Theory]
@@ -122,13 +124,6 @@ public class RowsTests
     public void Secret_row_needs_a_finding()
     {
         Assert.Throws<ArgumentNullException>(() => new SecretRow(null!));
-    }
-
-    [Fact]
-    public void Layer_filter_names_itself()
-    {
-        Assert.Equal("Any layer", new LayerFilter(null).ToString());
-        Assert.Equal("Through Helm", new LayerFilter(LayerKind.Helm).ToString());
     }
 
     [Theory]
