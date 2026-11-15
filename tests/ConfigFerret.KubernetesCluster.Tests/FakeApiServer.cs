@@ -9,6 +9,8 @@ namespace ConfigFerret.KubernetesCluster.Tests;
 /// </summary>
 internal sealed class FakeApiServer : DelegatingHandler
 {
+    private readonly List<HttpResponseMessage> _sent = [];
+
     private const string NotFound = """{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}""";
 
     private readonly Dictionary<string, (HttpStatusCode Status, string Body)> _responses = new(StringComparer.Ordinal);
@@ -35,10 +37,22 @@ internal sealed class FakeApiServer : DelegatingHandler
         Hosts.Add(request.RequestUri.Host);
         Authorizations.Add(request.Headers.Authorization?.ToString());
         var (status, body) = _responses.TryGetValue(path, out var found) ? found : (HttpStatusCode.NotFound, NotFound);
-        return Task.FromResult(new HttpResponseMessage(status)
+        var response = new HttpResponseMessage(status)
         {
             RequestMessage = request,
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        });
+        };
+        _sent.Add(response);
+        return Task.FromResult(response);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _sent.ForEach(r => r.Dispose());
+        }
+
+        base.Dispose(disposing);
     }
 }

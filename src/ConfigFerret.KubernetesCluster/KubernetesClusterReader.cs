@@ -209,15 +209,16 @@ public static class KubernetesClusterReader
         var (name, ns, ct) = (workload.Name, @namespace, cancellationToken);
         try
         {
-            IKubernetesObject obj = workload.Kind switch
+            IKubernetesObject? read = workload.Kind switch
             {
-                "Deployment" => (IKubernetesObject)await client.AppsV1.ReadNamespacedDeploymentAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
-                "StatefulSet" => (IKubernetesObject)await client.AppsV1.ReadNamespacedStatefulSetAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
-                "DaemonSet" => (IKubernetesObject)await client.AppsV1.ReadNamespacedDaemonSetAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
-                "CronJob" => (IKubernetesObject)await client.BatchV1.ReadNamespacedCronJobAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
-                "Job" => (IKubernetesObject)await client.BatchV1.ReadNamespacedJobAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
-                _ => (IKubernetesObject)await client.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
-            } ?? throw new InvalidOperationException($"The Kubernetes API returned no {workload} in namespace {ns}.");
+                "Deployment" => await client.AppsV1.ReadNamespacedDeploymentAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
+                "StatefulSet" => await client.AppsV1.ReadNamespacedStatefulSetAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
+                "DaemonSet" => await client.AppsV1.ReadNamespacedDaemonSetAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
+                "CronJob" => await client.BatchV1.ReadNamespacedCronJobAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
+                "Job" => await client.BatchV1.ReadNamespacedJobAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
+                _ => await client.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: ct).ConfigureAwait(false),
+            };
+            var obj = read ?? throw new InvalidOperationException($"The Kubernetes API returned no {workload} in namespace {ns}.");
 
             // The core parser goes by kind, which the API leaves out of some responses. It needs no apiVersion for
             // built-in kinds.

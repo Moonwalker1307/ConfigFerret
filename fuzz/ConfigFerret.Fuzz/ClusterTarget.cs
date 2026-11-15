@@ -92,6 +92,8 @@ internal static partial class Targets
     /// <summary>Answers each request with the next scripted response, then with a 404 Status once they run out.</summary>
     private sealed class ScriptedClusterServer(List<(HttpStatusCode Status, string Body)> responses) : DelegatingHandler
     {
+        private readonly List<HttpResponseMessage> _sent = [];
+
         private const string NotFound = """{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}""";
         private int _next;
 
@@ -108,11 +110,23 @@ internal static partial class Targets
             _next++;
             Bodies.Add(body);
             Echoed |= body.Contains(Token, StringComparison.Ordinal);
-            return Task.FromResult(new HttpResponseMessage(status)
+            var response = new HttpResponseMessage(status)
             {
                 RequestMessage = request,
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            });
+            };
+            _sent.Add(response);
+            return Task.FromResult(response);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _sent.ForEach(r => r.Dispose());
+            }
+
+            base.Dispose(disposing);
         }
     }
 }

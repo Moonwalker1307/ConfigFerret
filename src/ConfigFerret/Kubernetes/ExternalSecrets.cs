@@ -178,15 +178,12 @@ internal static class ExternalSecretsReader
             return result;
         }
 
-        foreach (var root in TryLoad(text))
+        var items = TryLoad(text).SelectMany(root => root.Get("array") is { } array
+            ? array.Items().SelectMany(i => i.Scalar() is { } inner ? TryLoad(inner) : [i])
+            : root.Items());
+        foreach (var item in items.Take(1000))
         {
-            var items = root.Get("array") is { } array
-                ? array.Items().SelectMany(i => i.Scalar() is { } inner ? TryLoad(inner) : [i])
-                : root.Items();
-            foreach (var item in items.Take(1000))
-            {
-                AddObject(item, result);
-            }
+            AddObject(item, result);
         }
 
         return result;
@@ -206,13 +203,10 @@ internal static class ExternalSecretsReader
         result.Add(new SecretProviderObject(fileName, remoteKey, NonEmpty(item.Str("secretKey")), version));
 
         // AWS can pick JSON properties out of a secret into files of their own.
-        foreach (var jmes in item.Get("jmesPath").Items())
-        {
-            if (NonEmpty(jmes.Str("objectAlias")) is { } alias)
-            {
-                result.Add(new SecretProviderObject(alias, remoteKey, NonEmpty(jmes.Str("path")), version));
-            }
-        }
+        result.AddRange(item.Get("jmesPath").Items()
+            .Select(j => (Alias: NonEmpty(j.Str("objectAlias")), Path: NonEmpty(j.Str("path"))))
+            .Where(j => j.Alias is not null)
+            .Select(j => new SecretProviderObject(j.Alias!, remoteKey, j.Path, version)));
     }
 
     private static List<YamlNode> TryLoad(string text)
