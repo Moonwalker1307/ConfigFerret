@@ -696,8 +696,8 @@ public class TraceRunnerSourcesTests : IDisposable
         var result = await Run(ProfileOf(App("""{"Db":{"Host":"base"}}"""), github), name => Token, http: GitHub().Client);
 
         Assert.Null(ProblemOf(result, github));
-        Assert.Contains(new UnusedVariable("GitHub Actions", "OLD_KEY", "repository secret (contoso/orders)"), result.UnusedVariables);
-        Assert.Contains(new UnusedVariable("GitHub Actions", "Db__Host", "repository variable (contoso/orders)"), result.UnusedVariables);
+        Assert.Contains(new UnusedVariable("GitHub Actions", "OLD_KEY", "repository secret (contoso/orders)") { IsSecret = true }, result.UnusedVariables);
+        Assert.Contains(new UnusedVariable("GitHub Actions", "Db__Host", "repository variable (contoso/orders)") { Value = "gh-host" }, result.UnusedVariables);
     }
 
     [Fact]
@@ -708,7 +708,7 @@ public class TraceRunnerSourcesTests : IDisposable
 
         var result = await Run(ProfileOf(App("{}"), github), name => Token, http: handler.Client);
 
-        Assert.Contains(new UnusedVariable("GitHub Actions", "UNUSED_VAR", "repository variable (contoso/orders)"), result.UnusedVariables);
+        Assert.Contains(new UnusedVariable("GitHub Actions", "UNUSED_VAR", "repository variable (contoso/orders)") { Value = "x" }, result.UnusedVariables);
     }
 
     // Octopus
