@@ -1,0 +1,150 @@
+@* The one table: every setting, plus GitHub and Octopus variables and Helm values no setting picks up. Each column
+   header has a spreadsheet-style filter: sort, search, and a tick list of the column's values. *@
+<div class="config">
+    <div class="config-split">
+        <div class="card grid-card">
+            <div class="grid-row grid-head" role="row">
+                @foreach (var filter in Vm.ColumnFilters)
+                {
+                    <div class="grid-header" role="columnheader" aria-sort="@AriaSort(filter)">
+                        <span>@filter.Header</span>
+                        @if (filter.IsSorted)
+                        {
+                            <Icon Name="@(filter.IsDescending ? "IconArrowDown" : "IconArrowUp")" Size="10" Class="accent" />
+                        }
+                        <button class="header-filter @(filter.IsActive ? "active" : null)" title="Sort and filter" aria-label="Sort and filter @filter.Header"
+                                aria-expanded="@(ReferenceEquals(_open, filter) ? "true" : "false")" @onclick="() => Toggle(filter)">
+                            <Icon Name="IconFilter" Size="12" />
+                        </button>
+                        @if (ReferenceEquals(_open, filter))
+                        {
+                            <div class="popover-scrim" @onclick="() => _open = null"></div>
+                            <div class="popover column-filter" role="dialog" aria-label="Sort and filter @filter.Header">
+                                <button class="menu-row @(filter.IsSorted && !filter.IsDescending ? "checked" : null)" @onclick="() => filter.SortAscendingCommand.Execute(null)">
+                                    <Icon Name="IconArrowUp" Size="12" /> Sort A to Z
+                                </button>
+                                <button class="menu-row @(filter.IsSorted && filter.IsDescending ? "checked" : null)" @onclick="() => filter.SortDescendingCommand.Execute(null)">
+                                    <Icon Name="IconArrowDown" Size="12" /> Sort Z to A
+                                </button>
+                                <hr />
+                                <label class="search">
+                                    <Icon Name="IconSearch" Size="12" Class="muted" />
+                                    <input type="search" placeholder="Search" aria-label="Search @filter.Header" value="@filter.Search"
+                                           @oninput="e => filter.Search = (string?)e.Value" />
+                                </label>
+                                <div class="choice-head">
+                                    <span class="caption">@filter.ChoicesLabel.ToUpperInvariant()</span>
+                                    <button class="link" @onclick="() => filter.SelectAllCommand.Execute(null)">All</button>
+                                    <button class="link" @onclick="() => filter.SelectNoneCommand.Execute(null)">None</button>
+                                </div>
+                                <div class="choice-list">
+                                    @foreach (var choice in filter.Choices)
+                                    {
+                                        <label class="choice-row" title="@choice.Text">
+                                            <input type="checkbox" checked="@choice.IsChecked" @onchange="e => choice.IsChecked = e.Value is true" />
+                                            <span class="ellipsis">@choice.Text</span>
+                                            <span class="muted small">@choice.Count</span>
+                                        </label>
+                                    }
+                                </div>
+                                <div class="choice-head">
+                                    <span class="muted small">@filter.TickedText</span>
+                                    <button class="link" @onclick="() => filter.Clear()">Clear filter</button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="grid-body" role="rowgroup">
+                @if (Vm.ShowNoMatches)
+                {
+                    <div class="empty">
+                        <Icon Name="IconFilter" Size="28" Class="muted" />
+                        <span class="muted">No rows match these filters.</span>
+                        <button class="link" @onclick="() => Vm.ClearFiltersCommand.Execute(null)">Show all</button>
+                    </div>
+                }
+                <Virtualize Items="Vm.Rows" ItemSize="40" Context="row">
+                    <button class="grid-row @(ReferenceEquals(row, Vm.SelectedRow) ? "selected" : null)" role="row" @onclick="() => Vm.SelectedRow = row">
+                        <span class="cell key">
+                            <span class="mono bold ellipsis">@row.Key</span>
+                            <span class="flags">
+                                @if (row.IsDuplicate)
+                                {
+                                    <span class="chip" title="@row.DuplicateText">×@row.NameCount</span>
+                                }
+                                @if (row.IsWorkflowOnly)
+                                {
+                                    <span class="chip" title="@row.WorkflowText">workflow</span>
+                                }
+                                @if (row.IsDead)
+                                {
+                                    <span class="chip bad" title="@row.DeadReason">dead</span>
+                                }
+                            </span>
+                        </span>
+                        <span class="cell">
+                            @if (row.IsSensitive)
+                            {
+                                <Icon Name="IconLock" Size="11" Class="kind-secret" />
+                            }
+                            <span class="mono ellipsis">@row.Value</span>
+                        </span>
+                        <span class="cell" title="@row.Story"><span class="ellipsis">@row.ComesFrom</span></span>
+                        <span class="cell chips">
+                            @foreach (var kind in row.Kinds)
+                            {
+                                <span class="chip @kind.Css">@kind.Label</span>
+                            }
+                        </span>
+                    </button>
+                </Virtualize>
+            </div>
+        </div>
+
+        <div class="card details">
+            @if (Vm.SelectedRow is { } selected)
+            {
+                <div class="caption">@selected.Caption</div>
+                <div class="mono detail-key">@selected.Key</div>
+                <pre class="code mono">@selected.Value</pre>
+                @if (Vm.SelectedSecret is { } secret)
+                {
+                    <span class="rating @secret.Css" title="@secret.Reason"><Icon Name="IconShield" Size="12" /> @secret.Label</span>
+                    <p class="muted">@secret.Reason</p>
+                }
+                @if (selected.IsDead)
+                {
+                    <span class="rating bad"><Icon Name="IconSleep" Size="12" /> @selected.DeadLabel</span>
+                    <p class="muted">@selected.DeadReason. Safe to delete once no other environment or app reads it.</p>
+                }
+                @if (selected.IsWorkflowOnly)
+                {
+                    <span class="rating"><Icon Name="IconBranch" Size="12" /> Used by a workflow</span>
+                    <p class="muted">@selected.WorkflowText</p>
+                }
+                <div class="caption">STORY</div>
+                <p class="story">@selected.Story</p>
+                <div class="caption">LAYERS, LOWEST PRIORITY FIRST</div>
+                <StepTree Nodes="Vm.Details" />
+            }
+            else
+            {
+                <div class="empty"><span class="muted">Pick a row to see where its value comes from.</span></div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private ColumnFilter? _open;
+
+    /// <summary>The view model.</summary>
+    [Parameter, EditorRequired]
+    public required MainWindowViewModel Vm { get; set; }
+
+    private void Toggle(ColumnFilter filter) => _open = ReferenceEquals(_open, filter) ? null : filter;
+
+    private static string AriaSort(ColumnFilter filter) => !filter.IsSorted ? "none" : filter.IsDescending ? "descending" : "ascending";
+}

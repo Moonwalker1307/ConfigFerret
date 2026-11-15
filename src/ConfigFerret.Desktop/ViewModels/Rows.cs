@@ -51,16 +51,62 @@ public sealed class RepositoryRow(RepositoryInfo info)
         : $"{(int)(span.TotalDays / 365)}y ago";
 }
 
-/// <summary>Something the scan found in the repository, shown as a card on the overview.</summary>
-/// <param name="Css">The style class that colours the card's icon.</param>
-/// <param name="Icon">The icon resource key.</param>
-/// <param name="Title">What it is, for example "Helm chart".</param>
-/// <param name="Detail">Where, for example deploy/chart.</param>
-/// <param name="Used">True when the current trace uses it.</param>
-public sealed record DiscoveryCard(string Css, string Icon, string Title, string Detail, bool Used)
+/// <summary>
+/// A kind of configuration source the scan found in the repository, such as a Helm chart, in the Sources drop-down.
+/// Turning one off traces again without it. App settings are the starting point of a trace and stay on.
+/// </summary>
+public sealed partial class SourceToggle : CommunityToolkit.Mvvm.ComponentModel.ObservableObject
 {
-    /// <summary>"in use" or "found".</summary>
-    public string State => Used ? "in use" : "found";
+    private readonly Action<SourceToggle>? _changed;
+
+    /// <summary>Creates the entry.</summary>
+    /// <param name="css">The style class that colours its icon.</param>
+    /// <param name="icon">The icon resource key.</param>
+    /// <param name="title">What it is, for example "Helm chart".</param>
+    /// <param name="detail">Where, for example deploy/chart.</param>
+    /// <param name="used">True when the current trace uses it.</param>
+    /// <param name="isOn">False when the user turned it off.</param>
+    /// <param name="changed">Called when it is turned on or off; null when it can't be turned off.</param>
+    public SourceToggle(string css, string icon, string title, string detail, bool used, bool isOn = true, Action<SourceToggle>? changed = null)
+    {
+        Css = css;
+        Icon = icon;
+        Title = title;
+        Detail = detail;
+        Used = used;
+        IsOn = isOn;
+
+        // Set after IsOn, so building the entry doesn't count as turning it on.
+        _changed = changed;
+    }
+
+    /// <summary>The style class that colours its icon.</summary>
+    public string Css { get; }
+
+    /// <summary>The icon resource key.</summary>
+    public string Icon { get; }
+
+    /// <summary>What it is, for example "Helm chart".</summary>
+    public string Title { get; }
+
+    /// <summary>Where, for example deploy/chart.</summary>
+    public string Detail { get; }
+
+    /// <summary>True when the current trace uses it.</summary>
+    public bool Used { get; }
+
+    /// <summary>True when it can be turned off. App settings can't.</summary>
+    public bool CanToggle => _changed is not null;
+
+    /// <summary>False when the user turned it off, so the trace leaves it out.</summary>
+    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
+    [CommunityToolkit.Mvvm.ComponentModel.NotifyPropertyChangedFor(nameof(State))]
+    public partial bool IsOn { get; set; }
+
+    /// <summary>"in use", "found" or "off".</summary>
+    public string State => !IsOn ? "off" : Used ? "in use" : "found";
+
+    partial void OnIsOnChanged(bool value) => _changed?.Invoke(this);
 }
 
 /// <summary>A row in the secrets audit.</summary>
@@ -106,28 +152,7 @@ public sealed class SecretRow(SecretFinding finding)
     };
 }
 
-/// <summary>A dead variable, or a value that never wins, for the Unused tab.</summary>
-/// <param name="Css">The style class for the chip.</param>
-/// <param name="Kind">What it is: "Setting", "Helm value", "Overridden" or the tool name.</param>
-/// <param name="Name">The key or variable name.</param>
-/// <param name="Where">The layer or variable scope.</param>
-/// <param name="Detail">What wins instead, or why it counts as unused.</param>
-/// <param name="IsDead">True for a variable nothing reads: dead, rather than overridden.</param>
-public sealed record UnusedRow(string Css, string Kind, string Name, string Where, string Detail, bool IsDead = false)
-{
-    /// <summary>True when Show can open it in the Configuration tab: a setting, not a Helm value or a deployment variable.</summary>
-    public bool CanShow { get; init; } = true;
-}
-
 /// <summary>A line in the problems list.</summary>
 /// <param name="Severity">"error", "warning" or "info".</param>
 /// <param name="Text">The message.</param>
 public sealed record ProblemRow(string Severity, string Text);
-
-/// <summary>A choice in the layer filter: any layer, or one kind.</summary>
-/// <param name="Kind">The kind, or null for any.</param>
-public sealed record LayerFilter(LayerKind? Kind)
-{
-    /// <inheritdoc />
-    public override string ToString() => Kind is { } kind ? "Through " + LayerKinds.ShortName(kind) : "Any layer";
-}
