@@ -1,0 +1,73 @@
+<div class="overlay">
+    <div class="scrim" @onclick="CloseIfConnected"></div>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="connections-title">
+        <div class="dialog-head">
+            <div>
+                <h2 class="h1 dialog-title" id="connections-title">Connections</h2>
+                <p class="muted">Tokens and API keys are kept in the <span class="bold">@Vm.CredentialStoreName</span>, never on disk. Reloading the page asks for them again.</p>
+            </div>
+            <button class="ghost" aria-label="Close" @onclick="() => Vm.ToggleConnectionsCommand.Execute(null)"><Icon Name="IconClose" Size="14" /></button>
+        </div>
+
+        <form class="card connection" @onsubmit="() => Vm.ConnectGitHubCommand.ExecuteAsync(null)" autocomplete="off">
+            <div class="connection-head">
+                <span class="iconbox github"><Icon Name="IconBranch" /></span>
+                <div class="grow">
+                    <div class="bold">GitHub</div>
+                    <div class="muted small">@Vm.GitHubStatus</div>
+                </div>
+                @if (Vm.IsGitHubConnected)
+                {
+                    <button type="button" class="link" @onclick="() => Vm.DisconnectGitHubCommand.Execute(null)">Disconnect</button>
+                }
+            </div>
+            <input type="password" aria-label="GitHub token" placeholder="Token (classic: repo; fine-grained: Contents, Variables, Secrets, Environments read)"
+                   value="@Vm.GitHubTokenInput" @oninput="e => Vm.GitHubTokenInput = (string?)e.Value ?? string.Empty" />
+            <input type="url" aria-label="GitHub API address" placeholder="API address, for GitHub Enterprise Server only (https://HOST/api/v3/)"
+                   value="@Vm.GitHubApiUrl" @oninput="e => Vm.GitHubApiUrl = (string?)e.Value ?? string.Empty" />
+            <div class="right"><button type="submit" class="accent-button">Connect GitHub</button></div>
+        </form>
+
+        <form class="card connection" @onsubmit="() => Vm.ConnectOctopusCommand.ExecuteAsync(null)" autocomplete="off">
+            <div class="connection-head">
+                <span class="iconbox octopus"><Icon Name="IconRocket" /></span>
+                <div class="grow">
+                    <div class="bold">Octopus Deploy (optional)</div>
+                    <div class="muted small">@Vm.OctopusStatus</div>
+                </div>
+                @if (Vm.IsOctopusConnected)
+                {
+                    <button type="button" class="link" @onclick="() => Vm.DisconnectOctopusCommand.Execute(null)">Disconnect</button>
+                }
+            </div>
+            <div class="two">
+                <input type="url" aria-label="Octopus server" placeholder="Server, for example https://contoso.octopus.app"
+                       value="@Vm.OctopusServer" @oninput="e => Vm.OctopusServer = (string?)e.Value ?? string.Empty" />
+                <input type="text" aria-label="Octopus space" placeholder="Space (default)"
+                       value="@Vm.OctopusSpace" @oninput="e => Vm.OctopusSpace = (string?)e.Value ?? string.Empty" />
+            </div>
+            <input type="password" aria-label="Octopus API key" placeholder="API key (API-…)"
+                   value="@Vm.OctopusKeyInput" @oninput="e => Vm.OctopusKeyInput = (string?)e.Value ?? string.Empty" />
+            <div class="right"><button type="submit" class="accent-button">Connect Octopus</button></div>
+        </form>
+
+        @if (Vm.ConnectionError is { } error)
+        {
+            <div class="rating bad block" role="alert">@error</div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>The view model.</summary>
+    [Parameter, EditorRequired]
+    public required MainWindowViewModel Vm { get; set; }
+
+    private void CloseIfConnected()
+    {
+        if (Vm.IsGitHubConnected)
+        {
+            Vm.ShowConnections = false;
+        }
+    }
+}

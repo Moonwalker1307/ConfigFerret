@@ -1,0 +1,297 @@
+@page "/"
+@implements IAsyncDisposable
+
+<div class="app @(Vm.IsSidebarOpen ? "sidebar-open" : "sidebar-closed")" data-theme="@(Vm.IsDarkTheme ? "dark" : "light")">
+
+    @* ===================== Sidebar: repositories ===================== *@
+    @if (Vm.IsSidebarOpen)
+    {
+        <aside class="sidebar">
+            <div class="brand">
+                <img class="brand-icon" src="brand/icon.png" alt="" width="38" height="38" />
+                <div class="brand-text">
+                    <div class="brand-name">Config<span class="accent">Ferret</span></div>
+                    <div class="muted small">Why is this value 42?</div>
+                </div>
+                <button class="ghost" title="Switch between dark and light" aria-label="Switch between dark and light" @onclick="() => Vm.ToggleThemeCommand.Execute(null)">
+                    <Icon Name="IconTheme" Class="muted" />
+                </button>
+                <button class="ghost" title="Hide the sidebar (Ctrl+B)" aria-label="Hide the sidebar" @onclick="() => Vm.ToggleSidebarCommand.Execute(null)">
+                    <Icon Name="IconSidebar" Class="muted" />
+                </button>
+            </div>
+
+            <button class="subtle connections" @onclick="() => Vm.ToggleConnectionsCommand.Execute(null)">
+                <span class="conn-row">
+                    <Icon Name="IconBranch" Size="14" Class="kind-github" />
+                    <span class="conn-text">@Vm.GitHubStatus</span>
+                    <span class="dot @(Vm.IsGitHubConnected ? "on" : "off")"></span>
+                </span>
+                <span class="conn-row">
+                    <Icon Name="IconRocket" Size="14" Class="kind-octopus" />
+                    <span class="conn-text">@Vm.OctopusStatus</span>
+                    <span class="dot @(Vm.IsOctopusConnected ? "on" : "off")"></span>
+                </span>
+            </button>
+
+            <label class="search">
+                <Icon Name="IconSearch" Size="14" Class="muted" />
+                <input type="search" placeholder="Search repositories" aria-label="Search repositories" value="@Vm.RepositoryFilter"
+                       @oninput="e => Vm.RepositoryFilter = (string?)e.Value" />
+            </label>
+            <div class="list-head">
+                <span class="caption">REPOSITORIES</span>
+                <span class="muted small">@Vm.RepositoryCountText</span>
+                <button class="ghost small-button" title="Reload the list" aria-label="Reload the list" disabled="@(!Vm.IsGitHubConnected)"
+                        @onclick="() => Vm.ReloadRepositoriesCommand.ExecuteAsync(null)">
+                    <Icon Name="IconRefresh" Size="13" Class="muted" />
+                </button>
+            </div>
+
+            <div class="repo-list">
+                @if (Vm.IsLoadingRepositories)
+                {
+                    <div class="progress"><div></div></div>
+                }
+                @if (Vm.IsGitHubConnected)
+                {
+                    <div class="repo-scroll" role="listbox" aria-label="Repositories">
+                        <Virtualize Items="Vm.Repositories" ItemSize="58" Context="repo">
+                            <button role="option" aria-selected="@(ReferenceEquals(repo, Vm.SelectedRepository) ? "true" : "false")"
+                                    class="repo @(ReferenceEquals(repo, Vm.SelectedRepository) ? "selected" : null)" title="@repo.Description"
+                                    @onclick="() => Vm.SelectedRepository = repo">
+                                <span class="avatar">@repo.Initial</span>
+                                <span class="repo-text">
+                                    <span class="repo-name">@repo.Name
+                                        @if (repo.IsPrivate)
+                                        {
+                                            <Icon Name="IconLock" Size="10" Class="muted" />
+                                        }
+                                    </span>
+                                    <span class="muted small">@repo.Owner  ·  @repo.Pushed</span>
+                                </span>
+                            </button>
+                        </Virtualize>
+                    </div>
+                }
+                @if (Vm.ShowConnectPrompt)
+                {
+                    <div class="card connect-prompt">
+                        <Icon Name="IconPlug" Size="22" Class="accent" />
+                        <h2 class="h2">Connect GitHub</h2>
+                        <p class="muted">Add a token to list every repository you can read. Pick one to see its full configuration.</p>
+                        <button class="accent-button" @onclick="() => Vm.ToggleConnectionsCommand.Execute(null)">Connect</button>
+                    </div>
+                }
+            </div>
+
+            @if (Folders.IsEnabled)
+            {
+                <button class="subtle open-folder" disabled="@(!Vm.OpenFolderCommand.CanExecute(null))" @onclick="() => Vm.OpenFolderCommand.ExecuteAsync(null)">
+                    <Icon Name="IconFolder" Size="14" /> Open a folder on the server
+                </button>
+            }
+        </aside>
+    }
+
+    @* ===================== Main area ===================== *@
+    <main class="main">
+        <div class="main-body">
+            @if (Vm.ShowWelcome)
+            {
+                @if (!Vm.IsSidebarOpen)
+                {
+                    <button class="subtle show-sidebar" title="Show the sidebar (Ctrl+B)" @onclick="() => Vm.ToggleSidebarCommand.Execute(null)">
+                        <Icon Name="IconSidebar" Size="14" /> Repositories
+                    </button>
+                }
+                <div class="welcome">
+                    <img class="logo" src="brand/logo.png" alt="ConfigFerret" />
+                    <h1 class="h1 center">Every configuration value, traced to where it was set.</h1>
+                    <p class="muted center lead">
+                        Pick a repository. ConfigFerret reads its appsettings files, Helm charts, Kustomize overlays and manifests, links GitHub
+                        Actions and Octopus Deploy variables, and shows the merged result, what's unused and which secrets are exposed.
+                    </p>
+                    <div class="steps">
+                        <div class="card"><div class="accent bold">1&nbsp;&nbsp;Connect</div><p class="muted">A GitHub token, and an Octopus API key if you deploy with Octopus. Kept in this server's memory for this tab only.</p></div>
+                        <div class="card"><div class="accent bold">2&nbsp;&nbsp;Pick a repository</div><p class="muted">@(Folders.IsEnabled ? "Or open a folder mounted on the server. " : string.Empty)The configuration sources are found for you.</p></div>
+                        <div class="card"><div class="accent bold">3&nbsp;&nbsp;See the full picture</div><p class="muted">Every value with its history, possibly unused values and a secrets audit.</p></div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <section class="subject">
+                    @* Title and actions *@
+                    <header class="subject-head">
+                        @if (!Vm.IsSidebarOpen)
+                        {
+                            <button class="ghost" title="Show the sidebar (Ctrl+B)" aria-label="Show the sidebar" @onclick="() => Vm.ToggleSidebarCommand.Execute(null)">
+                                <Icon Name="IconSidebar" Size="18" Class="muted" />
+                            </button>
+                        }
+                        <div class="subject-title">
+                            <h1 class="h1 title">@Vm.SubjectTitle</h1>
+                            <div class="muted ellipsis">@Vm.SubjectDetail</div>
+                        </div>
+                        <div class="actions">
+                            <button class="pill @(Vm.RevealSecrets ? "checked" : null)" aria-pressed="@(Vm.RevealSecrets ? "true" : "false")"
+                                    title="Show secret values instead of ***" @onclick="() => Vm.RevealSecrets = !Vm.RevealSecrets">
+                                <Icon Name="IconEye" Size="14" /> Reveal secrets
+                            </button>
+                            <button class="subtle" title="Download again and trace" disabled="@(!Vm.RefreshCommand.CanExecute(null))" @onclick="() => Vm.RefreshCommand.ExecuteAsync(null)">
+                                <Icon Name="IconRefresh" Size="14" /> Refresh
+                            </button>
+                            <div class="menu">
+                                <button class="accent-button" disabled="@(!Vm.HasResult)" aria-haspopup="menu" aria-expanded="@(_exportOpen ? "true" : "false")" @onclick="() => _exportOpen = !_exportOpen">
+                                    <Icon Name="IconExport" Size="14" /> Export
+                                </button>
+                                @if (_exportOpen && Vm.HasResult)
+                                {
+                                    <div class="menu-items" role="menu">
+                                        <button role="menuitem" @onclick="() => ExportAsync(Vm.ExportJsonCommand)">Report as JSON</button>
+                                        <button role="menuitem" @onclick="() => ExportAsync(Vm.ExportTextCommand)">Report as text</button>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </header>
+
+                    @* Choices *@
+                    <div class="choices">
+                        <label class="choice">
+                            <span class="caption">APP</span>
+                            <select value="@Vm.SelectedApp" @onchange="e => Vm.SelectedApp = (string?)e.Value" disabled="@(Vm.Apps.Count == 0)">
+                                @if (Vm.Apps.Count == 0)
+                                {
+                                    <option value="">No appsettings.json</option>
+                                }
+                                @foreach (var app in Vm.Apps)
+                                {
+                                    <option value="@app">@app</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="choice">
+                            <span class="caption">ENVIRONMENT</span>
+                            <select value="@Vm.SelectedEnvironment" @onchange="e => Vm.SelectedEnvironment = (string?)e.Value">
+                                @foreach (var environment in Vm.Environments)
+                                {
+                                    <option value="@environment">@environment</option>
+                                }
+                            </select>
+                        </label>
+                        @if (Vm.HasHelm)
+                        {
+                            <label class="choice">
+                                <span class="caption">HELM VALUES</span>
+                                <select value="@Vm.SelectedValuesFile" @onchange="e => Vm.SelectedValuesFile = (string?)e.Value">
+                                    @foreach (var file in Vm.ValuesFiles)
+                                    {
+                                        <option value="@file">@file</option>
+                                    }
+                                </select>
+                            </label>
+                        }
+                        @if (Vm.IsGitHubSubject)
+                        {
+                            <label class="choice">
+                                <span class="caption">GITHUB ENVIRONMENT</span>
+                                <select value="@Vm.SelectedGitHubEnvironment" @onchange="e => Vm.SelectedGitHubEnvironment = (string?)e.Value">
+                                    @foreach (var environment in Vm.GitHubEnvironments)
+                                    {
+                                        <option value="@environment">@environment</option>
+                                    }
+                                </select>
+                            </label>
+                        }
+                        @if (Vm.IsOctopusConnected)
+                        {
+                            <label class="choice">
+                                <span class="caption">OCTOPUS PROJECT</span>
+                                <select value="@Vm.SelectedOctopusProject" @onchange="e => Vm.SelectedOctopusProject = (string?)e.Value">
+                                    @foreach (var project in Vm.OctopusProjects)
+                                    {
+                                        <option value="@project">@project</option>
+                                    }
+                                </select>
+                            </label>
+                            <label class="choice">
+                                <span class="caption">OCTOPUS ENVIRONMENT</span>
+                                <select value="@Vm.SelectedOctopusEnvironment" @onchange="e => Vm.SelectedOctopusEnvironment = (string?)e.Value">
+                                    @foreach (var environment in Vm.OctopusEnvironments)
+                                    {
+                                        <option value="@environment">@environment</option>
+                                    }
+                                </select>
+                            </label>
+                        }
+                    </div>
+
+                    @* Stat tiles *@
+                    @if (Vm.HasResult)
+                    {
+                        <div class="tiles">
+                            <div class="tile"><div class="number">@N(Vm.TotalCount)</div><div class="muted small">settings</div></div>
+                            <div class="tile"><div class="number">@N(Vm.OverriddenCount)</div><div class="muted small">overridden</div></div>
+                            <div class="tile"><div class="number">@N(Vm.UpstreamCount)</div><div class="muted small">from upstream</div></div>
+                            <div class="tile good"><div class="number">@N(Vm.ProtectedCount)</div><div class="muted small">secrets protected</div></div>
+                            <div class="tile check"><div class="number">@N(Vm.CheckCount)</div><div class="muted small">secrets to check</div></div>
+                            <div class="tile bad"><div class="number">@N(Vm.ExposedCount)</div><div class="muted small">secrets exposed</div></div>
+                            <div class="tile bad" title="Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses">
+                                <div class="number">@N(Vm.DeadCount)</div><div class="muted small">dead variables</div>
+                            </div>
+                        </div>
+                    }
+
+                    @* Tabs *@
+                    <nav class="tabs" role="tablist">
+                        <button role="tab" class="tab @Selected(0)" aria-selected="@(Vm.SelectedTab == 0 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 0">Overview</button>
+                        <button role="tab" class="tab @Selected(1)" aria-selected="@(Vm.SelectedTab == 1 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 1">Configuration <span class="count muted">@Vm.TotalCount</span></button>
+                        <button role="tab" class="tab @Selected(2)" aria-selected="@(Vm.SelectedTab == 2 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 2">Secrets <span class="count bad-text">@Vm.ExposedCount</span></button>
+                        <button role="tab" class="tab @Selected(3)" aria-selected="@(Vm.SelectedTab == 3 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 3">Unused <span class="count muted">@Vm.UnusedCount</span></button>
+                    </nav>
+
+                    <div class="tab-body">
+                        @switch (Vm.SelectedTab)
+                        {
+                            case 1:
+                                <ConfigurationTab Vm="Vm" />
+                                break;
+                            case 2:
+                                <SecretsTab Vm="Vm" />
+                                break;
+                            case 3:
+                                <UnusedTab Vm="Vm" />
+                                break;
+                            default:
+                                <OverviewTab Vm="Vm" />
+                                break;
+                        }
+                    </div>
+                </section>
+            }
+
+            @if (Vm.IsBusy)
+            {
+                <div class="busy" role="status" aria-live="polite">
+                    <img src="brand/icon.png" alt="" width="64" height="64" />
+                    <div class="progress wide"><div></div></div>
+                    <div class="muted">@Vm.BusyText</div>
+                </div>
+            }
+        </div>
+
+        <footer class="status muted small" aria-live="polite">@Vm.StatusText</footer>
+    </main>
+
+    @if (Vm.ShowConnections)
+    {
+        <ConnectionsDialog Vm="Vm" />
+    }
+
+    @if (Dialogs.IsPickingFolder)
+    {
+        <FolderDialog Title="@Dialogs.FolderTitle" Browser="Folders" OnClose="Dialogs.CompleteFolderPick" />
+    }
+</div>
