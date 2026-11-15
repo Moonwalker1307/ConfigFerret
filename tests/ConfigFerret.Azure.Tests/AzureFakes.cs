@@ -30,6 +30,8 @@ internal sealed class FakeCredential : TokenCredential
 /// </summary>
 internal sealed class FakeAzureHandler : HttpMessageHandler
 {
+    private readonly List<HttpResponseMessage> _sent = [];
+
     private readonly Dictionary<string, Queue<(HttpStatusCode Status, string Body, Dictionary<string, string>? Headers)>> _responses = new(StringComparer.Ordinal);
 
     public List<HttpRequestMessage> Requests { get; } = [];
@@ -78,11 +80,13 @@ internal sealed class FakeAzureHandler : HttpMessageHandler
         {
             var challenge = new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent(string.Empty) };
             challenge.Headers.TryAddWithoutValidation("WWW-Authenticate", "Bearer authorization=\"https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47\", resource=\"https://vault.azure.net\"");
+            _sent.Add(challenge);
             return Task.FromResult(challenge);
         }
 
         var key = Key(request.RequestUri!);
-        var (status, body, headers) = (HttpStatusCode.NotFound, """{"error":{"code":"NotFound","message":"Not found"}}""", (Dictionary<string, string>?)null);
+        Dictionary<string, string>? headers = null;
+        var (status, body) = (HttpStatusCode.NotFound, """{"error":{"code":"NotFound","message":"Not found"}}""");
         if (_responses.TryGetValue(key, out var queue) && queue.Count > 0)
         {
             (status, body, headers) = queue.Count > 1 ? queue.Dequeue() : queue.Peek();
@@ -94,6 +98,17 @@ internal sealed class FakeAzureHandler : HttpMessageHandler
             response.Headers.TryAddWithoutValidation(name, value);
         }
 
+        _sent.Add(response);
         return Task.FromResult(response);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _sent.ForEach(r => r.Dispose());
+        }
+
+        base.Dispose(disposing);
     }
 }

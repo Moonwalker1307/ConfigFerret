@@ -212,9 +212,9 @@ public class ServiceCollectionTests
         var unnamed = new AzureKeyVaultOptionsValidator("", null).Validate(null, new AzureKeyVaultOptions());
         Assert.StartsWith("VaultUri is not set.", unnamed.FailureMessage, StringComparison.Ordinal);
         Assert.Throws<ArgumentNullException>(() => new ServiceCollection().AddConfigFerretAzureKeyVault(null!));
-        Assert.Throws<ArgumentNullException>(() => ((IServiceCollection)null!).AddConfigFerretAzureKeyVault(new ConfigurationBuilder().Build()));
+        Assert.Throws<ArgumentNullException>(() => AzureServiceCollectionExtensions.AddConfigFerretAzureKeyVault(null!, new ConfigurationBuilder().Build()));
         Assert.Throws<ArgumentNullException>(() => new ServiceCollection().AddConfigFerretAzureAppConfiguration(null!));
-        Assert.Throws<ArgumentNullException>(() => ((IServiceCollection)null!).AddConfigFerretAzureAppConfiguration(new ConfigurationBuilder().Build()));
+        Assert.Throws<ArgumentNullException>(() => AzureServiceCollectionExtensions.AddConfigFerretAzureAppConfiguration(null!, new ConfigurationBuilder().Build()));
     }
 
     [Fact]

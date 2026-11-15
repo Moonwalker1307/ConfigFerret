@@ -172,9 +172,8 @@ public sealed class AzureAppConfigurationSettings
     /// <summary>Reads the <c>Endpoint=</c> part of a connection string, without ever quoting the string itself.</summary>
     internal static Uri ReadEndpoint(string connectionString)
     {
-        foreach (var part in connectionString.Split(';'))
+        foreach (var pair in connectionString.Split(';').Select(part => part.Split('=', 2)))
         {
-            var pair = part.Split('=', 2);
             if (pair.Length == 2 && string.Equals(pair[0].Trim(), "Endpoint", StringComparison.OrdinalIgnoreCase))
             {
                 return Uri.TryCreate(pair[1].Trim(), UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(uri.UserInfo)
@@ -304,13 +303,10 @@ public sealed class AzureAppConfigurationSettings
                 if (root.TryGetProperty("conditions", out var conditions) && conditions.ValueKind == JsonValueKind.Object
                     && conditions.TryGetProperty("client_filters", out var list) && list.ValueKind == JsonValueKind.Array)
                 {
-                    foreach (var filter in list.EnumerateArray())
-                    {
-                        if (filter.ValueKind == JsonValueKind.Object && filter.TryGetProperty("name", out var filterName) && filterName.ValueKind == JsonValueKind.String)
-                        {
-                            filters.Add(filterName.GetString() ?? string.Empty);
-                        }
-                    }
+                    filters.AddRange(list.EnumerateArray()
+                        .Select(filter => filter.ValueKind == JsonValueKind.Object && filter.TryGetProperty("name", out var filterName) && filterName.ValueKind == JsonValueKind.String ? filterName.GetString() : null)
+                        .Where(name => name is not null)
+                        .Select(name => name!));
                 }
             }
         }

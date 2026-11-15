@@ -118,13 +118,7 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
                 break;
             case AzureAppConfigurationSettingKind.FeatureFlag:
                 source = $"Azure App Configuration feature flag {setting.ConfigurationKey[FeatureManagement.Length..]}";
-                notes.Add(setting.Enabled switch
-                {
-                    true when setting.Filters.Count > 0 => $"on for filters {string.Join(", ", setting.Filters)}",
-                    true => "on",
-                    false => "off",
-                    null => "could not be read",
-                });
+                notes.Add(DescribeFlag(setting.Enabled, setting.Filters));
                 break;
             default:
                 source = $"Azure App Configuration key {setting.Key}";
@@ -149,5 +143,20 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
             Note = notes.Count == 0 ? null : string.Join("; ", notes),
             Reference = AzureAppConfigurationSettings.Reference(setting),
         };
+    }
+
+    private static string DescribeFlag(bool? enabled, IReadOnlyCollection<string> filters)
+    {
+        if (enabled is null)
+        {
+            return "could not be read";
+        }
+
+        if (!enabled.Value)
+        {
+            return "off";
+        }
+
+        return filters.Count > 0 ? $"on for filters {string.Join(", ", filters)}" : "on";
     }
 }

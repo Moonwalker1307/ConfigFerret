@@ -284,7 +284,7 @@ public class AppConfigurationLoadTests
         var options = new AzureAppConfigurationOptions { Endpoint = new(Endpoint) };
         await Assert.ThrowsAsync<ArgumentNullException>(() => AzureAppConfigurationSettings.LoadAsync(null!, ct));
         await Assert.ThrowsAsync<ArgumentNullException>(() => AzureAppConfigurationSettings.LoadAsync(options, (global::Azure.Core.TokenCredential)null!, ct));
-        await Assert.ThrowsAsync<ArgumentNullException>(() => AzureAppConfigurationSettings.LoadAsync(options, null, (ConfigurationClientOptions)null!, ct));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => AzureAppConfigurationSettings.LoadAsync(options, null, clientOptions: null!, ct));
         Assert.Throws<ArgumentException>(() => new AzureAppConfigurationSettings(" ", []));
         Assert.Throws<ArgumentNullException>(() => new AzureAppConfigurationSettings("s", null!));
         Assert.Throws<ArgumentNullException>(() => new AzureAppConfigurationSettings("s", [null!]));

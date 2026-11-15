@@ -109,9 +109,9 @@ internal static partial class Targets
         }
 
         // Every value must be redacted: a value may show up in the report only if it shows up without any values too.
-        var values = secrets.Secrets.ToDictionary(s => s.ConfigurationKey, s => (string?)(s.Value ?? LayerValue), StringComparer.OrdinalIgnoreCase);
+        var values = secrets.Secrets.ToDictionary<AzureKeyVaultSecret, string, string?>(s => s.ConfigurationKey, s => s.Value ?? LayerValue, StringComparer.OrdinalIgnoreCase);
         var withValues = Render(secrets.ToLoadedSource(), values, provider: true);
-        var withoutValues = Render(new AzureKeyVaultSecrets(secrets.Vault, secrets.Secrets.Select(s => s with { Value = null }), secrets.Warnings).ToLoadedSource(), values.ToDictionary(p => p.Key, _ => (string?)LayerValue, StringComparer.OrdinalIgnoreCase), provider: true);
+        var withoutValues = Render(new AzureKeyVaultSecrets(secrets.Vault, secrets.Secrets.Select(s => s with { Value = null }), secrets.Warnings).ToLoadedSource(), values.ToDictionary<KeyValuePair<string, string?>, string, string?>(p => p.Key, _ => LayerValue, StringComparer.OrdinalIgnoreCase), provider: true);
         foreach (var value in secrets.Secrets.Select(s => s.Value).OfType<string>().Where(v => v.Length >= 4))
         {
             if (withValues.Contains(value, StringComparison.Ordinal) && !withoutValues.Contains(value, StringComparison.Ordinal))
@@ -212,7 +212,7 @@ internal static partial class Targets
             }
         }
 
-        var keys = settings.Settings.Take(200).Select(s => s.ConfigurationKey).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary(k => k, _ => (string?)LayerValue, StringComparer.OrdinalIgnoreCase);
+        var keys = settings.Settings.Take(200).Select(s => s.ConfigurationKey).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary<string, string, string?>(k => k, _ => LayerValue, StringComparer.OrdinalIgnoreCase);
         var loaded = settings.ToLoadedSource();
         Render(loaded, keys, provider: false);
     }
@@ -265,6 +265,7 @@ internal static partial class Targets
     {
         // The scripted server is disposed by its owner.
         private readonly HttpMessageInvoker _inner = new(inner, disposeHandler: false);
+        private readonly List<HttpResponseMessage> _sent = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -275,6 +276,7 @@ internal static partial class Targets
 
             var response = new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent(string.Empty) };
             response.Headers.TryAddWithoutValidation("WWW-Authenticate", "Bearer authorization=\"https://login.microsoftonline.com/tenant\", resource=\"https://vault.azure.net\"");
+            _sent.Add(response);
             return Task.FromResult(response);
         }
 
@@ -282,6 +284,7 @@ internal static partial class Targets
         {
             if (disposing)
             {
+                _sent.ForEach(r => r.Dispose());
                 _inner.Dispose();
             }
 

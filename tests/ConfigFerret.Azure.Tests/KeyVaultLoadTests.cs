@@ -200,7 +200,7 @@ public class KeyVaultLoadTests
         await Assert.ThrowsAsync<ArgumentNullException>(() => AzureKeyVaultSecrets.LoadAsync(null!, ct));
         await Assert.ThrowsAsync<ArgumentNullException>(() => AzureKeyVaultSecrets.LoadAsync(null!, new FakeCredential(), ct));
         await Assert.ThrowsAsync<ArgumentNullException>(() => AzureKeyVaultSecrets.LoadAsync(options, null!, ct));
-        await Assert.ThrowsAsync<ArgumentNullException>(() => AzureKeyVaultSecrets.LoadAsync(options, new FakeCredential(), (SecretClientOptions)null!, ct));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => AzureKeyVaultSecrets.LoadAsync(options, new FakeCredential(), clientOptions: null!, ct));
         Assert.Throws<ArgumentException>(() => new AzureKeyVaultSecrets(" ", []));
         Assert.Throws<ArgumentNullException>(() => new AzureKeyVaultSecrets("v", null!));
         Assert.Throws<ArgumentNullException>(() => new AzureKeyVaultSecrets("v", [null!]));
