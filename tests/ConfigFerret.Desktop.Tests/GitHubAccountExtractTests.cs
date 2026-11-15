@@ -117,6 +117,69 @@ public class GitHubAccountExtractTests : IDisposable
     }
 
     [Fact]
+    public async Task Writes_empty_files()
+    {
+        var tarball = Tar(t =>
+        {
+            t.File("top/.gitkeep", "");
+            t.File("top/sub/empty.json", "");
+        });
+
+        await Extract(tarball);
+
+        Assert.Equal(0, new FileInfo(Path.Join(_target, ".gitkeep")).Length);
+        Assert.True(File.Exists(Path.Join(_target, "sub", "empty.json")));
+    }
+
+    [Fact]
+    public async Task Skips_a_file_entry_that_names_the_top_folder_itself()
+    {
+        var tarball = Tar(t =>
+        {
+            t.File("top/", "odd");
+            t.File("top/kept.txt", "kept");
+        });
+
+        await Extract(tarball);
+
+        Assert.Equal(["kept.txt"], Directory.EnumerateFileSystemEntries(_target).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task Stops_when_the_unpacked_files_exceed_the_limit()
+    {
+        var tarball = Tar(t =>
+        {
+            t.File("top/a.bin", new string('a', 1024 * 1024));
+            t.File("top/b.bin", new string('b', 1024 * 1024 + 1));
+        });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Extract(tarball, maxBytes: 2L * 1024 * 1024));
+
+        Assert.Contains("larger than 2 MB", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Accepts_files_that_add_up_to_exactly_the_limit()
+    {
+        var tarball = Tar(t =>
+        {
+            t.File("top/a.bin", new string('a', 1024 * 1024));
+            t.File("top/b.bin", new string('b', 1024 * 1024));
+        });
+
+        await Extract(tarball, maxBytes: 2L * 1024 * 1024);
+
+        Assert.Equal(2, Directory.EnumerateFiles(_target).Count());
+    }
+
+    [Fact]
+    public void The_download_limit_is_half_a_gigabyte()
+    {
+        Assert.Equal(512L * 1024 * 1024, GitHubAccount.MaxDownloadBytes);
+    }
+
+    [Fact]
     public async Task Extracts_the_orders_repository()
     {
         await Extract(FakeGitHub.Tarball(OrdersRepo.Root));
@@ -174,10 +237,10 @@ public class GitHubAccountExtractTests : IDisposable
         Assert.False(File.Exists(Path.Join(_target, "b.txt")));
     }
 
-    private async Task Extract(byte[] tarball)
+    private async Task Extract(byte[] tarball, long maxBytes = GitHubAccount.MaxDownloadBytes)
     {
         using var stream = new MemoryStream(tarball);
-        await GitHubAccount.ExtractAsync(stream, _target, TestContext.Current.CancellationToken);
+        await GitHubAccount.ExtractAsync(stream, _target, TestContext.Current.CancellationToken, maxBytes);
     }
 
     private static byte[] Tar(Action<TarBuilder> build)

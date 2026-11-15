@@ -101,6 +101,28 @@ public class WorkspaceStoreTests : IDisposable
     }
 
     [Fact]
+    public void Saving_needs_a_workspace()
+    {
+        Assert.Throws<ArgumentNullException>(() => new WorkspaceStore(FilePath).Save(null!));
+    }
+
+    [Fact]
+    public void Knows_its_path_and_the_default_one()
+    {
+        Assert.Equal(FilePath, new WorkspaceStore(FilePath).Path);
+        Assert.EndsWith(Path.Join("ConfigFerret", "workspace.json"), WorkspaceStore.DefaultPath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Loading_a_file_that_says_null_gives_an_empty_workspace()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        File.WriteAllText(FilePath, "null");
+
+        Assert.True(new WorkspaceStore(FilePath).Load().DarkTheme);
+    }
+
+    [Fact]
     public void Writes_camel_case_names_and_enum_names()
     {
         var json = WorkspaceStore.Serialize(new Workspace { OctopusServer = "https://octopus.example.test/" });
@@ -175,6 +197,37 @@ public class WorkspaceStoreTests : IDisposable
         store.Save(new Workspace { DarkTheme = false });
 
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(FilePath));
+    }
+
+    [Fact]
+    public void Replaces_a_stale_temporary_file_and_keeps_its_content_out_of_the_result()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        var stale = FilePath + ".tmp";
+        File.WriteAllText(stale, "{ half a file from a crash, and a much longer line so truncation shows ........................................ }");
+        File.SetUnixFileMode(stale, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        var store = new WorkspaceStore(FilePath);
+
+        store.Save(new Workspace { OctopusSpace = "fresh" });
+
+        Assert.False(File.Exists(stale));
+        Assert.Equal("fresh", store.Load().OctopusSpace);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(FilePath));
+    }
+
+    [Fact]
+    public void Writes_utf8_without_a_byte_order_mark()
+    {
+        new WorkspaceStore(FilePath).Save(new Workspace());
+
+        var bytes = File.ReadAllBytes(FilePath);
+
+        Assert.Equal((byte)'{', bytes[0]);
     }
 
     [Fact]

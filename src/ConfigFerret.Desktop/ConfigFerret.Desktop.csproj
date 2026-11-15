@@ -41,6 +41,11 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.15" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(StrykerBuild)' == 'true'">
+    <!-- Stryker.NET compiles without Avalonia's source generator; see the stub. -->
+    <Compile Include="../../tests/ConfigFerret.Desktop.Tests/Stryker/MainWindowStub.cs" Link="Stryker/MainWindowStub.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <AvaloniaResource Include="Assets/icon.ico" />
     <AvaloniaResource Include="../../assets/icon.png" Link="Assets/icon.png" />

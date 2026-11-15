@@ -184,7 +184,7 @@ public sealed class GitHubAccount
                 throw new InvalidOperationException(tooLarge);
             }
 
-            if (entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile) || entry.DataStream is null)
+            if (entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile))
             {
                 continue;
             }
@@ -212,7 +212,10 @@ public sealed class GitHubAccount
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await using var file = File.Create(path);
-            await entry.DataStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+            if (entry.DataStream is { } data)
+            {
+                await data.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

@@ -187,18 +187,25 @@ public sealed partial class CodeReadScanner
     {
         var consumed = new List<(int Start, int End)>();
 
+        bool Consumed(int index) => consumed.Any(c => index >= c.Start && index < c.End);
+
         foreach (Match m in SectionCall().Matches(text))
         {
+            // A GetSection that continues an earlier chain, such as the second one in GetRequiredSection("A").GetSection("B").
+            if (Consumed(m.Index))
+            {
+                continue;
+            }
+
             var path = Resolve(m.Groups["arg"].Value, constants);
             var end = m.Index + m.Length;
             if (path is null)
             {
                 Dynamic(file, text, m.Index);
-                consumed.Add((m.Index, end));
-                continue;
             }
 
-            // Follow the chain: .GetSection("B"), ["C"], .GetValue<T>("D"), .Get<T>(), .Bind(x).
+            // Follow the chain: .GetSection("B"), ["C"], .GetValue<T>("D"), .Get<T>(), .Bind(x). A chain that starts
+            // with a key the scanner cannot work out is followed too, so its tail is not read as a key of its own.
             var exact = false;
             string? boundType = OptionsTypeBefore(text, m.Index);
             while (true)
@@ -214,13 +221,18 @@ public sealed partial class CodeReadScanner
                 {
                     if (arg is null)
                     {
-                        Dynamic(file, text, next.Index);
+                        if (path is not null)
+                        {
+                            Dynamic(file, text, next.Index);
+                        }
+
                         path = null;
-                        end = next.Index + next.Length;
-                        break;
+                    }
+                    else if (path is not null)
+                    {
+                        path = path + ":" + arg;
                     }
 
-                    path = path + ":" + arg;
                     end = next.Index + next.Length;
                     if (!next.Groups["section"].Success)
                     {
@@ -238,7 +250,6 @@ public sealed partial class CodeReadScanner
                     end = next.Index + next.Length;
                     break;
                 }
-
             }
 
             consumed.Add((m.Index, end));
@@ -260,8 +271,6 @@ public sealed partial class CodeReadScanner
                 _sections.Add(path);
             }
         }
-
-        bool Consumed(int index) => consumed.Any(c => index >= c.Start && index < c.End);
 
         foreach (Match m in ValueCall().Matches(text))
         {

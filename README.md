@@ -422,6 +422,15 @@ TargetFrameworks=net10.0 dotnet stryker
 
 The HTML report is written to `tests/ConfigFerret.Tests/StrykerOutput/<run>/reports/`.
 
+The desktop app has its own configuration. It mutates the services, the model, the row view models and the
+credential-store logic, not the views or the Windows and macOS stores. Stryker.NET compiles with Roslyn alone, so
+Avalonia's source generator does not run; `StrykerBuild=true` compiles in a stub for `MainWindow.InitializeComponent`:
+
+```
+cd tests/ConfigFerret.Desktop.Tests
+StrykerBuild=true TargetFrameworks=net10.0 dotnet stryker
+```
+
 The parsers are fuzzed every night on Linux with SharpFuzz and libFuzzer. See [fuzz/README.md](fuzz/README.md).
 
 ## License

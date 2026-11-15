@@ -31,6 +31,7 @@
   <ItemGroup>
     <!-- A fake repository: its code is test data, not part of the tests. -->
     <Compile Remove="TestData/**" />
+    <Compile Remove="Stryker/**" />
     <None Include="TestData/**" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/**/.github/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

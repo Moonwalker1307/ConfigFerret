@@ -12,7 +12,7 @@ public partial class MainWindow : Window, IDialogService
     /// <summary>Creates the window.</summary>
     public MainWindow()
     {
-        InitializeComponent();
+        this.InitializeComponent();
         DataContextChanged += (_, _) =>
         {
             if (DataContext is MainWindowViewModel viewModel)

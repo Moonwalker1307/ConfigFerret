@@ -1,0 +1,996 @@
+using System.Net;
+using System.Text;
+using ConfigFerret.Desktop.Credentials;
+using ConfigFerret.Desktop.Model;
+using ConfigFerret.Desktop.Services;
+using ConfigFerret.Tests.Shared;
+
+namespace ConfigFerret.Desktop.Tests;
+
+public class TraceRunnerSourcesTests : IDisposable
+{
+    private const string Token = "ghp" + "_testtoken0000000000000000000000000";
+    private readonly DirectoryInfo _temp = Directory.CreateTempSubdirectory("configferret-trace-");
+
+    public void Dispose()
+    {
+        _temp.Delete(recursive: true);
+        GC.SuppressFinalize(this);
+    }
+
+    private string Write(string relativePath, string text)
+    {
+        var path = Path.Join(_temp.FullName, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, text);
+        return path;
+    }
+
+    private string Dir(string relativePath) => Directory.CreateDirectory(Path.Join(_temp.FullName, relativePath)).FullName;
+
+    private AppSettingsSource App(string json = """{"Db":{"Host":"base"}}""", string folder = "app", string environment = "Production", bool secrets = false)
+    {
+        Write($"{folder}/appsettings.json", json);
+        return new AppSettingsSource { Name = "app", Folder = Path.Join(_temp.FullName, folder), EnvironmentName = environment, UseUserSecrets = secrets };
+    }
+
+    private static Profile ProfileOf(params SourceSettings[] sources)
+    {
+        var profile = new Profile();
+        foreach (var source in sources)
+        {
+            profile.Sources.Add(source);
+        }
+
+        return profile;
+    }
+
+    private static Task<TraceResult> Run(Profile profile, Func<string, string?>? env = null, bool reveal = false, Func<HttpClient>? http = null, ICredentialStore? store = null) =>
+        new TraceRunner(store ?? new InMemoryCredentialStore(), env ?? (_ => null), http).RunAsync(profile, reveal, TestContext.Current.CancellationToken);
+
+    private static string? ProblemOf(TraceResult result, SourceSettings source) => result.Sources.Single(s => s.Source == source).Problem;
+
+    // Profile and manifests
+
+    [Fact]
+    public async Task A_profile_is_needed()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(() => new TraceRunner(new InMemoryCredentialStore()).RunAsync(null!, false, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void A_runner_needs_a_credential_store()
+    {
+        Assert.Throws<ArgumentNullException>(() => new TraceRunner(null!));
+    }
+
+    [Fact]
+    public async Task Two_kubernetes_sources_are_refused_with_an_explanation_unless_one_is_disabled()
+    {
+        var one = new KubernetesSource { Paths = [Write("k8s/a.yaml", Pod("a"))] };
+        var two = new KubernetesSource { Paths = [Write("k8s/b.yaml", Pod("b"))] };
+
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(App(), one, two)));
+        Assert.Equal("A profile can use one Kubernetes source. Add all the manifest files to that one.", ex.Message);
+
+        two.Enabled = false;
+        var result = await Run(ProfileOf(App(), one, two));
+        Assert.DoesNotContain(result.Sources, s => s.Source == two);
+    }
+
+    [Fact]
+    public async Task A_kubernetes_source_needs_a_path_and_names_itself_in_the_error()
+    {
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(App(), new KubernetesSource { Name = "my manifests" })));
+
+        Assert.Equal("my manifests: add at least one manifest file or folder.", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_missing_manifest_path_is_named()
+    {
+        var missing = Path.Join(_temp.FullName, "nope.yaml");
+
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(App(), new KubernetesSource { Name = "k", Paths = [missing] })));
+
+        Assert.Equal($"k: {missing} does not exist.", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_manifest_folder_is_accepted()
+    {
+        Write("k8s/a.yaml", Pod("a"));
+
+        var result = await Run(ProfileOf(App(), new KubernetesSource { Paths = [Dir("k8s")] }));
+
+        Assert.All(result.Sources, s => Assert.Null(s.Problem));
+    }
+
+    private static string Pod(string name, string env = "") =>
+        $"apiVersion: v1\nkind: Pod\nmetadata:\n  name: {name}\nspec:\n  containers:\n    - name: {name}\n      image: {name}:1\n{env}";
+
+    [Fact]
+    public async Task A_container_trace_needs_a_kubernetes_source_and_says_what_for()
+    {
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(new Profile { Mode = TraceMode.Container }));
+
+        Assert.Equal("Tracing a container needs a Kubernetes source with the workload and its ConfigMaps and Secrets.", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_container_trace_leaves_out_app_and_environment_sources_and_says_so()
+    {
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", "      env:\n        - name: A__B\n          value: one\n"))] };
+        var app = App();
+        var env = new EnvironmentVariablesSource { Variables = "X=1" };
+        var helm = new HelmSource { ChartFolder = Path.Join(_temp.FullName, "missing") };
+        var profile = ProfileOf(k8s, app, env, helm);
+        profile.Mode = TraceMode.Container;
+
+        var result = await Run(profile);
+
+        const string reason = "Not used when tracing a container. Switch the profile to App to use it.";
+        Assert.Equal(reason, ProblemOf(result, app));
+        Assert.Equal(reason, ProblemOf(result, env));
+        Assert.Null(ProblemOf(result, k8s));
+        Assert.Contains("The chart folder", ProblemOf(result, helm), StringComparison.Ordinal);
+        Assert.Equal("one", result.Report.Find("A__B")!.Value);
+        Assert.Null(result.Report.Find("X"));
+    }
+
+    [Fact]
+    public async Task A_container_trace_picks_the_named_workload_and_container_ignoring_blanks_around_the_names()
+    {
+        var yaml = Pod("one", "      env:\n        - name: FROM_ONE\n          value: x\n") + "---\n" + Pod("two", "      env:\n        - name: FROM_TWO\n          value: y\n");
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pods.yaml", yaml)], Workload = " two ", Container = "  " };
+        var profile = ProfileOf(k8s);
+        profile.Mode = TraceMode.Container;
+
+        var result = await Run(profile);
+
+        Assert.NotNull(result.Report.Find("FROM_TWO"));
+        Assert.Null(result.Report.Find("FROM_ONE"));
+    }
+
+    // App settings
+
+    [Fact]
+    public async Task An_app_without_a_folder_or_with_a_missing_one_is_named_in_the_error()
+    {
+        var app = new AppSettingsSource { Name = "my app", Folder = "  " };
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(app)));
+        Assert.Equal("my app: the app folder '  ' does not exist.", ex.Message);
+
+        app.Folder = Path.Join(_temp.FullName, "nope");
+        ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(app)));
+        Assert.Equal($"my app: the app folder '{app.Folder}' does not exist.", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_folder_without_settings_files_is_an_error_that_names_it()
+    {
+        var folder = Dir("empty");
+
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(new AppSettingsSource { Name = "app", Folder = folder })));
+
+        Assert.Equal($"app: there is no appsettings.json in {folder}.", ex.Message);
+    }
+
+    [Fact]
+    public async Task The_environment_file_wins_over_the_base_file()
+    {
+        var app = App("""{"Db":{"Host":"base","Port":"1"}}""", environment: "Staging");
+        Write("app/appsettings.Staging.json", """{"Db":{"Host":"staging"}}""");
+        Write("app/appsettings.Production.json", """{"Db":{"Host":"production"}}""");
+
+        var result = await Run(ProfileOf(app));
+
+        Assert.Equal("staging", result.Report.Find("Db:Host")!.Value);
+        Assert.Equal("1", result.Report.Find("Db:Port")!.Value);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_blank_environment_means_production(string environment)
+    {
+        var app = App("""{"Db":{"Host":"base"}}""", environment: environment);
+        Write("app/appsettings.Production.json", """{"Db":{"Host":"production"}}""");
+
+        var result = await Run(ProfileOf(app));
+
+        Assert.Equal("production", result.Report.Find("Db:Host")!.Value);
+    }
+
+    [Fact]
+    public async Task Blanks_around_the_environment_name_are_ignored()
+    {
+        var app = App(environment: "  Staging ");
+        Write("app/appsettings.Staging.json", """{"Db":{"Host":"staging"}}""");
+
+        Assert.Equal("staging", (await Run(ProfileOf(app))).Report.Find("Db:Host")!.Value);
+    }
+
+    [Fact]
+    public async Task Only_an_environment_file_is_enough()
+    {
+        Dir("app");
+        Write("app/appsettings.Production.json", """{"Db":{"Host":"production"}}""");
+
+        var result = await Run(ProfileOf(new AppSettingsSource { Name = "app", Folder = Path.Join(_temp.FullName, "app") }));
+
+        Assert.Equal("production", result.Report.Find("Db:Host")!.Value);
+    }
+
+    [Fact]
+    public async Task Extra_settings_files_come_last_and_a_missing_one_is_named()
+    {
+        var app = App();
+        app.ExtraFiles = [Write("extra/one.json", """{"Db":{"Host":"extra"}}""")];
+
+        var result = await Run(ProfileOf(app));
+
+        Assert.Equal("extra", result.Report.Find("Db:Host")!.Value);
+
+        var missing = Path.Join(_temp.FullName, "extra", "gone.json");
+        app.ExtraFiles = [missing];
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(app)));
+        Assert.Equal($"app: the settings file '{missing}' does not exist.", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_broken_settings_file_stops_the_trace_with_a_message()
+    {
+        var app = App("{ not json");
+
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(ProfileOf(app)));
+
+        Assert.StartsWith("Could not read the app's settings: ", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Several_apps_are_layered_in_order()
+    {
+        var first = App("""{"Db":{"Host":"first"}}""", "one");
+        var second = App("""{"Db":{"Host":"second"}}""", "two");
+
+        var result = await Run(ProfileOf(first, second));
+
+        Assert.Equal("second", result.Report.Find("Db:Host")!.Value);
+        Assert.All(result.Sources, s => Assert.Null(s.Problem));
+    }
+
+    // User secrets
+
+    private string UserSecretsHome(string id, string secretsJson)
+    {
+        var home = Dir("home");
+        Write($"home/.microsoft/usersecrets/{id}/secrets.json", secretsJson);
+        return home;
+    }
+
+    [Fact]
+    public async Task Development_loads_the_apps_user_secrets_when_asked()
+    {
+        var app = App(environment: "Development", secrets: true);
+        Write("app/App.csproj", "<Project><PropertyGroup><UserSecretsId>abc-123</UserSecretsId></PropertyGroup></Project>");
+        var home = UserSecretsHome("abc-123", """{"Db":{"Host":"secret-host"}}""");
+
+        var result = await Run(ProfileOf(app), name => name == "HOME" ? home : null, reveal: true);
+
+        Assert.Equal("secret-host", result.Report.Find("Db:Host")!.Value);
+    }
+
+    [Theory]
+    [InlineData("Production", true)]
+    [InlineData("Development", false)]
+    public async Task User_secrets_are_left_out_unless_development_and_asked_for(string environment, bool useSecrets)
+    {
+        var app = App(environment: environment, secrets: useSecrets);
+        Write("app/App.csproj", "<Project><PropertyGroup><UserSecretsId>abc-123</UserSecretsId></PropertyGroup></Project>");
+        var home = UserSecretsHome("abc-123", """{"Db":{"Host":"secret-host"}}""");
+
+        var result = await Run(ProfileOf(app), name => name == "HOME" ? home : null);
+
+        Assert.Equal("base", result.Report.Find("Db:Host")!.Value);
+    }
+
+    [Fact]
+    public async Task A_missing_user_secrets_file_is_not_an_error()
+    {
+        var app = App(environment: "Development", secrets: true);
+        Write("app/App.csproj", "<Project><PropertyGroup><UserSecretsId>abc-123</UserSecretsId></PropertyGroup></Project>");
+
+        var result = await Run(ProfileOf(app), name => name == "HOME" ? Dir("home") : null);
+
+        Assert.Equal("base", result.Report.Find("Db:Host")!.Value);
+    }
+
+    [Fact]
+    public void User_secrets_are_found_by_the_id_in_the_only_project_file()
+    {
+        var folder = Dir("proj");
+        Write("proj/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><UserSecretsId> abc-123 </UserSecretsId></PropertyGroup></Project>");
+
+        var path = UserSecrets.FindFile(folder, name => name == "HOME" ? "/home/me" : null);
+
+        Assert.Equal(Path.Join("/home/me", ".microsoft", "usersecrets", "abc-123", "secrets.json"), path);
+    }
+
+    [Fact]
+    public void User_secrets_use_the_home_folder_on_this_platform_even_when_appdata_is_set()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var folder = Dir("proj");
+        Write("proj/App.csproj", "<Project><PropertyGroup><UserSecretsId>abc</UserSecretsId></PropertyGroup></Project>");
+
+        var path = UserSecrets.FindFile(folder, name => name == "HOME" ? "/home/me" : "/appdata");
+
+        Assert.StartsWith("/home/me", path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void User_secrets_are_not_found_without_a_home_folder()
+    {
+        var folder = Dir("proj");
+        Write("proj/App.csproj", "<Project><PropertyGroup><UserSecretsId>abc</UserSecretsId></PropertyGroup></Project>");
+
+        Assert.Null(UserSecrets.FindFile(folder, _ => null));
+    }
+
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(2, "<UserSecretsId>abc</UserSecretsId>")]
+    public void User_secrets_need_exactly_one_project_file(int count, string content)
+    {
+        var folder = Dir("proj");
+        for (var i = 0; i < count; i++)
+        {
+            Write($"proj/App{i}.csproj", $"<Project><PropertyGroup>{content}</PropertyGroup></Project>");
+        }
+
+        Assert.Null(UserSecrets.FindFile(folder, _ => "/home/me"));
+    }
+
+    [Theory]
+    [InlineData("<Project><PropertyGroup></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId></UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId>..</UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId>.</UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId>../../etc</UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId>a b</UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId>a/b</UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><UserSecretsId>a\\b</UserSecretsId></PropertyGroup></Project>")]
+    [InlineData("<Project><not closed")]
+    public void User_secrets_ids_that_are_missing_odd_or_could_leave_the_folder_are_refused(string project)
+    {
+        var folder = Dir("proj");
+        Write("proj/App.csproj", project);
+
+        Assert.Null(UserSecrets.FindFile(folder, _ => "/home/me"));
+    }
+
+    [Theory]
+    [InlineData("0f3c1e5a-1111-2222-3333-444455556666")]
+    [InlineData("my_app.secrets-1")]
+    [InlineData("..a")]
+    public void User_secrets_ids_may_hold_letters_digits_dots_underscores_and_dashes(string id)
+    {
+        var folder = Dir("proj");
+        Write("proj/App.csproj", $"<Project><PropertyGroup><UserSecretsId>{id}</UserSecretsId></PropertyGroup></Project>");
+
+        Assert.EndsWith(Path.Join(id, "secrets.json"), UserSecrets.FindFile(folder, _ => "/home/me"), StringComparison.Ordinal);
+    }
+
+    // Environment variables sources
+
+    [Fact]
+    public async Task Environment_variable_sources_add_a_file_and_then_typed_lines_and_later_sources_win()
+    {
+        var file = Write("env/.env", "export DB__HOST='from-file'\nDB__PORT=\"5\"\nDB__NAME=file\n");
+        var first = new EnvironmentVariablesSource { Name = "first", File = file, Variables = "# comment\nDB__NAME=typed\n" };
+        var second = new EnvironmentVariablesSource { Name = "second", Variables = "DB__PORT=6" };
+
+        var result = await Run(ProfileOf(App("{}"), first, second));
+
+        Assert.Equal("from-file", result.Report.Find("Db:Host")!.Value);
+        Assert.Equal("typed", result.Report.Find("Db:Name")!.Value);
+        Assert.Equal("6", result.Report.Find("Db:Port")!.Value);
+        Assert.All(result.Sources, s => Assert.Null(s.Problem));
+    }
+
+    [Fact]
+    public async Task A_blank_file_name_is_skipped()
+    {
+        var source = new EnvironmentVariablesSource { File = "  ", Variables = "A__B=1" };
+
+        var result = await Run(ProfileOf(App("{}"), source));
+
+        Assert.Null(ProblemOf(result, source));
+        Assert.Equal("1", result.Report.Find("A:B")!.Value);
+    }
+
+    [Fact]
+    public async Task A_missing_environment_file_is_a_problem_of_that_source()
+    {
+        var source = new EnvironmentVariablesSource { File = Path.Join(_temp.FullName, "missing.env") };
+
+        var result = await Run(ProfileOf(App(), source));
+
+        Assert.Contains("missing.env", ProblemOf(result, source), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_bad_line_in_the_file_is_reported_with_the_file_name_and_line()
+    {
+        var source = new EnvironmentVariablesSource { File = Write("env/prod.env", "A=1\n\nNOPE\n") };
+
+        var result = await Run(ProfileOf(App(), source));
+
+        Assert.Equal("prod.env line 3: expected NAME=VALUE.", ProblemOf(result, source));
+    }
+
+    [Fact]
+    public async Task Prefixes_of_all_apps_pick_and_strip_the_variables_they_name()
+    {
+        var one = App("{}", "one");
+        one.EnvironmentPrefixes = ["ORDERS_", "SHARED_"];
+        var two = App("{}", "two");
+        two.EnvironmentPrefixes = ["SHARED_", "BILLING_"];
+        var env = new EnvironmentVariablesSource { Variables = "ORDERS_A=1\nSHARED_B=2\nBILLING_C=3\nOTHER_D=4\nPLAIN=5" };
+
+        var result = await Run(ProfileOf(one, two, env));
+
+        Assert.Equal("1", result.Report.Find("A")!.Value);
+        Assert.Equal("2", result.Report.Find("B")!.Value);
+        Assert.Equal("3", result.Report.Find("C")!.Value);
+        Assert.Null(result.Report.Find("D"));
+        Assert.Null(result.Report.Find("PLAIN"));
+        Assert.Single(result.Report.Settings, s => s.Key == "B");
+    }
+
+    [Fact]
+    public async Task Without_prefixes_every_variable_counts()
+    {
+        var env = new EnvironmentVariablesSource { Variables = "PLAIN=5\nA__B=6" };
+
+        var result = await Run(ProfileOf(App("{}"), env));
+
+        Assert.Equal("5", result.Report.Find("PLAIN")!.Value);
+        Assert.Equal("6", result.Report.Find("A:B")!.Value);
+    }
+
+    [Fact]
+    public async Task The_process_environment_does_not_leak_in()
+    {
+        var result = await Run(ProfileOf(App("{}")), name => "leaked");
+
+        Assert.Null(result.Report.Find("PATH"));
+        Assert.Null(result.Report.Find("HOME"));
+    }
+
+    // Manifests whose values are not known
+
+    private const string UnknownEnv =
+        "      env:\n"
+        + "        - name: ZED\n          valueFrom:\n            secretKeyRef:\n              name: absent\n              key: k\n"
+        + "        - name: ALPHA\n          valueFrom:\n            configMapKeyRef:\n              name: absent\n              key: k\n"
+        + "        - name: KNOWN\n          value: yes\n";
+
+    [Fact]
+    public async Task Values_the_manifests_do_not_hold_are_listed_in_a_note_in_name_order_and_left_out()
+    {
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", UnknownEnv))] };
+
+        var result = await Run(ProfileOf(App("{}"), k8s));
+
+        var note = Assert.Single(result.Notes);
+        Assert.Equal(
+            "The manifests don't hold the value of ALPHA, ZED (set at run time, or from a ConfigMap or Secret that isn't in the manifests). Add them in an Environment variables source to include them.",
+            note);
+        Assert.Equal("yes", result.Report.Find("KNOWN")!.Value);
+        Assert.Null(result.Report.Find("ALPHA"));
+    }
+
+    [Fact]
+    public async Task No_note_when_every_value_is_known()
+    {
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", "      env:\n        - name: KNOWN\n          value: yes\n"))] };
+
+        var result = await Run(ProfileOf(App("{}"), k8s));
+
+        Assert.Empty(result.Notes);
+    }
+
+    [Fact]
+    public async Task An_environment_variables_source_can_supply_what_the_manifests_lack()
+    {
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", UnknownEnv))] };
+        var env = new EnvironmentVariablesSource { Variables = "ALPHA=a\nZED=z" };
+
+        var result = await Run(ProfileOf(App("{}"), k8s, env));
+
+        Assert.Empty(result.Notes);
+        Assert.Equal("a", result.Report.Find("ALPHA")!.Value);
+    }
+
+    [Fact]
+    public async Task Secret_values_in_the_manifests_reach_the_audit_even_when_hidden()
+    {
+        var yaml = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\ndata:\n  password: " + Convert.ToBase64String(Encoding.UTF8.GetBytes("hunter2-prod")) + "\n---\n"
+            + Pod("web", "      env:\n        - name: Db__Password\n          valueFrom:\n            secretKeyRef:\n              name: db\n              key: password\n");
+        var k8s = new KubernetesSource { Paths = [Write("k8s/all.yaml", yaml)] };
+        var app = App("{}");
+
+        var hidden = await Run(ProfileOf(app, k8s));
+        var revealed = await Run(ProfileOf(app, k8s), reveal: true);
+
+        Assert.Equal("***", hidden.Report.Find("Db:Password")!.Value);
+        Assert.Equal("hunter2-prod", revealed.Report.Find("Db:Password")!.Value);
+        Assert.Equal(SecretRating.Protected, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
+    }
+
+    // Helm and Kustomize
+
+    [Fact]
+    public async Task A_helm_source_names_a_missing_chart_folder()
+    {
+        var helm = new HelmSource { ChartFolder = Path.Join(_temp.FullName, "nochart") };
+
+        var result = await Run(ProfileOf(App(), helm));
+
+        Assert.Equal($"The chart folder '{helm.ChartFolder}' does not exist.", ProblemOf(result, helm));
+    }
+
+    [Fact]
+    public async Task A_helm_source_names_a_missing_values_file()
+    {
+        Write("chart/Chart.yaml", "name: demo\nversion: 0.1.0\n");
+        Write("chart/values.yaml", "a: 1\n");
+        var missing = Path.Join(_temp.FullName, "values-none.yaml");
+        var helm = new HelmSource { ChartFolder = Path.Join(_temp.FullName, "chart"), ValuesFiles = [missing] };
+
+        var result = await Run(ProfileOf(App(), helm));
+
+        Assert.Equal($"The values file '{missing}' does not exist.", ProblemOf(result, helm));
+    }
+
+    [Fact]
+    public async Task A_helm_chart_links_its_values_to_the_settings_that_use_them()
+    {
+        Write("chart/Chart.yaml", "name: demo\nversion: 0.1.0\n");
+        Write("chart/values.yaml", "db:\n  timeout: 30\n");
+        Write("chart/templates/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\ndata:\n  Db__Timeout: {{ .Values.db.timeout | quote }}\n");
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", "      envFrom:\n        - configMapRef:\n            name: cfg\n")), Write("k8s/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\ndata:\n  Db__Timeout: \"30\"\n")] };
+        var helm = new HelmSource { ChartFolder = Path.Join(_temp.FullName, "chart"), SetValues = ["db.timeout=45"] };
+
+        var result = await Run(ProfileOf(App("{}"), k8s, helm));
+
+        Assert.Null(ProblemOf(result, helm));
+        var setting = result.Report.Find("Db:Timeout")!;
+        Assert.Contains(AllSteps(setting.Steps), s => s.Kind == LayerKind.Helm);
+    }
+
+    private static IEnumerable<ProvenanceStep> AllSteps(IEnumerable<ProvenanceStep> steps) =>
+        steps.SelectMany(s => new[] { s }.Concat(AllSteps(s.Origins)));
+
+    [Fact]
+    public async Task A_kustomize_source_names_a_missing_folder()
+    {
+        var kustomize = new KustomizeSource { Folder = Path.Join(_temp.FullName, "nokustomize") };
+
+        var result = await Run(ProfileOf(App(), kustomize));
+
+        Assert.Equal($"The Kustomize folder '{kustomize.Folder}' does not exist.", ProblemOf(result, kustomize));
+    }
+
+    [Fact]
+    public async Task A_kustomize_generator_links_to_the_settings_that_use_it()
+    {
+        Write("overlay/kustomization.yaml", "configMapGenerator:\n  - name: cfg\n    literals:\n      - Db__Timeout=90\n");
+        var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", "      envFrom:\n        - configMapRef:\n            name: cfg\n")), Write("k8s/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\ndata:\n  Db__Timeout: \"90\"\n")] };
+        var kustomize = new KustomizeSource { Folder = Path.Join(_temp.FullName, "overlay") };
+
+        var result = await Run(ProfileOf(App("{}"), k8s, kustomize));
+
+        Assert.Null(ProblemOf(result, kustomize));
+        Assert.Contains(AllSteps(result.Report.Find("Db:Timeout")!.Steps), s => s.Kind == LayerKind.Kustomize);
+    }
+
+    // GitHub
+
+    private static FakeHttpHandler GitHub(string owner = "contoso", string name = "orders")
+    {
+        var repo = $"/repos/{owner}/{name}";
+        return new FakeHttpHandler()
+            .Respond($"{repo}/actions/organization-variables?per_page=30&page=1", """{"total_count":0,"variables":[]}""")
+            .Respond($"{repo}/actions/organization-secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""")
+            .Respond($"{repo}/actions/variables?per_page=30&page=1", """{"total_count":1,"variables":[{"name":"Db__Host","value":"gh-host","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}""")
+            .Respond($"{repo}/actions/secrets?per_page=100&page=1", """{"total_count":1,"secrets":[{"name":"OLD_KEY","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}""");
+    }
+
+    private static GitHubSource GitHubSourceFor(string repository = "contoso/orders") =>
+        new() { Name = "gh", Repository = repository, CredentialSource = CredentialSource.EnvironmentVariable, CredentialVariable = "TOK" };
+
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("a/b/c")]
+    [InlineData("contoso/")]
+    [InlineData("/orders")]
+    [InlineData("contoso/ ")]
+    [InlineData("")]
+    public async Task A_github_repository_must_be_owner_slash_name(string repository)
+    {
+        var github = GitHubSourceFor(repository);
+
+        var result = await Run(ProfileOf(App(), github), name => Token);
+
+        Assert.Equal($"The repository must be owner/name, got '{repository}'.", ProblemOf(result, github));
+    }
+
+    [Fact]
+    public async Task A_missing_workflow_file_is_named()
+    {
+        var github = GitHubSourceFor();
+        github.Workflows = [Path.Join(_temp.FullName, "ci.yml")];
+
+        var result = await Run(ProfileOf(App(), github), name => Token);
+
+        Assert.Equal($"The workflow file '{github.Workflows[0]}' does not exist.", ProblemOf(result, github));
+    }
+
+    [Fact]
+    public async Task A_github_api_address_must_be_a_url()
+    {
+        var github = GitHubSourceFor();
+        github.ApiUrl = "not a url";
+
+        var result = await Run(ProfileOf(App(), github), name => Token);
+
+        Assert.Equal("The GitHub API address must be an absolute URL, got 'not a url'.", ProblemOf(result, github));
+    }
+
+    [Theory]
+    [InlineData("https://ghe.example.test/api/v3")]
+    [InlineData("https://ghe.example.test/api/v3/")]
+    public async Task A_github_enterprise_address_is_used_with_or_without_a_trailing_slash(string apiUrl)
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/api/v3/repos/contoso/orders/actions/organization-variables?per_page=30&page=1", """{"total_count":0,"variables":[]}""")
+            .Respond("/api/v3/repos/contoso/orders/actions/organization-secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""")
+            .Respond("/api/v3/repos/contoso/orders/actions/variables?per_page=30&page=1", """{"total_count":0,"variables":[]}""")
+            .Respond("/api/v3/repos/contoso/orders/actions/secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""");
+        var github = GitHubSourceFor();
+        github.ApiUrl = " " + apiUrl + " ";
+
+        var result = await Run(ProfileOf(App(), github), name => Token, http: handler.Client);
+
+        Assert.Null(ProblemOf(result, github));
+        Assert.All(handler.Requests, r => Assert.Equal("ghe.example.test", r.RequestUri!.Host));
+    }
+
+    [Fact]
+    public async Task Github_names_with_blanks_around_them_are_trimmed_and_the_environment_is_asked_for_when_set()
+    {
+        var handler = GitHub();
+        handler.Respond("/repos/contoso/orders/environments/prod/variables?per_page=30&page=1", """{"total_count":0,"variables":[]}""")
+            .Respond("/repos/contoso/orders/environments/prod/secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""");
+        var github = GitHubSourceFor(" contoso / orders ");
+        github.Environment = " prod ";
+
+        var result = await Run(ProfileOf(App("{}"), github), name => Token, http: handler.Client);
+
+        Assert.Null(ProblemOf(result, github));
+        Assert.Contains(handler.Requests, r => r.RequestUri!.AbsolutePath == "/repos/contoso/orders/environments/prod/variables");
+    }
+
+    [Fact]
+    public async Task Github_variables_that_a_setting_uses_are_linked_and_the_others_are_listed_as_unused()
+    {
+        var github = GitHubSourceFor();
+
+        var result = await Run(ProfileOf(App("""{"Db":{"Host":"base"}}"""), github), name => Token, http: GitHub().Client);
+
+        Assert.Null(ProblemOf(result, github));
+        Assert.Contains(new UnusedVariable("GitHub Actions", "OLD_KEY", "repository secret (contoso/orders)"), result.UnusedVariables);
+        Assert.Contains(new UnusedVariable("GitHub Actions", "Db__Host", "repository variable (contoso/orders)"), result.UnusedVariables);
+    }
+
+    [Fact]
+    public async Task A_github_variable_that_is_not_a_secret_is_described_as_a_variable()
+    {
+        var github = GitHubSourceFor();
+        var handler = GitHub().Respond("/repos/contoso/orders/actions/variables?per_page=30&page=1", """{"total_count":1,"variables":[{"name":"UNUSED_VAR","value":"x","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}""");
+
+        var result = await Run(ProfileOf(App("{}"), github), name => Token, http: handler.Client);
+
+        Assert.Contains(new UnusedVariable("GitHub Actions", "UNUSED_VAR", "repository variable (contoso/orders)"), result.UnusedVariables);
+    }
+
+    // Octopus
+
+    private static FakeHttpHandler Octopus(bool sensitive = false) => new FakeHttpHandler()
+        .Respond("/api/spaces/all", """[{"Id":"Spaces-1","Name":"Default","IsDefault":true},{"Id":"Spaces-2","Name":"Platform"}]""")
+        .Respond("/api/Spaces-1/projects/all", """[{"Id":"Projects-1","Name":"Api","Slug":"api","VariableSetId":"vs-1","IncludedLibraryVariableSetIds":["Lib-1"]}]""")
+        .Respond("/api/Spaces-1/variables/vs-1", """
+            {"Variables":[
+              {"Name":"Db:Host","Value":"octo-host","Type":"String","Scope":{"Environment":["Environments-1"]}},
+              {"Name":"Db:Host","Value":"octo-other","Type":"String","Scope":{"Environment":["Environments-2"]}},
+              {"Name":"Db:Pool","Value":"7","Type":"String","Scope":{"Role":["web"],"TenantTag":["Region/West"]}},
+              {"Name":"Db:Mach","Value":"m","Type":"String","Scope":{"Machine":["Machines-1"]}},
+              {"Name":"Db:Chan","Value":"c","Type":"String","Scope":{"Channel":["Channels-1"]}},
+              {"Name":"Db:Step","Value":"s","Type":"String","Scope":{"Action":["Actions-1"]}},
+              {"Name":"Unused:Var","Value":null,"Type":"@TYPE@","IsSensitive":@SENSITIVE@,"Scope":{}}
+            ],"ScopeValues":{"Environments":[{"Id":"Environments-1","Name":"Production"},{"Id":"Environments-2","Name":"Staging"}],"Roles":[{"Id":"web","Name":"web"}],"TenantTags":[{"Id":"Region/West","Name":"Region/West"}],"Machines":[{"Id":"Machines-1","Name":"m1"}],"Channels":[{"Id":"Channels-1","Name":"Main"}],"Actions":[{"Id":"Actions-1","Name":"Deploy"}]}}
+            """.Replace("@TYPE@", sensitive ? "Sensitive" : "String", StringComparison.Ordinal).Replace("@SENSITIVE@", sensitive ? "true" : "false", StringComparison.Ordinal))
+        .Respond("/api/Spaces-1/libraryvariablesets/Lib-1", """{"Id":"Lib-1","Name":"Shared","VariableSetId":"vs-lib"}""")
+        .Respond("/api/Spaces-1/variables/vs-lib", """{"Variables":[{"Name":"Lib:Var","Value":"x","Type":"String","Scope":{}}],"ScopeValues":{}}""");
+
+    private static OctopusSource OctopusSourceFor() =>
+        new() { Name = "octo", Server = "https://octopus.example.test", Project = "Api", CredentialSource = CredentialSource.EnvironmentVariable, CredentialVariable = "KEY" };
+
+    [Fact]
+    public async Task Octopus_needs_a_server_and_a_project_and_says_so()
+    {
+        var noServer = OctopusSourceFor();
+        noServer.Server = " ";
+        var noProject = OctopusSourceFor();
+        noProject.Project = " ";
+
+        var result = await Run(ProfileOf(App(), noServer, noProject), name => "API-KEY");
+
+        Assert.Equal("Enter the Octopus server address.", ProblemOf(result, noServer));
+        Assert.Equal("Enter the Octopus project.", ProblemOf(result, noProject));
+    }
+
+    [Fact]
+    public async Task An_octopus_server_must_be_a_url()
+    {
+        var source = OctopusSourceFor();
+        source.Server = "not a url";
+
+        var result = await Run(ProfileOf(App(), source), name => "API-KEY");
+
+        Assert.Equal("The Octopus server address must be an absolute URL, got 'not a url'.", ProblemOf(result, source));
+    }
+
+    [Fact]
+    public async Task Octopus_variables_are_linked_for_the_chosen_environment()
+    {
+        var source = OctopusSourceFor();
+        source.Environment = " Production ";
+        var handler = Octopus();
+
+        var result = await Run(ProfileOf(App("""{"Db":{"Host":"base"}}"""), source), name => "API-KEY", http: handler.Client);
+
+        Assert.Null(ProblemOf(result, source));
+        Assert.Contains(AllSteps(result.Report.Find("Db:Host")!.Steps), s => s.Kind == LayerKind.OctopusDeploy && s.Value == "octo-host");
+        Assert.DoesNotContain(AllSteps(result.Report.Find("Db:Host")!.Steps), s => s.Kind == LayerKind.OctopusDeploy && s.Value == "octo-other");
+        Assert.All(handler.Requests, r => Assert.Equal("API-KEY", Assert.Single(r.Headers.GetValues("X-Octopus-ApiKey"))));
+    }
+
+    [Fact]
+    public async Task Octopus_scope_choices_select_the_variables_that_apply()
+    {
+        var source = OctopusSourceFor();
+        source.Roles = ["web"];
+        source.TenantTags = ["Region/West"];
+        source.Machine = "m1";
+        source.Channel = "Main";
+        source.Step = "Deploy";
+
+        var result = await Run(ProfileOf(App("""{"Db":{"Pool":"1","Mach":"1","Chan":"1","Step":"1"}}"""), source), name => "API-KEY", http: Octopus().Client);
+
+        Assert.Null(ProblemOf(result, source));
+        foreach (var key in new[] { "Db:Pool", "Db:Mach", "Db:Chan", "Db:Step" })
+        {
+            Assert.Contains(AllSteps(result.Report.Find(key)!.Steps), s => s.Kind == LayerKind.OctopusDeploy);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "Unused:Var", "Octopus Deploy", "Api variables")]
+    public async Task Unused_octopus_variables_are_listed_with_their_set(bool sensitive, string name, string tool, string set)
+    {
+        var source = OctopusSourceFor();
+
+        var result = await Run(ProfileOf(App("{}"), source), _ => "API-KEY", http: Octopus(sensitive).Client);
+
+        var unused = result.UnusedVariables.Single(v => v.Name == name);
+        Assert.Equal(tool, unused.Tool);
+        Assert.StartsWith(set.Split(' ')[0], unused.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_sensitive_unused_octopus_variable_says_so()
+    {
+        var result = await Run(ProfileOf(App("{}"), OctopusSourceFor()), _ => "API-KEY", http: Octopus(sensitive: true).Client);
+
+        Assert.EndsWith(", sensitive", result.UnusedVariables.Single(v => v.Name == "Unused:Var").Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_unused_octopus_variable_that_is_not_sensitive_has_no_suffix()
+    {
+        var result = await Run(ProfileOf(App("{}"), OctopusSourceFor()), _ => "API-KEY", http: Octopus().Client);
+
+        Assert.DoesNotContain("sensitive", result.UnusedVariables.Single(v => v.Name == "Unused:Var").Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_octopus_library_set_can_be_left_out()
+    {
+        var source = OctopusSourceFor();
+        source.IncludeLibraryVariableSets = false;
+
+        var result = await Run(ProfileOf(App("{}"), source), _ => "API-KEY", http: Octopus().Client);
+
+        Assert.DoesNotContain(result.UnusedVariables, v => v.Name == "Lib:Var");
+        var withLibrary = await Run(ProfileOf(App("{}"), OctopusSourceFor()), _ => "API-KEY", http: Octopus().Client);
+        Assert.Contains(withLibrary.UnusedVariables, v => v.Name == "Lib:Var");
+    }
+
+    [Fact]
+    public async Task A_named_octopus_space_is_used()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", """[{"Id":"Spaces-1","Name":"Default","IsDefault":true},{"Id":"Spaces-2","Name":"Platform"}]""");
+        var source = OctopusSourceFor();
+        source.Space = " Platform ";
+
+        var result = await Run(ProfileOf(App("{}"), source), _ => "API-KEY", http: handler.Client);
+
+        Assert.Contains(handler.Requests, r => r.RequestUri!.AbsolutePath == "/api/Spaces-2/projects/all");
+        Assert.NotNull(ProblemOf(result, source));
+    }
+
+    // Failures of the services
+
+    private sealed class ThrowingHandler(Func<Exception> make) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => throw make();
+    }
+
+    [Fact]
+    public async Task A_timeout_is_a_problem_of_the_source_and_the_trace_goes_on()
+    {
+        var github = GitHubSourceFor();
+
+        var result = await Run(ProfileOf(App(), github), name => Token, http: () => new HttpClient(new ThrowingHandler(() => new TaskCanceledException("timed out"))));
+
+        Assert.Contains("timed out", ProblemOf(result, github), StringComparison.Ordinal);
+        Assert.Equal("base", result.Report.Find("Db:Host")!.Value);
+    }
+
+    [Fact]
+    public async Task A_cancelled_trace_is_not_a_problem_of_the_source()
+    {
+        using var cancel = new CancellationTokenSource();
+        var github = GitHubSourceFor();
+        var client = () => new HttpClient(new ThrowingHandler(() =>
+        {
+            cancel.Cancel();
+            return new TaskCanceledException("cancelled");
+        }));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new TraceRunner(new InMemoryCredentialStore(), _ => Token, client).RunAsync(ProfileOf(App(), github), false, cancel.Token));
+    }
+
+    [Fact]
+    public async Task A_bug_in_a_source_is_not_swallowed()
+    {
+        var github = GitHubSourceFor();
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => Run(ProfileOf(App(), github), name => Token, http: () => new HttpClient(new ThrowingHandler(() => new NotSupportedException("bug")))));
+    }
+
+    [Fact]
+    public async Task A_failing_credential_store_is_a_problem_of_the_source()
+    {
+        var github = new GitHubSource { Name = "gh", Repository = "contoso/orders" };
+
+        var result = await Run(ProfileOf(App(), github), store: new BrokenStore());
+
+        Assert.Equal("keyring is locked", ProblemOf(result, github));
+    }
+
+    private sealed class BrokenStore : ICredentialStore
+    {
+        public string DisplayName => "broken";
+
+        public string? Read(string account) => throw new CredentialStoreException("keyring is locked");
+
+        public void Write(string account, string secret) => throw new CredentialStoreException("keyring is locked");
+
+        public void Delete(string account) => throw new CredentialStoreException("keyring is locked");
+    }
+
+    // Credentials
+
+    [Fact]
+    public void Reading_a_credential_needs_a_source()
+    {
+        Assert.Throws<ArgumentNullException>(() => new TraceRunner(new InMemoryCredentialStore()).ReadCredential(null!));
+    }
+
+    [Fact]
+    public void The_credential_messages_name_the_credential_and_the_variable()
+    {
+        var runner = new TraceRunner(new InMemoryCredentialStore(), _ => null);
+        var stored = new GitHubSource();
+        var variable = new GitHubSource { CredentialSource = CredentialSource.EnvironmentVariable, CredentialVariable = "TOK" };
+        var unnamed = new OctopusSource { CredentialSource = CredentialSource.EnvironmentVariable };
+
+        Assert.Equal("No token is saved for this connection. Enter it and choose Save.", Assert.Throws<TraceSetupException>(() => runner.ReadCredential(stored)).Message);
+        Assert.Equal("The environment variable TOK is not set. Set it before starting ConfigFerret, or save the token in the memory instead.", Assert.Throws<TraceSetupException>(() => runner.ReadCredential(variable)).Message);
+        Assert.Equal("Name the environment variable that holds the API key.", Assert.Throws<TraceSetupException>(() => runner.ReadCredential(unnamed)).Message);
+    }
+
+    [Fact]
+    public void A_credential_from_the_environment_is_returned_as_found()
+    {
+        var source = new GitHubSource { CredentialSource = CredentialSource.EnvironmentVariable, CredentialVariable = " TOK " };
+
+        Assert.Equal(Token, new TraceRunner(new InMemoryCredentialStore(), name => name == "TOK" ? Token : null).ReadCredential(source));
+    }
+
+    [Fact]
+    public void The_default_environment_is_this_processs()
+    {
+        const string name = "CONFIGFERRET_TEST_TRACE_TOKEN";
+        var source = new GitHubSource { CredentialSource = CredentialSource.EnvironmentVariable, CredentialVariable = name };
+        var previous = Environment.GetEnvironmentVariable(name);
+        try
+        {
+            Environment.SetEnvironmentVariable(name, "from-process");
+
+            Assert.Equal("from-process", new TraceRunner(new InMemoryCredentialStore()).ReadCredential(source));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, previous);
+        }
+    }
+
+    // Dotenv text
+
+    [Theory]
+    [InlineData("A=1", "A", "1")]
+    [InlineData("  A = 1  ", "A", "1")]
+    [InlineData("export A=1", "A", "1")]
+    [InlineData("export    A=1", "A", "1")]
+    [InlineData("exportA=1", "exportA", "1")]
+    [InlineData("A=\"quoted value\"", "A", "quoted value")]
+    [InlineData("A='quoted value'", "A", "quoted value")]
+    [InlineData("A=\"\"", "A", "")]
+    [InlineData("A=\"", "A", "\"")]
+    [InlineData("A=\"mixed'", "A", "\"mixed'")]
+    [InlineData("A=x=y", "A", "x=y")]
+    [InlineData("A=", "A", "")]
+    public void Dotenv_lines_are_split_at_the_first_equals_sign_and_unquoted(string line, string name, string value)
+    {
+        Assert.Equal((name, value), Assert.Single(DotEnv.Parse(line, "x")));
+    }
+
+    [Theory]
+    [InlineData("=1")]
+    [InlineData("NOPE")]
+    [InlineData("export ")]
+    public void Dotenv_lines_without_a_name_are_refused_with_the_line_number(string line)
+    {
+        var ex = Assert.Throws<FormatException>(() => DotEnv.Parse("A=1\n" + line, "my.env").ToList());
+
+        Assert.Equal("my.env line 2: expected NAME=VALUE.", ex.Message);
+    }
+
+    [Fact]
+    public void Dotenv_text_may_be_null_and_skips_blank_lines_and_comments()
+    {
+        Assert.Empty(DotEnv.Parse(null, "x"));
+        Assert.Equal([("A", "1"), ("B", "2")], DotEnv.Parse("\n  \n# c\n  # d\nA=1\r\nB=2\r\n", "x"));
+    }
+}
