@@ -1,0 +1,3 @@
+{"Parameters":[{"Name":"/orders/prod/Db/Timeout","Type":"String","Value":"30","Version":3,"LastModifiedDate":1.6E9,"ARN":"arn:aws:ssm:eu-west-1:1:parameter/orders/prod/Db/Timeout","DataType":"text"},{"Name":"/orders/prod/Db/Password","Type":"SecureString","Value":"AQICcipher"}],"NextToken":"p2"}
+%%
+{"Parameters":[{"Name":"/orders/prod/Hosts","Type":"StringList","Value":"a,b,c"},{"Name":"/orders/prod/Json","Type":"String","Value":"{\"a\":{\"b\":\"1\"}}"},{"Name":"/orders/prod/Odd","Type":"Fancy","Value":"?"}]}

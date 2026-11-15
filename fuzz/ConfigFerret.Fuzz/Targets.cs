@@ -51,6 +51,8 @@ internal static partial class Targets
         ["workspace"] = new("Desktop WorkspaceStore.Load on workspace JSON", WorkspaceTarget),
         ["code-reads"] = new("Desktop CodeReadScanner over C# sources (split by %%), Check on literals and fixed keys, StripComments", CodeReads),
         ["helm-usage"] = new("Desktop HelmValueUsage.FindDead: templates %% values yaml", HelmUsage),
+        ["aws-secrets"] = new("AWS Secrets Manager API responses (split by %%) through the AWS SDK, then the resolver", AwsSecretsTarget),
+        ["aws-parameters"] = new("AWS Parameter Store API responses (split by %%) through the AWS SDK, then the resolver", AwsParametersTarget),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

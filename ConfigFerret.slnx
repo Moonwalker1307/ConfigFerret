@@ -6,6 +6,7 @@
     <Project Path="src/ConfigFerret.HashiCorp/ConfigFerret.HashiCorp.csproj" />
     <Project Path="src/ConfigFerret.KubernetesCluster/ConfigFerret.KubernetesCluster.csproj" />
     <Project Path="src/ConfigFerret.Azure/ConfigFerret.Azure.csproj" />
+    <Project Path="src/ConfigFerret.Aws/ConfigFerret.Aws.csproj" />
     <Project Path="src/ConfigFerret.Tool/ConfigFerret.Tool.csproj" />
     <Project Path="src/ConfigFerret.Desktop/ConfigFerret.Desktop.csproj" />
   </Folder>
@@ -16,6 +17,7 @@
     <Project Path="tests/ConfigFerret.HashiCorp.Tests/ConfigFerret.HashiCorp.Tests.csproj" />
     <Project Path="tests/ConfigFerret.KubernetesCluster.Tests/ConfigFerret.KubernetesCluster.Tests.csproj" />
     <Project Path="tests/ConfigFerret.Azure.Tests/ConfigFerret.Azure.Tests.csproj" />
+    <Project Path="tests/ConfigFerret.Aws.Tests/ConfigFerret.Aws.Tests.csproj" />
     <Project Path="tests/ConfigFerret.Tool.Tests/ConfigFerret.Tool.Tests.csproj" />
     <Project Path="tests/ConfigFerret.Desktop.Tests/ConfigFerret.Desktop.Tests.csproj" />
   </Folder>

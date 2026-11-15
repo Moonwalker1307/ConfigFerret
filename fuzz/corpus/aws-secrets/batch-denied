@@ -1,0 +1,6 @@
+{"SecretList":[{"Name":"prod/orders/Cert"}]}
+%%
+HTTP 400
+{"__type":"AccessDeniedException","message":"no"}
+%%
+{"Name":"prod/orders/Cert","SecretString":"{\"a\":1}"}
