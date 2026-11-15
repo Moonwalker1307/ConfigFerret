@@ -23,7 +23,7 @@ public sealed record SourceResult(SourceSettings Source, string? Problem);
 /// <param name="Sources">What happened to each enabled source.</param>
 /// <param name="Notes">Notes about the trace that are not warnings from the library, such as variables without a known value.</param>
 /// <param name="Secrets">The secrets audit of every setting.</param>
-/// <param name="UnusedVariables">GitHub and Octopus variables that no setting uses.</param>
+/// <param name="UnusedVariables">GitHub variables that no setting or workflow uses, and Octopus variables that no setting uses.</param>
 public sealed record TraceResult(
     ProvenanceReport Report,
     UnusedReport Unused,
@@ -43,6 +43,9 @@ public sealed record TraceResult(
 
     /// <summary>Places in the code that read a key the scan cannot work out, so a dead setting may still be read there.</summary>
     public IReadOnlyList<string> DynamicReads { get; init; } = [];
+
+    /// <summary>GitHub variables that a workflow uses but no setting in the trace does, such as a deploy action's publish profile.</summary>
+    public IReadOnlyList<WorkflowVariable> WorkflowVariables { get; init; } = [];
 }
 
 /// <summary>A configured setting that no code reads.</summary>
@@ -56,6 +59,12 @@ public sealed record DeadSetting(string Key, string Reason, IReadOnlyList<string
 /// <param name="Name">The variable name.</param>
 /// <param name="Detail">Its scope or variable set, and whether it is secret.</param>
 public sealed record UnusedVariable(string Tool, string Name, string Detail);
+
+/// <summary>A GitHub variable that a workflow uses directly, while no configuration setting picks it up.</summary>
+/// <param name="Name">The variable name.</param>
+/// <param name="Detail">Its scope, and whether it is secret.</param>
+/// <param name="UsedBy">Where a workflow first uses it, for example <c>deploy.yml line 12</c>.</param>
+public sealed record WorkflowVariable(string Name, string Detail, string UsedBy);
 
 /// <summary>The profile cannot be traced as set up, for example because it has no app settings source.</summary>
 public sealed class TraceSetupException : Exception
@@ -225,8 +234,10 @@ public sealed class TraceRunner
             deadHelm.AddRange(HelmValueUsage.FindDead(helm.ChartFolder, helm.ValuesFiles));
         }
 
-        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, githubVariables, octopusVariables))
+        var workflowVariables = new List<WorkflowVariable>();
+        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, github, octopusVariables, workflowVariables))
         {
+            WorkflowVariables = workflowVariables,
             DeadSettings = dead,
             DeadHelmValues = deadHelm,
             CodeFilesScanned = code?.FilesScanned,
@@ -236,7 +247,11 @@ public sealed class TraceRunner
         static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
     }
 
-    private static List<UnusedVariable> FindUnusedVariables(ProvenanceReport report, List<GitHubVariables> github, List<OctopusVariables> octopus)
+    private static List<UnusedVariable> FindUnusedVariables(
+        ProvenanceReport report,
+        Dictionary<GitHubSource, GitHubVariables> github,
+        List<OctopusVariables> octopus,
+        List<WorkflowVariable> workflowOnly)
     {
         var used = new HashSet<SourceRef>();
         foreach (var step in report.Settings.SelectMany(s => s.Steps))
@@ -245,14 +260,27 @@ public sealed class TraceRunner
         }
 
         var unused = new List<UnusedVariable>();
-        foreach (var variable in github.SelectMany(v => v.Entries))
+        foreach (var (source, variables) in github)
         {
-            if (!used.Contains(new GitHubVariableRef(variable.Kind, variable.Scope, variable.Owner, variable.Name)))
+            // A variable any workflow refers to (a deploy action's with: input, a run: script, an env: entry for a
+            // differently named setting) is in use, even when no traced setting picks it up.
+            var workflows = WorkflowReferences.Read(source.Workflows);
+            foreach (var variable in variables.Entries)
             {
-                unused.Add(new UnusedVariable(
-                    "GitHub Actions",
-                    variable.Name,
-                    $"{variable.Scope.ToString().ToLowerInvariant()} {(variable.Kind == GitHubVariableKind.Secret ? "secret" : "variable")} ({variable.Owner})"));
+                if (used.Contains(new GitHubVariableRef(variable.Kind, variable.Scope, variable.Owner, variable.Name)))
+                {
+                    continue;
+                }
+
+                var detail = $"{variable.Scope.ToString().ToLowerInvariant()} {(variable.Kind == GitHubVariableKind.Secret ? "secret" : "variable")} ({variable.Owner})";
+                if (workflows.FirstUse(variable.Kind, variable.Name) is { } usedBy)
+                {
+                    workflowOnly.Add(new WorkflowVariable(variable.Name, detail, usedBy));
+                }
+                else
+                {
+                    unused.Add(new UnusedVariable("GitHub Actions", variable.Name, detail));
+                }
             }
         }
 

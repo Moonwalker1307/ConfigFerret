@@ -298,20 +298,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>The secrets audit, red first.</summary>
     public ObservableCollection<SecretRow> SecretRows { get; } = [];
 
-    /// <summary>Dead variables and values that never win, as filtered by <see cref="OnlyDead"/>.</summary>
+    /// <summary>Dead variables, values that never win and GitHub variables only workflows use, as filtered by <see cref="OnlyDead"/>.</summary>
     public ObservableCollection<UnusedRow> Unused { get; } = [];
 
     /// <summary>Shows only dead variables in the Unused tab, not values that are overridden.</summary>
     [ObservableProperty]
     public partial bool OnlyDead { get; set; }
 
-    /// <summary>Variables nothing reads: settings no code reads, Helm values no template reads, and GitHub or Octopus variables no setting uses.</summary>
+    /// <summary>Variables nothing reads: settings no code reads, Helm values no template reads, GitHub variables no setting or workflow uses, and Octopus variables no setting uses.</summary>
     [ObservableProperty]
     public partial int DeadCount { get; set; }
 
     /// <summary>Values that a later layer always overrides.</summary>
     [ObservableProperty]
     public partial int NeverWinsCount { get; set; }
+
+    /// <summary>GitHub variables a workflow uses directly while no setting does, such as a deploy action's publish profile.</summary>
+    [ObservableProperty]
+    public partial int WorkflowOnlyCount { get; set; }
 
     /// <summary>What the dead-variable scan read, such as "Read 12 C# files".</summary>
     [ObservableProperty]
@@ -946,8 +950,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 variable.Tool,
                 variable.Name,
                 variable.Detail,
-                "No setting in this trace uses it",
+                variable.Tool.StartsWith("GitHub", StringComparison.Ordinal) ? "No setting in this trace or workflow uses it" : "No setting in this trace uses it",
                 IsDead: true) { CanShow = false });
+        }
+
+        foreach (var variable in result.WorkflowVariables)
+        {
+            _allUnused.Add(new UnusedRow("github", "GitHub Actions", variable.Name, variable.Detail, $"Used by {variable.UsedBy}, not by an app setting")
+            {
+                CanShow = false,
+                IsWorkflowOnly = true,
+            });
         }
 
         foreach (var value in result.Unused.NeverWinning)
@@ -961,8 +974,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         DeadCount = _allUnused.Count(u => u.IsDead);
-        NeverWinsCount = _allUnused.Count - DeadCount;
-        UnusedCount = _allUnused.Count;
+        NeverWinsCount = _allUnused.Count(u => u.IsNeverWins);
+        WorkflowOnlyCount = _allUnused.Count(u => u.IsWorkflowOnly);
+        UnusedCount = DeadCount + NeverWinsCount;
         DeadScanText = result.CodeFilesScanned switch
         {
             null => "No app code in this trace, so settings were not checked against code.",
@@ -1053,7 +1067,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _allUnused.Clear();
         Problems.Clear();
         SecretRows.Clear();
-        TotalCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = UnusedCount = ProblemCount = DeadCount = NeverWinsCount = 0;
+        TotalCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = UnusedCount = ProblemCount = DeadCount = NeverWinsCount = WorkflowOnlyCount = 0;
         DeadScanText = null;
         SelectedRow = null;
         HasResult = false;

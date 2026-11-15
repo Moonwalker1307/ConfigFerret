@@ -48,7 +48,8 @@ public sealed class ComposeService
     public IReadOnlyList<ProvenanceStep> MountLayers(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        return _mounts.TryGetValue(path.Replace('\\', '/'), out var step) ? [step with { IsEffective = true }] : [];
+        // Try the path as listed first: a target can itself hold a backslash, and Mounts lists it unchanged.
+        return _mounts.TryGetValue(path, out var step) || _mounts.TryGetValue(path.Replace('\\', '/'), out step) ? [step with { IsEffective = true }] : [];
     }
 
     private static List<ProvenanceStep> MarkEffective(List<ProvenanceStep> steps) =>

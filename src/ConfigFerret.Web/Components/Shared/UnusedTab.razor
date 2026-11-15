@@ -1,13 +1,19 @@
 <div class="column pad-top">
     <p class="muted">
-        Dead variables are set but nothing reads them: settings no code reads, Helm values no template reads, and GitHub or Octopus
-        variables no setting uses. Overridden values are set but a later layer always wins. Check other environments before deleting.
+        Dead variables are set but nothing reads them: settings no code reads, Helm values no template reads, GitHub variables no
+        setting or workflow uses, and Octopus variables no setting uses. Overridden values are set but a later layer always wins.
+        Workflow rows are GitHub variables a workflow uses directly, such as a deploy action's publish profile, that no app setting
+        reads. Check other environments before deleting.
     </p>
     <div class="filters">
         <button class="pill @(Vm.OnlyDead ? "checked" : null)" aria-pressed="@(Vm.OnlyDead ? "true" : "false")" @onclick="() => Vm.OnlyDead = !Vm.OnlyDead">
             Dead only <span class="bad-text bold">@Vm.DeadCount</span>
         </button>
         <span class="muted">@Vm.NeverWinsCount overridden</span>
+        @if (Vm.WorkflowOnlyCount > 0)
+        {
+            <span class="muted">@Vm.WorkflowOnlyCount used only by workflows</span>
+        }
         <span class="muted small">@Vm.DeadScanText</span>
     </div>
     <div class="card list-card">
@@ -28,6 +34,10 @@
                             @if (row.IsDead)
                             {
                                 <span class="chip bad">DEAD</span>
+                            }
+                            else if (row.IsWorkflowOnly)
+                            {
+                                <span class="chip">workflow</span>
                             }
                             else
                             {
