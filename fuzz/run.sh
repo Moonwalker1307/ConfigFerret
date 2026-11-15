@@ -38,28 +38,18 @@ if [[ ! -f "$out/.instrumented" ]]; then
   rm -rf "$out"
   dotnet publish "$here/ConfigFerret.Fuzz" -c Release -f net10.0 -o "$out" -p:TargetFrameworks=net10.0 --nologo -v quiet
   # The harness instruments with the SharpFuzz library it references, so no separate tool is needed.
-<<<<<<< HEAD
-  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/ConfigFerret.HashiCorp.dll" "$out/ConfigFerret.KubernetesCluster.dll" "$out/ConfigFerret.Azure.dll" "$out/YamlDotNet.dll"
-=======
-  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/ConfigFerret.Desktop.dll" "$out/YamlDotNet.dll"
->>>>>>> 92de2aa (Add desktop fuzz targets and fix null members in loaded workspaces)
+  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/ConfigFerret.HashiCorp.dll" "$out/ConfigFerret.KubernetesCluster.dll" "$out/ConfigFerret.Azure.dll" "$out/ConfigFerret.Desktop.dll" "$out/YamlDotNet.dll"
   touch "$out/.instrumented"
 fi
 
 dict=()
 case "$target" in
-<<<<<<< HEAD
-  json|unused) dict=(-dict="$here/dictionaries/json.dict") ;;
+  json|unused|workspace) dict=(-dict="$here/dictionaries/json.dict") ;;
   github|octopus|kubernetes-cluster) dict=(-dict="$here/dictionaries/api.dict") ;;
   vault|consul) dict=(-dict="$here/dictionaries/hashicorp.dict") ;;
   azure-keyvault|azure-appconfig) dict=(-dict="$here/dictionaries/azure.dict") ;;
-  env-names) ;;
-=======
-  json|unused|workspace) dict=(-dict="$here/dictionaries/json.dict") ;;
-  github|octopus) dict=(-dict="$here/dictionaries/api.dict") ;;
   code-reads) dict=(-dict="$here/dictionaries/csharp.dict") ;;
   env-names|desktop-tar|dotenv|secret-audit) ;;
->>>>>>> 92de2aa (Add desktop fuzz targets and fix null members in loaded workspaces)
   *) dict=(-dict="$here/dictionaries/yaml.dict") ;;
 esac
 
