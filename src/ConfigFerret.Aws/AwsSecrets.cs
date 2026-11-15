@@ -235,15 +235,14 @@ public sealed class AwsSecrets
         for (var page = 0; page < MaxPages; page++)
         {
             var response = await client.BatchGetSecretValueAsync(request, cancellationToken).ConfigureAwait(false);
-            foreach (var value in response?.SecretValues ?? [])
+            // Only take values for secrets that were asked for, matched by name or ARN.
+            var matched = (response?.SecretValues ?? [])
+                .Select(value => (Value: value, Name: AskedName(value, byId)))
+                .Where(match => match.Name is not null);
+            foreach (var (value, name) in matched)
             {
-                // Only take values for secrets that were asked for, matched by name or ARN.
-                if (value is not null
-                    && ((value.Name is not null && byId.TryGetValue(value.Name, out var name)) || (value.ARN is not null && byId.TryGetValue(value.ARN, out name))))
-                {
-                    values[name] = (value.SecretString, value.SecretString is null && value.SecretBinary is not null);
-                    answered.Add(name);
-                }
+                values[name!] = (value.SecretString, value.SecretString is null && value.SecretBinary is not null);
+                answered.Add(name!);
             }
 
             foreach (var error in response?.Errors ?? [])
@@ -263,24 +262,33 @@ public sealed class AwsSecrets
             request.NextToken = next;
         }
 
-        foreach (var id in chunk)
+        warnings.AddRange(chunk
+            .Where(id => !answered.Contains(byId[id]))
+            .Select(id => $"AWS did not return the value of secret {byId[id]}."));
+    }
+
+    /// <summary>The asked-for secret name that a returned value belongs to, matched by name or ARN.</summary>
+    private static string? AskedName(SecretValueEntry? value, Dictionary<string, string> byId)
+    {
+        if (value is null)
         {
-            if (!answered.Contains(byId[id]))
-            {
-                warnings.Add($"AWS did not return the value of secret {byId[id]}.");
-            }
+            return null;
         }
+
+        if (value.Name is not null && byId.TryGetValue(value.Name, out var byName))
+        {
+            return byName;
+        }
+
+        return value.ARN is not null && byId.TryGetValue(value.ARN, out var byArn) ? byArn : null;
     }
 
     private static AwsSecret ToSecret(SecretListEntry entry, (string? Text, bool Binary)? value)
     {
         var tags = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var tag in entry.Tags ?? [])
+        foreach (var tag in (entry.Tags ?? []).Where(tag => tag?.Key is not null))
         {
-            if (tag?.Key is { } key)
-            {
-                tags[key] = tag.Value ?? string.Empty;
-            }
+            tags[tag.Key] = tag.Value ?? string.Empty;
         }
 
         return new AwsSecret(entry.Name!)

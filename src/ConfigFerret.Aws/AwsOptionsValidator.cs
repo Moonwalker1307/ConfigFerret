@@ -28,9 +28,8 @@ internal sealed class AwsOptionsValidator<TOptions>(string sectionPath, IConfigu
             failures.Add(keys);
         }
 
-        foreach (var setting in CredentialSettings)
+        foreach (var key in CredentialSettings.Select(setting => CredentialGuard.Key(sectionPath, setting)))
         {
-            var key = CredentialGuard.Key(sectionPath, setting);
             if (CredentialGuard.FindAppSettingsFile(configuration, key) is { } file)
             {
                 failures.Add(CredentialGuard.InAppSettings(key, file));

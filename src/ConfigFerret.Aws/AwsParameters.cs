@@ -134,13 +134,9 @@ public sealed class AwsParameters
             }
 
             var response = await client.GetParametersByPathAsync(request, cancellationToken).ConfigureAwait(false);
-            foreach (var parameter in response?.Parameters ?? [])
-            {
-                if (parameter is not null && !string.IsNullOrEmpty(parameter.Name))
-                {
-                    parameters.Add(ToParameter(parameter, options.IncludeValues));
-                }
-            }
+            parameters.AddRange((response?.Parameters ?? [])
+                .Where(parameter => parameter is not null && !string.IsNullOrEmpty(parameter.Name))
+                .Select(parameter => ToParameter(parameter, options.IncludeValues)));
 
             var next = response?.NextToken;
             if (string.IsNullOrEmpty(next) || !seenTokens.Add(next))

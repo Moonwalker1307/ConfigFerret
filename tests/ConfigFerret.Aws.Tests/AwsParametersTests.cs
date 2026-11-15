@@ -132,7 +132,7 @@ public class AwsParametersTests
         using var client = new FakeAws().ParameterStore();
         var ct = TestContext.Current.CancellationToken;
         await Assert.ThrowsAsync<ArgumentNullException>(() => AwsParameters.LoadAsync(null!, client, ct));
-        await Assert.ThrowsAsync<ArgumentNullException>(() => AwsParameters.LoadAsync(new AwsParameterStoreOptions { Path = "/p" }, (IAmazonSimpleSystemsManagement)null!, ct));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => AwsParameters.LoadAsync(new AwsParameterStoreOptions { Path = "/p" }, client: null!, ct));
         await Assert.ThrowsAsync<ArgumentNullException>(() => AwsParameters.LoadAsync(null!, ct));
         await Assert.ThrowsAsync<ArgumentException>(() => AwsParameters.LoadAsync(new AwsParameterStoreOptions(), ct));
         Assert.Throws<ArgumentNullException>(() => new AwsParameters(null!, []));

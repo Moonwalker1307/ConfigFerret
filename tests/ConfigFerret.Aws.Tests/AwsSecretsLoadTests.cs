@@ -276,7 +276,7 @@ public class AwsSecretsLoadTests
         using var client = new FakeAws().SecretsManager();
         var ct = TestContext.Current.CancellationToken;
         await Assert.ThrowsAsync<ArgumentNullException>(() => AwsSecrets.LoadAsync(null!, client, ct));
-        await Assert.ThrowsAsync<ArgumentNullException>(() => AwsSecrets.LoadAsync(new AwsSecretsManagerOptions(), (IAmazonSecretsManager)null!, ct));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => AwsSecrets.LoadAsync(new AwsSecretsManagerOptions(), client: null!, ct));
     }
 
     [Fact]
