@@ -1,0 +1,139 @@
+# A payments service whose secrets come from outside the cluster: External Secrets Operator syncs Azure Key Vault
+# and AWS secrets into Kubernetes Secrets, and the Secrets Store CSI driver mounts Vault secrets as files and syncs
+# one of them into a Secret too.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+spec:
+  template:
+    spec:
+      containers:
+        - name: payments
+          envFrom:
+            - secretRef:
+                name: payments-aws
+              prefix: PAYMENTS_AWS_
+          env:
+            - name: PAYMENTS_Db__Password
+              valueFrom:
+                secretKeyRef:
+                  name: payments-db
+                  key: password
+            - name: PAYMENTS_Db__User
+              valueFrom:
+                secretKeyRef:
+                  name: payments-db
+                  key: username
+            - name: PAYMENTS_Stripe__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: payments-stripe
+                  key: api-key
+            - name: PAYMENTS_Vault__Token
+              valueFrom:
+                secretKeyRef:
+                  name: payments-vault-synced
+                  key: token
+          volumeMounts:
+            - name: vault-secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: vault-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: payments-vault
+---
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: contoso-kv
+spec:
+  provider:
+    azurekv:
+      vaultUrl: https://contoso-prod.vault.azure.net
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: payments-db
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: contoso-kv
+  data:
+    - secretKey: password
+      remoteRef:
+        key: payments-db-password
+    - secretKey: username
+      remoteRef:
+        key: payments-db
+        property: user
+        version: 7f3c9e
+---
+# This one's Secret is also in the manifests (read back from the cluster), so its value is known.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: stripe
+spec:
+  secretStoreRef:
+    name: payments-aws-store
+  target:
+    name: payments-stripe
+  data:
+    - secretKey: api-key
+      remoteRef:
+        key: prod/payments/stripe
+        property: apiKey
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: payments-stripe
+stringData:
+  api-key: sk_live_example
+---
+# The SecretStore is not in the manifests, so the provider is unknown; dataFrom adds keys that only the store knows.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: payments-aws
+spec:
+  secretStoreRef:
+    name: payments-aws-store
+  data:
+    - secretKey: Region
+      remoteRef:
+        key: prod/payments/config
+        property: region
+  dataFrom:
+    - extract:
+        key: prod/payments/config
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: payments-vault
+spec:
+  provider: vault
+  parameters:
+    vaultAddress: https://vault.contoso.example:8200
+    roleName: payments
+    objects: |
+      - objectName: "webhook-secret"
+        secretPath: "secret/data/payments/webhook"
+        secretKey: "signing-key"
+      - objectName: "vault-token"
+        secretPath: "secret/data/payments/token"
+        secretKey: "value"
+  secretObjects:
+    - secretName: payments-vault-synced
+      type: Opaque
+      data:
+        - objectName: vault-token
+          key: token

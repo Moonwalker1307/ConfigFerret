@@ -41,6 +41,7 @@ internal static partial class Targets
         ["octopus"] = new("Octopus Deploy API responses (split by %%), then the Octopus resolver", OctopusApi),
         ["vault"] = new("HashiCorp Vault KV API responses (split by %%), then the Vault resolver", Vault),
         ["consul"] = new("Consul KV API response, then the Consul resolver", Consul),
+        ["kubernetes-cluster"] = new("Kubernetes API responses (split by %%) read as a live workload, then traced", KubernetesClusterApi),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 
@@ -225,6 +226,33 @@ internal static partial class Targets
                         Consume(resolver.Resolve(Step(LayerKind.DotNetProvider, new FileRef(path), null), diagnostics));
                     }
                 }
+
+                foreach (var path in resolver.MountedFilePaths(diagnostics).Take(200))
+                {
+                    CheckExternal(resolver.Resolve(Step(LayerKind.DotNetProvider, new FileRef(path), null), diagnostics));
+                    Consume(resolver.ResolveMountedFile(path, diagnostics));
+                }
+            }
+        }
+
+        // Every Secret key an ExternalSecret or a SecretProviderClass writes links back to it.
+        var anyResolver = new KubernetesResolver(manifests, null, null);
+        var secretKeys = manifests.ExternalSecrets.Take(50).SelectMany(e => e.Data.Take(50).Select(d => (e.TargetSecret, d.SecretKey)))
+            .Concat(manifests.SecretProviderClasses.Values.Take(50).SelectMany(p => p.SecretObjects.Take(50).SelectMany(o => o.Keys.Take(50).Select(k => (o.SecretName, k.Key)))));
+        foreach (var (secret, key) in secretKeys)
+        {
+            CheckExternal(anyResolver.Resolve(Step(LayerKind.KubernetesSecret, new SecretKeyRef(secret, key), null), diagnostics));
+        }
+    }
+
+    // A layer linked to an external store is secret and never has a value: the manifests cannot hold it.
+    private static void CheckExternal(IReadOnlyList<ProvenanceStep> steps)
+    {
+        foreach (var step in steps)
+        {
+            if (step.Reference is ExternalSecretRef reference && (!step.IsSensitive || step.Value is not null || reference.RemoteKey.Length == 0))
+            {
+                throw new InvariantException($"External secret step {step.Source} is not sensitive, has a value or has no remote key.");
             }
         }
     }

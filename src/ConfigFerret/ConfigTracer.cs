@@ -27,7 +27,13 @@ public sealed class ConfigTracer
 
     private ConfigTracer(IConfigurationRoot root) => _root = root;
 
-    private ConfigTracer(KubernetesResolver container) => _container = container;
+    private ConfigTracer(KubernetesResolver container)
+    {
+        _container = container;
+        // The container's own manifests also link the Secret keys it reads to the ExternalSecrets and
+        // SecretProviderClasses that fill them.
+        _resolvers.Add(container);
+    }
 
     /// <summary>The trace options.</summary>
     public TraceOptions Options { get; private set; } = new();

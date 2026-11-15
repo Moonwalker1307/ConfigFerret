@@ -8,6 +8,12 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
 
     public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
     {
+        // A Secret key that an ExternalSecret or a SecretProviderClass fills, whichever resolver found the key.
+        if (layer is { Kind: LayerKind.KubernetesSecret, Reference: SecretKeyRef secretKey })
+        {
+            return manifests.SecretOrigins(secretKey.Name, secretKey.Key).Select(OriginStep).ToList();
+        }
+
         if (layer.Kind != LayerKind.DotNetProvider)
         {
             return [];
@@ -42,11 +48,15 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         var names = new List<string>();
         foreach (var from in container.EnvFrom)
         {
-            var store = from.IsSecret ? manifests.Secrets : manifests.ConfigMaps;
-            if (!store.TryGetValue(from.Name, out var data))
+            if (!manifests.TryGetData(from.IsSecret, from.Name, out var data))
             {
                 diagnostics.Warn($"envFrom {(from.IsSecret ? "Secret" : "ConfigMap")} {from.Name} on {workload.DisplayName}, container {container.Name} was not loaded, so the variables it adds are not listed.");
                 continue;
+            }
+
+            if (data.HasUnknownKeys)
+            {
+                diagnostics.Warn($"envFrom Secret {from.Name} on {workload.DisplayName}, container {container.Name} is created by {data.CreatedBy}, whose dataFrom or template adds keys that are only known once the store is read, so only its listed keys are shown.");
             }
 
             names.AddRange(data.Data.Keys.Order(StringComparer.Ordinal).Select(key => from.Prefix + key));
@@ -76,7 +86,7 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         foreach (var mount in container.VolumeMounts)
         {
             var volume = workload.Volumes.FirstOrDefault(v => string.Equals(v.Name, mount.Name, StringComparison.Ordinal));
-            if (volume is null || volume.Projections.Count == 0)
+            if (volume is null || (volume.Projections.Count == 0 && volume.SecretProviderClass is null))
             {
                 continue;
             }
@@ -88,6 +98,18 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                 continue;
             }
 
+            if (volume.SecretProviderClass is { } spcName)
+            {
+                if (manifests.SecretProviderClasses.TryGetValue(spcName, out var spc))
+                {
+                    paths.AddRange(spc.Objects.Select(o => mountPath + "/" + o.FileName.TrimStart('/')));
+                }
+                else
+                {
+                    diagnostics.Warn($"Volume {volume.Name} on {workload.DisplayName}, container {container.Name} mounts SecretProviderClass {spcName} at {mount.MountPath}, which was not loaded, so the files it adds are not listed.");
+                }
+            }
+
             foreach (var projection in volume.Projections)
             {
                 IEnumerable<string> relative;
@@ -95,9 +117,13 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                 {
                     relative = projection.Items.Select(i => i.Value);
                 }
-                else if ((projection.IsSecret ? manifests.Secrets : manifests.ConfigMaps).TryGetValue(projection.SourceName, out var data))
+                else if (manifests.TryGetData(projection.IsSecret, projection.SourceName, out var data))
                 {
                     relative = data.Data.Keys.Order(StringComparer.Ordinal);
+                    if (data.HasUnknownKeys)
+                    {
+                        diagnostics.Warn($"Volume {volume.Name} on {workload.DisplayName}, container {container.Name} mounts Secret {projection.SourceName}, which {data.CreatedBy} fills with keys that are only known once the store is read, so only its listed keys are shown.");
+                    }
                 }
                 else
                 {
@@ -126,14 +152,19 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         var steps = ResolveFile(workload, container, path);
         for (var i = 0; i < steps.Count; i++)
         {
+            if (steps[i].Reference is ExternalSecretRef)
+            {
+                // A CSI file: its content is in the store, and the step already says so.
+                continue;
+            }
+
             var (isSecret, name, key) = steps[i].Reference switch
             {
                 SecretKeyRef s => (true, s.Name, s.Key),
                 ConfigMapKeyRef c => (false, c.Name, c.Key),
                 _ => (false, "", ""),
             };
-            var store = isSecret ? manifests.Secrets : manifests.ConfigMaps;
-            if (key.Length == 0 || !store.TryGetValue(name, out var data))
+            if (key.Length == 0 || !manifests.TryGetData(isSecret, name, out var data))
             {
                 steps[i] = steps[i] with { Note = steps[i].Note + "; its contents were not loaded" };
             }
@@ -143,7 +174,12 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                 {
                     Value = value.Value,
                     Location = value.Line > 0 ? $"key {key}, {data.SourceName}:{value.Line}" : steps[i].Location,
+                    Note = data.CreatedBy is null ? steps[i].Note : steps[i].Note + CreatedNote(data),
                 };
+            }
+            else if (data.HasUnknownKeys)
+            {
+                steps[i] = steps[i] with { Note = steps[i].Note + UnknownKeyNote(data) };
             }
             else
             {
@@ -210,6 +246,7 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         var where = $"{workload.DisplayName}, container {container.Name}";
         var chain = new List<ProvenanceStep>();
         var unloaded = new List<EnvFromEntry>();
+        var unknown = new List<(EnvFromEntry From, KubernetesData Data)>();
 
         // envFrom is applied first, in order; env entries override it, and a later env entry overrides an earlier one.
         foreach (var from in container.EnvFrom)
@@ -220,8 +257,7 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
             }
 
             var key = name[from.Prefix.Length..];
-            var store = from.IsSecret ? manifests.Secrets : manifests.ConfigMaps;
-            if (!store.TryGetValue(from.Name, out var data))
+            if (!manifests.TryGetData(from.IsSecret, from.Name, out var data))
             {
                 unloaded.Add(from);
                 continue;
@@ -230,6 +266,10 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
             if (data.Data.TryGetValue(key, out var value))
             {
                 chain.Add(DataStep(from.IsSecret, data, key, value, $"envFrom on {where}" + (from.Prefix.Length > 0 ? $" with prefix '{from.Prefix}'" : "")));
+            }
+            else if (data.HasUnknownKeys)
+            {
+                unknown.Add((from, data));
             }
         }
 
@@ -263,6 +303,21 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
 
         if (chain.Count == 0)
         {
+            foreach (var (from, data) in unknown)
+            {
+                var key = name[from.Prefix.Length..];
+                chain.Add(new ProvenanceStep
+                {
+                    Kind = LayerKind.KubernetesSecret,
+                    Source = $"Secret {from.Name}",
+                    Location = $"key {key}",
+                    IsInferred = true,
+                    IsSensitive = true,
+                    Note = $"envFrom on {where}{UnknownKeyNote(data)}, so this is a guess",
+                    Reference = new SecretKeyRef(from.Name, key),
+                });
+            }
+
             foreach (var from in unloaded)
             {
                 chain.Add(new ProvenanceStep
@@ -285,8 +340,8 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
 
     private ProvenanceStep KeyRefStep(bool isSecret, string sourceName, string key, string note)
     {
-        var store = isSecret ? manifests.Secrets : manifests.ConfigMaps;
-        if (store.TryGetValue(sourceName, out var data) && data.Data.TryGetValue(key, out var value))
+        var found = manifests.TryGetData(isSecret, sourceName, out var data);
+        if (found && data!.Data.TryGetValue(key, out var value))
         {
             return DataStep(isSecret, data, key, value, note);
         }
@@ -297,7 +352,7 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
             Source = $"{(isSecret ? "Secret" : "ConfigMap")} {sourceName}",
             Location = $"key {key}",
             IsSensitive = isSecret,
-            Note = note + (store.ContainsKey(sourceName) ? "; the key is missing from it" : "; its contents were not loaded"),
+            Note = note + (!found ? "; its contents were not loaded" : data!.HasUnknownKeys ? UnknownKeyNote(data) : "; the key is missing from it"),
             Reference = isSecret ? new SecretKeyRef(sourceName, key) : new ConfigMapKeyRef(sourceName, key),
         };
     }
@@ -309,8 +364,25 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         Location = value.Line > 0 ? $"key {key}, {data.SourceName}:{value.Line}" : $"key {key}",
         Value = value.Value,
         IsSensitive = isSecret,
-        Note = note,
+        Note = data.CreatedBy is null ? note : note + CreatedNote(data),
         Reference = isSecret ? new SecretKeyRef(data.Name, key) : new ConfigMapKeyRef(data.Name, key),
+    };
+
+    private static string CreatedNote(KubernetesData data) =>
+        $"; the Secret is not in the manifests but {data.CreatedBy} creates it, so its value is not known here";
+
+    private static string UnknownKeyNote(KubernetesData data) =>
+        $"; {data.CreatedBy} creates the Secret and adds keys that are only known once the store is read";
+
+    private static ProvenanceStep OriginStep(SecretOrigin origin) => new()
+    {
+        Kind = LayerKind.Other,
+        Source = origin.Source,
+        Location = origin.Location,
+        IsSensitive = true,
+        IsInferred = origin.IsInferred,
+        Note = origin.Note,
+        Reference = origin.Reference,
     };
 
     private static string? RelativeToMount(VolumeMount mount, string mountPath, string normalized)
@@ -341,6 +413,33 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                 continue;
             }
 
+            if (volume.SecretProviderClass is { } spcName)
+            {
+                var mountedAs = $"mounted at {mount.MountPath} by CSI volume {volume.Name} on {workload.DisplayName}, container {container.Name}";
+                if (!manifests.SecretProviderClasses.TryGetValue(spcName, out var spc))
+                {
+                    return
+                    [
+                        new ProvenanceStep
+                        {
+                            Kind = LayerKind.Other,
+                            Source = $"SecretProviderClass {spcName}",
+                            Location = $"object {relative}",
+                            IsSensitive = true,
+                            IsInferred = true,
+                            Note = $"{mountedAs}; the SecretProviderClass was not loaded",
+                        },
+                    ];
+                }
+
+                if (KubernetesManifests.FindObject(spc, relative) is { } origin)
+                {
+                    return [OriginStep(origin) with { Note = $"{origin.Note}; {mountedAs}" }];
+                }
+
+                continue;
+            }
+
             foreach (var projection in volume.Projections)
             {
                 var key = projection.Items.Count == 0
@@ -351,9 +450,8 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
                     continue;
                 }
 
-                var store = projection.IsSecret ? manifests.Secrets : manifests.ConfigMaps;
-                if (projection.Items.Count == 0 && store.TryGetValue(projection.SourceName, out var known) && !known.Data.ContainsKey(key)
-                    && volume.Projections.Count > 1)
+                if (projection.Items.Count == 0 && manifests.TryGetData(projection.IsSecret, projection.SourceName, out var known) && !known.Data.ContainsKey(key)
+                    && !known.HasUnknownKeys && volume.Projections.Count > 1)
                 {
                     continue;
                 }

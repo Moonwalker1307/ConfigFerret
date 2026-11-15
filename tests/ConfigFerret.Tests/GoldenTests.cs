@@ -76,6 +76,15 @@ public class GoldenTests
     [Fact]
     public Task Container_json() => VerifyJson(TraceContainer().ToJson());
 
+    [Fact]
+    public Task External_secrets_container_text() => VerifyText(TraceExternalSecrets().ToText());
+
+    [Fact]
+    public Task External_secrets_container_json() => VerifyJson(TraceExternalSecrets().ToJson());
+
+    [Fact]
+    public Task External_secrets_app_text() => VerifyText(TraceExternalSecretsApp().ToText());
+
     // What the orders service was seen reading: everything except Api:BaseUrl and Pod:Name.
     private static readonly string[] OrdersReads =
     [
@@ -165,6 +174,30 @@ public class GoldenTests
 
         return ConfigTracer.ForContainer(KubernetesManifests.Parse(File.ReadAllText(Path.Join(dir, "cluster.yaml")), "cluster"), "api-7d9f8c-x2kqp", "api")
             .WithHelm(chart)
+            .Trace();
+    }
+
+    // A container whose Secrets come from External Secrets Operator and the Secrets Store CSI driver.
+    private static ProvenanceReport TraceExternalSecrets() =>
+        ConfigTracer.ForContainer(KubernetesManifests.LoadFile(Path.Join(Fixture("external-secrets"), "cluster.yaml"))).Trace();
+
+    // The same manifests seen from the app's own configuration: environment variables and a mounted CSI file.
+    private static ProvenanceReport TraceExternalSecretsApp()
+    {
+        var environment = new Dictionary<string, string?>
+        {
+            ["PAYMENTS_Db__Password"] = "from-key-vault",
+            ["PAYMENTS_Stripe__ApiKey"] = "sk_live_example",
+            ["PAYMENTS_AWS_Endpoint"] = "https://payments.example",
+            ["PAYMENTS_AWS_Region"] = "eu-west-1",
+        };
+        var config = new ConfigurationBuilder()
+            .AddEnvironmentVariables(SetProcessEnvironment(environment, "PAYMENTS_"))
+            .Build();
+
+        return ConfigTracer.For(config)
+            .WithOptions(o => o.Environment = environment)
+            .WithKubernetes(KubernetesManifests.LoadFile(Path.Join(Fixture("external-secrets"), "cluster.yaml")))
             .Trace();
     }
 

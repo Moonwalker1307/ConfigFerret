@@ -1,0 +1,23 @@
+{"metadata":{"name":"api"},"spec":{"containers":[{"name":"api","envFrom":[{"secretRef":{"name":"s"},"prefix":"P_"}],"volumeMounts":[{"name":"v","mountPath":"/v"}]}],"volumes":[{"name":"v","csi":{"driver":"secrets-store.csi.k8s.io","volumeAttributes":{"secretProviderClass":"spc"}}}]}}
+%%
+HTTP 403
+{}
+%%
+HTTP 403
+{}
+%%
+HTTP 500
+
+%%
+HTTP 404
+
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+{"items":[{"metadata":{"name":"spc"},"spec":{"provider":"azure","parameters":{"objects":"array:\n  - |\n    objectName: token\n"},"secretObjects":[{"secretName":"api-secrets","data":[{"objectName":"token","key":"token"}]}]}}]}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+{"apiVersion":"v1","kind":"Secret","metadata":{"name":"s"},"data":{"a":"YWJjZGVmZ2g=","b":"not base64"}}

@@ -1,0 +1,27 @@
+{"metadata":{"name":"api"},"spec":{"schedule":"@daily","jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"api","env":[{"name":"A","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}]}]}}}}}}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+HTTP 404
+{"kind":"Status","code":404}
+%%
+{"metadata":{"name":"c"},"data":{"k":"v"},"binaryData":{"b":"AAAA"}}

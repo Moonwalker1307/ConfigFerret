@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ConfigFerret.KubernetesCluster</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>ConfigFerret.KubernetesCluster</PackageId>
+    <Version>0.2.0</Version>
+    <Description>Live Kubernetes cluster source for ConfigFerret: reads a workload, its ConfigMaps, opt-in Secrets, ExternalSecrets and SecretProviderClasses through a kubeconfig or in-cluster config, and links configuration values to them.</Description>
+    <PackageTags>configuration;provenance;kubernetes;kubeconfig;configmap;secrets;external-secrets;debugging</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/ConfigFerret</PackageProjectUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <MicrosoftExtensionsVersion>10.0.15</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0'">
+    <MicrosoftExtensionsVersion>11.0.0</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The official client: it reads kubeconfig files and handles client certificates, tokens and exec credential
+         plugins, which a hand-written client would get wrong. -->
+    <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
+    <PackageReference Include="KubernetesClient" Version="21.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.404" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="ConfigFerret.KubernetesCluster.Tests" />
+    <InternalsVisibleTo Include="ConfigFerret.Fuzz" />
+  </ItemGroup>
+
+</Project>
