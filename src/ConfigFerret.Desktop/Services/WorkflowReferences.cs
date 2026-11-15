@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using ConfigFerret.GitHub;
 
@@ -10,14 +11,14 @@ namespace ConfigFerret.Desktop.Services;
 /// </summary>
 internal sealed partial class WorkflowReferences
 {
-    private readonly HashSet<(GitHubVariableKind Kind, string Name)> _names;
+    private readonly Dictionary<(GitHubVariableKind Kind, string Name), string> _names;
 
-    private WorkflowReferences(HashSet<(GitHubVariableKind Kind, string Name)> names) => _names = names;
+    private WorkflowReferences(Dictionary<(GitHubVariableKind Kind, string Name), string> names) => _names = names;
 
     /// <summary>Reads <paramref name="paths"/>. A file that cannot be read is skipped; its source reports the problem.</summary>
     public static WorkflowReferences Read(IEnumerable<string> paths)
     {
-        var names = new HashSet<(GitHubVariableKind, string)>(NameComparer.Instance);
+        var names = new Dictionary<(GitHubVariableKind, string), string>(NameComparer.Instance);
         foreach (var path in paths)
         {
             string text;
@@ -30,7 +31,7 @@ internal sealed partial class WorkflowReferences
                 continue;
             }
 
-            AddText(text, names);
+            AddText(text, Path.GetFileName(path), names);
         }
 
         return new WorkflowReferences(names);
@@ -39,23 +40,27 @@ internal sealed partial class WorkflowReferences
     /// <summary>Like <see cref="Read"/>, for workflow text already in memory.</summary>
     public static WorkflowReferences FromText(params string[] workflows)
     {
-        var names = new HashSet<(GitHubVariableKind, string)>(NameComparer.Instance);
+        var names = new Dictionary<(GitHubVariableKind, string), string>(NameComparer.Instance);
         foreach (var text in workflows)
         {
-            AddText(text, names);
+            AddText(text, "workflow", names);
         }
 
         return new WorkflowReferences(names);
     }
 
     /// <summary>Whether a workflow refers to the variable or secret. GitHub names are not case sensitive.</summary>
-    public bool Uses(GitHubVariableKind kind, string name) => _names.Contains((kind, name));
+    public bool Uses(GitHubVariableKind kind, string name) => _names.ContainsKey((kind, name));
 
-    private static void AddText(string text, HashSet<(GitHubVariableKind, string)> names)
+    /// <summary>Where a workflow first refers to the variable or secret, such as <c>deploy.yml line 12</c>, or null.</summary>
+    public string? FirstUse(GitHubVariableKind kind, string name) => _names.GetValueOrDefault((kind, name));
+
+    private static void AddText(string text, string sourceName, Dictionary<(GitHubVariableKind, string), string> names)
     {
-        foreach (var raw in text.Split('\n'))
+        var lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
         {
-            var line = raw.TrimStart();
+            var line = lines[i].TrimStart();
             if (line.StartsWith('#'))
             {
                 continue;
@@ -65,7 +70,7 @@ internal sealed partial class WorkflowReferences
             {
                 var kind = match.Groups["kind"].Value.Equals("secrets", StringComparison.OrdinalIgnoreCase) ? GitHubVariableKind.Secret : GitHubVariableKind.Variable;
                 var name = match.Groups["dot"].Success ? match.Groups["dot"].Value : match.Groups["index"].Value;
-                names.Add((kind, name));
+                names.TryAdd((kind, name), string.Create(CultureInfo.InvariantCulture, $"{sourceName} line {i + 1}"));
             }
         }
     }

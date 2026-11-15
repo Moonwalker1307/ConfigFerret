@@ -269,6 +269,15 @@ public class TraceRunnerTests
         Assert.Contains(("AZURE_WEBAPP_NAME", "environment secret (production)"), unused);
         Assert.Contains(("OLD_DEPLOY_KEY", "repository secret (contoso/web)"), unused);
         Assert.Contains(("UNUSED_NAME", "environment variable (production)"), unused);
+
+        // The ones only the workflow uses are still listed, with where the workflow uses them.
+        var workflow = result.WorkflowVariables.ToDictionary(v => (v.Name, v.Detail), v => v.UsedBy);
+        Assert.Equal("deploy.yml line 10", workflow[("AZURE_WEBAPP_NAME", "environment variable (production)")]);
+        Assert.Equal("deploy.yml line 11", workflow[("AZUREAPPSERVICE_PUBLISHPROFILE_B980", "repository secret (contoso/web)")]);
+        Assert.Equal("deploy.yml line 7", workflow[("DEPLOY_ENABLED", "repository variable (contoso/web)")]);
+        Assert.Equal("deploy.yml line 12", workflow[("SLACK_WEBHOOK", "environment secret (production)")]);
+        // ConnectionStrings__Db is an app setting, so the trace links the connection string secret and it is not a workflow-only row.
+        Assert.DoesNotContain(result.WorkflowVariables, v => v.Name == "ELWIZ_DB_CONNECTION_STRING" && v.Detail.StartsWith("environment", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -117,6 +117,12 @@ public sealed record UnusedRow(string Css, string Kind, string Name, string Wher
 {
     /// <summary>True when Show can open it in the Configuration tab: a setting, not a Helm value or a deployment variable.</summary>
     public bool CanShow { get; init; } = true;
+
+    /// <summary>True for a GitHub variable a workflow uses directly while no setting does: in use, but not by the app's configuration.</summary>
+    public bool IsWorkflowOnly { get; init; }
+
+    /// <summary>True for a value a later layer always overrides.</summary>
+    public bool IsNeverWins => !IsDead && !IsWorkflowOnly;
 }
 
 /// <summary>A line in the problems list.</summary>
