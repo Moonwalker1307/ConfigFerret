@@ -403,6 +403,41 @@ Console.WriteLine(report.Explain("/app/appsettings.Production.json"));
   Leave Secrets out of the manifests if the tool shouldn't read them: a `secretKeyRef` to one then shows `(unknown)`.
 - `WithKubernetes` throws on a container trace, since the manifests are already passed to `ForContainer`.
 
+### With Docker Compose and dotenv files
+
+`ComposeProject` reads compose files the way `docker compose config` does: it merges `compose.yaml` with
+`compose.override.yaml` (or each `-f` file), follows `extends` and `include`, and fills in `${VAR}` from the project's
+`.env` (or `--env-file`). `ForCompose` traces what one service's containers get, and `WithCompose` links an app's
+environment variables to the service it runs as.
+
+```csharp
+using ConfigFerret;
+using ConfigFerret.Compose;
+
+var options = new ComposeOptions();            // the process environment is not read unless you set UseProcessEnvironment
+options.Variables["TAG"] = "1.4.2";            // stands for the shell; it wins over .env
+var project = ComposeProject.Load(["compose.yaml", "compose.override.yaml"], options);
+
+// From outside the app: every variable and every mounted secret or config of the api service.
+var report = ConfigTracer.ForCompose(project, "api").Trace();
+Console.WriteLine(report.Explain("Db__Host"));
+
+// Inside the app: link its environment variables to the compose layers.
+var appReport = ConfigTracer.For(builder.Configuration).WithCompose(project, "api").Trace();
+```
+
+Each variable lists its `env_file` lines, then its `environment` entries (a later compose file's entry wins). Each
+`${VAR}` in them points to the `.env` line or shell variable it came from. Values whose names look secret, and every
+compose `secret`, are redacted. File-based secrets are listed at `/run/secrets/<name>` without reading them unless
+`ReadSecretFiles` is set.
+
+`DotEnvFile.Parse(text, name)` and `DotEnvFile.Load(path)` parse one dotenv file with compose's rules (`export`,
+single, double and backtick quotes, multi-line values, `\n` escapes, `#` comments, `${VAR:-default}`), keeping the
+line of every key. `DotEnvLayers.Load([".env", ".env.local", ".env.production"])` layers several, the later one
+winning, and `tracer.WithDotEnv(layers)` links environment variables to their lines. As sources, the `dotenv` and
+`docker-compose` providers (`DotEnvSourceProvider`, `ComposeSourceProvider`) plug both into hosts such as the
+desktop app.
+
 ### Find possibly unused configuration
 
 ```csharp
@@ -490,6 +525,8 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Argo CD | An Application's or ApplicationSet template's Helm `valueFiles` (also `$ref/` files), `values`, `valuesObject` and `parameters` (with `forceString`), and ConfigMap data set by inline kustomize patches; other kustomize settings (`images`, `namePrefix`, `commonLabels`) become warnings |
 | Flux | A HelmRelease's chart `valuesFiles`, `valuesFrom` ConfigMaps and Secrets (`valuesKey`, `targetPath`, `optional`) and `spec.values`; a Kustomization's `postBuild` `substitute` and `substituteFrom` behind `${VAR}` placeholders |
 | Terraform | The output (or the value nested in an object or list output) with the same or a linked name, and the `.tf` file and line that defines it |
+| dotenv files | File and line of each key, across layered files, and the line or variable behind every `${VAR}` |
+| Docker Compose | Each `env_file` line and `environment` entry across compose files, `extends` and `include`, the `.env` line or shell variable behind each `${VAR}`, and mounted `secrets` and `configs` |
 | GitHub Actions (`ConfigFerret.GitHub`) | The organization, repository or environment variable or secret, from a workflow `env:` line, an explicit link or the same name |
 | Octopus Deploy (`ConfigFerret.Octopus`) | The project or library variable set variable whose scope fits the deployment, ordered by scope specificity |
 | HashiCorp Vault (`ConfigFerret.HashiCorp`) | The KV secret (and key, when values are read) behind an External Secrets or CSI reference, an explicit link or the same name, with version and update time |
@@ -540,6 +577,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected.
+- Docker Compose: a missing required `env_file`, `extends` file or `include` is a warning rather than an error, so
+  the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
+  args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret
+  is rejected, since paths and names are never redacted.
 - Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
   further upstream from them.
