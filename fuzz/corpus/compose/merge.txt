@@ -1,0 +1,20 @@
+x: &e
+  A: 1
+services:
+  a:
+    environment:
+      <<: *e
+      B: ${B:-b}
+    env_file: !reset []
+  b:
+    extends: a
+    environment: !override [C=1, D]
+    secrets: [s]
+secrets:
+  s: { environment: DB_PASSWORD }
+%%
+services:
+  a:
+    environment: [A=2]
+%%
+B=from-env

@@ -133,6 +133,71 @@ internal sealed class KubernetesOptions(bool required)
     }
 }
 
+/// <summary>A Docker Compose project and the service to look at, for the container command.</summary>
+internal sealed class ComposeCliOptions
+{
+    public Option<string[]> Files { get; } = new("--compose-file")
+    {
+        Description = "A Docker Compose file, as passed to docker compose -f. Repeat in order. Use instead of --manifests.",
+        HelpName = "file",
+    };
+
+    public Option<string?> Service { get; } = new("--compose-service")
+    {
+        Description = "The compose service. Needed when the project has more than one.",
+        HelpName = "name",
+    };
+
+    public Option<string[]> EnvFiles { get; } = new("--compose-env-file")
+    {
+        Description = "An env file for ${VAR} in the compose files, as passed to docker compose --env-file. Repeatable. Defaults to the project's .env; your shell's variables are never read.",
+        HelpName = "file",
+    };
+
+    public void AddTo(Command command)
+    {
+        command.Options.Add(Files);
+        command.Options.Add(Service);
+        command.Options.Add(EnvFiles);
+    }
+
+    /// <summary>A trace of the compose service, or null when no compose file was passed.</summary>
+    public ConfigTracer? Tracer(ParseResult result, KubernetesOptions kubernetes)
+    {
+        var files = result.GetValue(Files) ?? [];
+        var manifests = result.GetValue(kubernetes.Manifests) ?? [];
+        if (files.Length == 0)
+        {
+            if (manifests.Length == 0)
+            {
+                throw new UsageException("container needs --manifests or --compose-file.");
+            }
+
+            if (result.GetValue(Service) is not null || result.GetValue(EnvFiles) is { Length: > 0 })
+            {
+                throw new UsageException("--compose-service and --compose-env-file need --compose-file.");
+            }
+
+            return null;
+        }
+
+        if (manifests.Length > 0 || result.GetValue(kubernetes.Workload) is not null || result.GetValue(kubernetes.Container) is not null)
+        {
+            throw new UsageException("--compose-file can't be combined with --manifests, --workload or --container.");
+        }
+
+        // The tool's own environment is never read, so the shell's variables and tokens stay out of the trace.
+        var options = new ConfigFerret.Compose.ComposeOptions();
+        foreach (var envFile in result.GetValue(EnvFiles) ?? [])
+        {
+            options.EnvFiles.Add(InputReader.RequireFile(envFile));
+        }
+
+        var project = ConfigFerret.Compose.ComposeProject.Load(files.Select(InputReader.RequireFile), options);
+        return ConfigTracer.ForCompose(project, result.GetValue(Service));
+    }
+}
+
 /// <summary>Helm, Kustomize, GitHub Actions and Octopus Deploy: the layers upstream of Kubernetes and the app.</summary>
 internal sealed class UpstreamOptions
 {

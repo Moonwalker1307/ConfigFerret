@@ -119,13 +119,16 @@ internal static class Cli
     {
         var keys = KeysArgument("Environment variable names or mounted file paths to explain. Leave out to trace them all.");
         var kubernetes = new KubernetesOptions(required: true);
+        var compose = new ComposeCliOptions();
         var upstream = new UpstreamOptions();
         var output = new OutputOptions();
-        var command = new Command("container", "Trace what one Kubernetes container gets, seen from outside the app: every environment variable and every file a ConfigMap or Secret volume mounts, back to Helm or Kustomize.")
+        var command = new Command("container", "Trace what one Kubernetes container or Docker Compose service gets, seen from outside the app: every environment variable and every file a ConfigMap, Secret or compose secret mounts, back to Helm, Kustomize or the compose files.")
         {
             keys,
         };
+        kubernetes.Manifests.Required = false;
         kubernetes.AddTo(command);
+        compose.AddTo(command);
         upstream.AddTo(command);
         output.AddTo(command);
         command.SetAction(async (result, cancellationToken) =>
@@ -136,8 +139,10 @@ internal static class Cli
             }
 
             var run = new Run(host, result, output);
-            var manifests = run.Input.ReadManifests(result.GetValue(kubernetes.Manifests) ?? []);
-            var tracer = ConfigTracer.ForContainer(manifests, result.GetValue(kubernetes.Workload), result.GetValue(kubernetes.Container));
+            var tracer = compose.Tracer(result, kubernetes) ?? ConfigTracer.ForContainer(
+                run.Input.ReadManifests(result.GetValue(kubernetes.Manifests) ?? []),
+                result.GetValue(kubernetes.Workload),
+                result.GetValue(kubernetes.Container));
             await run.AddUpstreamAsync(tracer, upstream, cancellationToken).ConfigureAwait(false);
             return await run.WriteTraceAsync(tracer.Trace(), result.GetValue(keys) ?? []).ConfigureAwait(false);
         });

@@ -1,0 +1,387 @@
+﻿{
+  "settings": [
+    {
+      "key": "ASPNETCORE_ENVIRONMENT",
+      "value": "Development",
+      "sensitive": false,
+      "story": "set in compose service api env ASPNETCORE_ENVIRONMENT from variable ENVIRONMENT, not set, overridden by compose service api env ASPNETCORE_ENVIRONMENT",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env ASPNETCORE_ENVIRONMENT",
+          "location": "compose.yaml:20",
+          "value": "Production",
+          "effective": false,
+          "origins": [
+            {
+              "kind": "DockerCompose",
+              "source": "variable ENVIRONMENT, not set",
+              "value": null,
+              "effective": true,
+              "note": "interpolated as ${ENVIRONMENT} in compose.yaml:20; the reference's default is used"
+            }
+          ]
+        },
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env ASPNETCORE_ENVIRONMENT",
+          "location": "compose.override.yaml:7",
+          "value": "Development",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Api__Banner",
+      "value": "Welcome\nto the 1.4.2 shop",
+      "sensitive": false,
+      "story": "set in env_file config/api.envfile from project.envfile",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/api.envfile",
+          "location": "line 2",
+          "value": "Welcome\nto the 1.4.2 shop",
+          "effective": true,
+          "note": "env_file of service api (compose.override.yaml:5)",
+          "origins": [
+            {
+              "kind": "DotEnv",
+              "source": "project.envfile",
+              "location": "line 2",
+              "value": "1.4.2",
+              "effective": true,
+              "note": "interpolated as ${TAG} in config/api.envfile line 2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Api__BaseUrl",
+      "value": "https://api.example.test",
+      "sensitive": false,
+      "story": "set in env_file config/api.envfile",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/api.envfile",
+          "location": "line 1",
+          "value": "https://api.example.test",
+          "effective": true,
+          "note": "env_file of service api (compose.override.yaml:5)"
+        }
+      ]
+    },
+    {
+      "key": "Cache__Ttl",
+      "value": "600",
+      "sensitive": false,
+      "story": "set in env_file config/common.envfile, overridden by env_file config/api.envfile",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/common.envfile",
+          "location": "line 3",
+          "value": "900",
+          "effective": false,
+          "note": "env_file of service api (compose.yaml:15)"
+        },
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/api.envfile",
+          "location": "line 5",
+          "value": "600",
+          "effective": true,
+          "note": "env_file of service api (compose.override.yaml:5)"
+        }
+      ]
+    },
+    {
+      "key": "ConnectionStrings__Cache",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in compose service api env ConnectionStrings__Cache from project.envfile",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env ConnectionStrings__Cache",
+          "location": "compose.yaml:23",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "origins": [
+            {
+              "kind": "DotEnv",
+              "source": "project.envfile",
+              "location": "line 5",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "note": "interpolated as ${REDIS_PASSWORD} in compose.yaml:23"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "DOTNET_RUNNING_IN_CONTAINER",
+      "value": "true",
+      "sensitive": false,
+      "story": "set in compose service api env DOTNET_RUNNING_IN_CONTAINER",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env DOTNET_RUNNING_IN_CONTAINER",
+          "location": "base.yaml:4",
+          "value": "true",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Db__Host",
+      "value": "postgres.internal",
+      "sensitive": false,
+      "story": "set in compose service api env Db__Host from project.envfile",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Db__Host",
+          "location": "compose.yaml:21",
+          "value": "postgres.internal",
+          "effective": true,
+          "origins": [
+            {
+              "kind": "DotEnv",
+              "source": "project.envfile",
+              "location": "line 3",
+              "value": "postgres.internal",
+              "effective": true,
+              "note": "interpolated as ${DB_HOST} in compose.yaml:21"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db__Password",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in compose service api env Db__Password from project.envfile",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Db__Password",
+          "location": "compose.yaml:22",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "origins": [
+            {
+              "kind": "DotEnv",
+              "source": "project.envfile",
+              "location": "line 4",
+              "value": "***",
+              "effective": true,
+              "sensitive": true,
+              "note": "interpolated as ${DB_PASSWORD} in compose.yaml:22"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Db__Timeout",
+      "value": "60",
+      "sensitive": false,
+      "story": "set in env_file config/common.envfile, overridden by compose service api env Db__Timeout, overridden again by compose service api env Db__Timeout",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/common.envfile",
+          "location": "line 5",
+          "value": "15",
+          "effective": false,
+          "note": "env_file of service api (compose.yaml:15)"
+        },
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Db__Timeout",
+          "location": "base.yaml:5",
+          "value": "30",
+          "effective": false
+        },
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Db__Timeout",
+          "location": "compose.override.yaml:8",
+          "value": "60",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Features__Search",
+      "value": "false",
+      "sensitive": false,
+      "story": "set in compose service api env Features__Search from project.envfile",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Features__Search",
+          "location": "compose.yaml:24",
+          "value": "false",
+          "effective": true,
+          "note": "a name without a value, so the value comes from the shell or the project's env file",
+          "origins": [
+            {
+              "kind": "DotEnv",
+              "source": "project.envfile",
+              "location": "line 6",
+              "value": "false",
+              "effective": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Jwt__Key",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in env_file config/api.envfile",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/api.envfile",
+          "location": "line 4",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "env_file of service api (compose.override.yaml:5)"
+        }
+      ]
+    },
+    {
+      "key": "Logging__LogLevel__Default",
+      "value": "Information",
+      "sensitive": false,
+      "story": "set in compose service api env Logging__LogLevel__Default",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Logging__LogLevel__Default",
+          "location": "compose.yaml:5",
+          "value": "Information",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Logging__LogLevel__Microsoft.AspNetCore",
+      "value": "Warning",
+      "sensitive": false,
+      "story": "set in compose service api env Logging__LogLevel__Microsoft.AspNetCore",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Logging__LogLevel__Microsoft.AspNetCore",
+          "location": "compose.yaml:6",
+          "value": "Warning",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Smtp__From",
+      "value": "noreply@${DOMAIN}",
+      "sensitive": false,
+      "story": "set in compose service api env Smtp__From",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose service api env Smtp__From",
+          "location": "compose.yaml:25",
+          "value": "noreply@${DOMAIN}",
+          "effective": true
+        }
+      ]
+    },
+    {
+      "key": "Smtp__Host",
+      "value": "smtp.shop.example.test",
+      "sensitive": false,
+      "story": "set in env_file config/common.envfile from shell variable DOMAIN",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/common.envfile",
+          "location": "line 4",
+          "value": "smtp.shop.example.test",
+          "effective": true,
+          "note": "env_file of service api (compose.yaml:15)",
+          "origins": [
+            {
+              "kind": "DockerCompose",
+              "source": "shell variable DOMAIN",
+              "value": "shop.example.test",
+              "effective": true,
+              "note": "interpolated as ${DOMAIN} in config/common.envfile line 4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "TZ",
+      "value": "Europe/Amsterdam",
+      "sensitive": false,
+      "story": "set in env_file config/common.envfile",
+      "layers": [
+        {
+          "kind": "DotEnv",
+          "source": "env_file config/common.envfile",
+          "location": "line 2",
+          "value": "Europe/Amsterdam",
+          "effective": true,
+          "note": "env_file of service api (compose.yaml:15)"
+        }
+      ]
+    },
+    {
+      "key": "/app/appsettings.Production.json",
+      "value": "{ \"Features\": { \"Search\": true } }\n",
+      "sensitive": false,
+      "story": "set in compose config api_settings",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose config api_settings",
+          "location": "compose.yaml:44",
+          "value": "{ \"Features\": { \"Search\": true } }\n",
+          "effective": true,
+          "note": "mounted at /app/appsettings.Production.json on service api"
+        }
+      ]
+    },
+    {
+      "key": "/run/secrets/db_password",
+      "value": "***",
+      "sensitive": true,
+      "story": "set in compose secret db_password",
+      "layers": [
+        {
+          "kind": "DockerCompose",
+          "source": "compose secret db_password",
+          "location": "secrets/db_password.txt",
+          "value": "***",
+          "effective": true,
+          "sensitive": true,
+          "note": "mounted at /run/secrets/db_password on service api"
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

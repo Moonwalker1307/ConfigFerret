@@ -1,0 +1,46 @@
+name: shop
+
+# Logging defaults shared by every .NET service.
+x-logging-env: &logging-env
+  Logging__LogLevel__Default: Information
+  Logging__LogLevel__Microsoft.AspNetCore: Warning
+
+services:
+  api:
+    extends:
+      file: base.yaml
+      service: dotnet-app
+    image: registry.example.test/shop-api:${TAG:-latest}
+    env_file:
+      - config/common.envfile
+      - path: config/api.local.envfile
+        required: false
+    environment:
+      <<: *logging-env
+      ASPNETCORE_ENVIRONMENT: ${ENVIRONMENT:-Production}
+      Db__Host: ${DB_HOST}
+      Db__Password: ${DB_PASSWORD:?set DB_PASSWORD in the env file}
+      ConnectionStrings__Cache: redis:6379,password=${REDIS_PASSWORD}
+      Features__Search:
+      Smtp__From: noreply@$${DOMAIN}
+    secrets:
+      - db_password
+    configs:
+      - source: api_settings
+        target: /app/appsettings.Production.json
+
+  worker:
+    image: registry.example.test/shop-worker:${TAG:-latest}
+    environment:
+      - QUEUE=orders
+      - Db__Host=${DB_HOST}
+      - TZ
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+
+configs:
+  api_settings:
+    content: |
+      { "Features": { "Search": true } }

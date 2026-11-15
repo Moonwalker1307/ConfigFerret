@@ -1,0 +1,8 @@
+# Local overrides, read after compose.yaml.
+services:
+  api:
+    env_file:
+      - config/api.envfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Db__Timeout: "60"

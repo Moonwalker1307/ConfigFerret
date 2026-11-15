@@ -50,7 +50,7 @@ case "$target" in
   azure-keyvault|azure-appconfig) dict=(-dict="$here/dictionaries/azure.dict") ;;
   code-reads) dict=(-dict="$here/dictionaries/csharp.dict") ;;
   aws-secrets|aws-parameters) dict=(-dict="$here/dictionaries/aws.dict") ;;
-  env-names|desktop-tar|dotenv|secret-audit) ;;
+  env-names|desktop-tar|dotenv|dotenv-layers|secret-audit) ;;
   gcp-secrets) dict=(-dict="$here/dictionaries/gcp.dict") ;;
   azure-devops|gitlab) dict=(-dict="$here/dictionaries/cicd.dict") ;;
   *) dict=(-dict="$here/dictionaries/yaml.dict") ;;

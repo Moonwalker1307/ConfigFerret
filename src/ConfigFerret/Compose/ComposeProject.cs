@@ -1,0 +1,820 @@
+using System.Globalization;
+using System.Text;
+using ConfigFerret.Internal;
+using YamlDotNet.Core;
+using YamlDotNet.RepresentationModel;
+
+namespace ConfigFerret.Compose;
+
+/// <summary>
+/// A Docker Compose project: one or more compose files merged in order (<c>compose.yaml</c> then
+/// <c>compose.override.yaml</c>, or each <c>-f</c> file), with <c>extends</c> and <c>include</c> followed, and every
+/// service's container environment worked out the way <c>docker compose config</c> does.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A service's environment is each <c>env_file</c> in order, then its <c>environment</c> entries, which win. A later
+/// compose file's <c>environment</c> entry wins over an earlier one's; <c>env_file</c> lists are appended.
+/// <c>!reset</c> and <c>!override</c> tags and YAML merge keys (<c>&lt;&lt;: *anchor</c>) are applied.
+/// </para>
+/// <para>
+/// <c>${VAR}</c> references in the compose files are filled in from <see cref="ComposeOptions.Variables"/> (the
+/// shell), then the project's env files (<see cref="ComposeOptions.EnvFiles"/>, else the project directory's
+/// <c>.env</c>). The process environment is read only when <see cref="ComposeOptions.UseProcessEnvironment"/> is set.
+/// </para>
+/// <para>
+/// A file that compose would need but that is missing (a required <c>env_file</c>, an <c>extends</c> file or an
+/// <c>include</c>) is reported in <see cref="Warnings"/> instead of failing, so the rest can still be traced.
+/// </para>
+/// </remarks>
+public sealed class ComposeProject
+{
+    private const int MaxIncludeDepth = 8;
+    private const int MaxExtendsDepth = 16;
+    private const int MaxMergeDepth = 16;
+    private const int MaxMountedFileChars = 1024 * 1024;
+
+    private readonly ComposeOptions _options;
+    private readonly string? _displayRoot;
+    private readonly Dictionary<string, string> _shell = new(StringComparer.Ordinal);
+    private readonly List<ComposeFile> _files = [];
+    private readonly Dictionary<string, ComposeFile> _extendsFiles = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<Part>> _parts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ComposeService> _services = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ComposeProject> _included = new(StringComparer.Ordinal);
+    private readonly List<string> _serviceNames = [];
+    private readonly List<string> _warnings = [];
+    private readonly Dictionary<string, MountDefinition> _secrets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, MountDefinition> _configs = new(StringComparer.Ordinal);
+    private readonly Dictionary<YamlNode, Dictionary<string, (YamlScalarNode Key, YamlNode Value)>> _merged = new(ReferenceEqualityComparer.Instance);
+
+    private ComposeProject(ComposeOptions options, string? projectDirectory, string? displayRoot)
+    {
+        _options = options;
+        ProjectDirectory = projectDirectory;
+        _displayRoot = displayRoot ?? projectDirectory;
+        if (options.UseProcessEnvironment)
+        {
+            foreach (System.Collections.DictionaryEntry entry in System.Environment.GetEnvironmentVariables())
+            {
+                _shell[(string)entry.Key] = entry.Value as string ?? string.Empty;
+            }
+        }
+
+        foreach (var (name, value) in options.Variables.Where(v => v.Value is not null))
+        {
+            _shell[name] = value!;
+        }
+
+        Environment = DotEnvLayers.Build([], ShellLookup);
+    }
+
+    /// <summary>The project directory, or null when the files were parsed from text without one.</summary>
+    public string? ProjectDirectory { get; }
+
+    /// <summary>The compose files, as shown in reports, in the order they were merged.</summary>
+    public IReadOnlyList<string> Files => [.. _files.Select(f => f.Display)];
+
+    /// <summary>The project's env files (<c>.env</c> or <c>--env-file</c>) used for interpolation, lowest priority first.</summary>
+    public DotEnvLayers Environment { get; private set; }
+
+    /// <summary>The service names, in the order the files define them, then those that <c>include</c> brings in.</summary>
+    public IReadOnlyList<string> ServiceNames => _serviceNames;
+
+    /// <summary>Every service, in the order of <see cref="ServiceNames"/>.</summary>
+    public IReadOnlyList<ComposeService> Services => [.. _serviceNames.Select(n => FindService(n)!)];
+
+    /// <summary>Problems found while reading the project that don't belong to one service, such as an unset variable or an include that could not be read.</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
+
+    /// <summary>The service named <paramref name="name"/>, or null.</summary>
+    public ComposeService? FindService(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return _services.TryGetValue(name, out var service) ? service
+            : _included.TryGetValue(name, out var project) ? project.FindService(name)
+            : null;
+    }
+
+    /// <summary>Reads and merges compose files, like <c>docker compose -f a.yaml -f b.yaml</c>.</summary>
+    /// <param name="files">The compose files, lowest priority first, for example <c>compose.yaml</c> and <c>compose.override.yaml</c>.</param>
+    /// <exception cref="FormatException">A file is not valid YAML or not a valid compose file, or a <c>${VAR:?error}</c> variable is not set.</exception>
+    /// <exception cref="IOException">A compose file or an env file passed in could not be read.</exception>
+    public static ComposeProject Load(params string[] files) => Load(files, null);
+
+    /// <summary>Reads and merges compose files, like <c>docker compose -f a.yaml -f b.yaml --env-file x</c>.</summary>
+    /// <param name="files">The compose files, lowest priority first.</param>
+    /// <param name="options">The project directory, env files and variables. The process environment is not read unless the options say so.</param>
+    /// <exception cref="FormatException">A file is not valid YAML or not a valid compose file, or a <c>${VAR:?error}</c> variable is not set.</exception>
+    /// <exception cref="IOException">A compose file or an env file passed in could not be read.</exception>
+    public static ComposeProject Load(IEnumerable<string> files, ComposeOptions? options)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        var paths = files.Select(Path.GetFullPath).ToList();
+        if (paths.Count == 0)
+        {
+            throw new ArgumentException("Pass at least one compose file.", nameof(files));
+        }
+
+        options ??= new ComposeOptions();
+        var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : Path.GetDirectoryName(paths[0])!;
+        var texts = paths.Select(p => new ComposeText(p, File.ReadAllText(p))).ToList();
+        return Create(texts, options, directory, null, 0, paths);
+    }
+
+    /// <summary>
+    /// Parses compose files from text, lowest priority first. Relative paths (<c>env_file</c>, <c>extends</c>,
+    /// <c>include</c>, secret files) are read from <see cref="ComposeOptions.ProjectDirectory"/>; without one, no
+    /// other file is read and each one that would be is reported in the warnings.
+    /// </summary>
+    /// <param name="files">Each file's name as shown in reports, and its text.</param>
+    /// <param name="options">The project directory, env files and variables.</param>
+    /// <exception cref="FormatException">A file is not valid YAML or not a valid compose file.</exception>
+    public static ComposeProject Parse(IEnumerable<(string Name, string Text)> files, ComposeOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        options ??= new ComposeOptions();
+        var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : null;
+        var texts = files.Select(f => new ComposeText(null, f.Text, f.Name)).ToList();
+        return Create(texts, options, directory, null, 0, []);
+    }
+
+    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including)
+    {
+        var project = new ComposeProject(options, directory, displayRoot);
+        project.LoadEnvironment();
+        foreach (var text in texts)
+        {
+            project._files.Add(project.ParseFile(text, directory));
+        }
+
+        foreach (var file in project._files)
+        {
+            project.ReadDefinitions(file, "secrets", project._secrets);
+            project.ReadDefinitions(file, "configs", project._configs);
+            foreach (var (name, node) in project.Pairs(file.Services))
+            {
+                if (node.Value is not YamlMappingNode service)
+                {
+                    throw new FormatException($"{Yaml.Location(file.Display, node.Key)}: service {name} must be a mapping.");
+                }
+
+                if (!project._parts.TryGetValue(name, out var parts))
+                {
+                    project._parts[name] = parts = [];
+                    project._serviceNames.Add(name);
+                }
+
+                parts.Add(new Part(file, name, service));
+            }
+        }
+
+        foreach (var file in project._files)
+        {
+            project.ReadIncludes(file, depth, including);
+        }
+
+        foreach (var (name, parts) in project._parts)
+        {
+            project._services[name] = project.Compute(name, parts);
+        }
+
+        return project;
+    }
+
+    private void LoadEnvironment()
+    {
+        var paths = _options.EnvFiles.Count > 0
+            ? _options.EnvFiles.Select(Path.GetFullPath).ToList()
+            : ProjectDirectory is null ? [] : [.. new[] { Path.Join(ProjectDirectory, ".env") }.Where(File.Exists)];
+        Environment = DotEnvLayers.Build(
+            paths.Select(p => new DotEnvSourceText(Display(p), p, () => ReadCapped(p) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
+            ShellLookup);
+        _warnings.AddRange(Environment.Warnings);
+    }
+
+    private LookupResult? ShellLookup(string name) => _shell.TryGetValue(name, out var value) ? new LookupResult(value, null) : null;
+
+    /// <summary>Looks a variable up the way compose does: the shell first, then the project's env files.</summary>
+    internal LookupResult? Lookup(string name)
+    {
+        if (ShellLookup(name) is { } shell)
+        {
+            return shell;
+        }
+
+        var history = Environment.History(name);
+        return history.Count > 0 ? new LookupResult(history[^1].Value, history[^1]) : null;
+    }
+
+    private ComposeFile ParseFile(ComposeText text, string? baseDirectory)
+    {
+        var display = text.Path is null ? text.Name! : Display(text.Path);
+        List<YamlNode> documents;
+        try
+        {
+            documents = Yaml.LoadDocuments(text.Text);
+        }
+        catch (YamlException ex)
+        {
+            throw new FormatException($"Could not parse the compose file {display}: {ex.Message}", ex);
+        }
+
+        if (documents.Count > 1)
+        {
+            _warnings.Add($"{display} holds {documents.Count} YAML documents; only the first is read.");
+        }
+
+        var root = documents.Count == 0 || documents[0].IsNull() ? new YamlMappingNode() : documents[0] as YamlMappingNode
+            ?? throw new FormatException($"{display}: a compose file must be a mapping at the top level.");
+        var services = root.Get("services");
+        if (!services.IsNull() && services is not YamlMappingNode)
+        {
+            throw new FormatException($"{Yaml.Location(display, services!)}: services must be a mapping.");
+        }
+
+        return new ComposeFile(text.Path ?? display, display, baseDirectory, root, services as YamlMappingNode);
+    }
+
+    private void ReadDefinitions(ComposeFile file, string section, Dictionary<string, MountDefinition> into)
+    {
+        foreach (var (name, node) in Pairs(file.Root.Get(section)))
+        {
+            var at = Yaml.Location(file.Display, node.Key);
+            var fileName = InterpolatedName(node.Value.Str("file"), at, _warnings);
+            (string Value, bool IsSensitive, IReadOnlyList<DotEnvReference>)? content = node.Value.Str("content") is { } text ? InterpolatedContent(text, at, _warnings) : null;
+            into[name] = new MountDefinition(
+                name,
+                at,
+                fileName,
+                fileName is null ? null : FullPath(file.Base, fileName),
+                InterpolatedName(node.Value.Str("environment"), at, _warnings),
+                content?.Value,
+                string.Equals(node.Value.Str("external"), "true", StringComparison.OrdinalIgnoreCase) || node.Value.Get("external") is YamlMappingNode,
+                content?.IsSensitive ?? false);
+        }
+    }
+
+    private void ReadIncludes(ComposeFile file, int depth, IReadOnlyList<string> including)
+    {
+        foreach (var item in file.Root.Get("include").Items())
+        {
+            var at = Yaml.Location(file.Display, item);
+            var paths = ItemsOrSelf(item is YamlMappingNode ? item.Get("path") : item).Select(p => p.Scalar()).ToList();
+            if (paths.Count == 0 || paths.Exists(p => p is null))
+            {
+                throw new FormatException($"{at}: an include needs a path.");
+            }
+
+            if (file.Base is null)
+            {
+                _warnings.Add($"{at}: the include of {string.Join(", ", paths)} was not read, because the compose files were parsed from text without a project directory.");
+                continue;
+            }
+
+            if (depth >= MaxIncludeDepth)
+            {
+                throw new FormatException($"{at}: includes nest more than {MaxIncludeDepth} deep.");
+            }
+
+            var full = paths.Select(p => FullPath(file.Base, InterpolatedName(p, at, _warnings)!)!).ToList();
+            if (full.Find(p => including.Contains(p, StringComparer.Ordinal)) is { } cycle)
+            {
+                throw new FormatException($"{at}: {Display(cycle)} includes itself.");
+            }
+
+            var missing = full.Find(p => !File.Exists(p));
+            if (missing is not null)
+            {
+                _warnings.Add($"{at}: the included file {Display(missing)} does not exist, so its services are not listed.");
+                continue;
+            }
+
+            var projectDirectory = InterpolatedName(item.Str("project_directory"), at, _warnings) is { } dir ? FullPath(file.Base, dir)! : Path.GetDirectoryName(full[0])!;
+            var envFiles = ItemsOrSelf(item.Get("env_file")).Select(e => e.Scalar()).Where(e => e is not null)
+                .Select(e => FullPath(file.Base, InterpolatedName(e, at, _warnings)!)!);
+            var texts = full.Select(p => new ComposeText(p, ReadCapped(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
+            var sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full]);
+            foreach (var name in sub.ServiceNames)
+            {
+                if (_parts.ContainsKey(name) || _included.ContainsKey(name))
+                {
+                    throw new FormatException($"{at}: the include brings in service {name}, which is already defined.");
+                }
+
+                _included[name] = sub;
+                _serviceNames.Add(name);
+            }
+
+            _warnings.AddRange(sub.Warnings);
+        }
+    }
+
+    private ComposeService Compute(string service, List<Part> parts)
+    {
+        var warnings = new List<string>();
+        var expanded = new List<Part>();
+        foreach (var part in parts)
+        {
+            Expand(part, expanded, [], warnings);
+        }
+
+        var envFiles = new List<EnvFileDeclaration>();
+        var environment = new Dictionary<string, List<EnvDeclaration>>(StringComparer.Ordinal);
+        var secretMounts = new Dictionary<string, MountUse>(StringComparer.Ordinal);
+        var configMounts = new Dictionary<string, MountUse>(StringComparer.Ordinal);
+        foreach (var part in expanded)
+        {
+            var pairs = MergedPairs(part.Node, 0);
+            if (pairs.TryGetValue("env_file", out var envFile))
+            {
+                AddEnvFiles(part, envFile.Value, envFiles, warnings);
+            }
+
+            if (pairs.TryGetValue("environment", out var env))
+            {
+                AddEnvironment(part, env.Value, environment, warnings);
+            }
+
+            if (pairs.TryGetValue("secrets", out var secrets))
+            {
+                AddMounts(part, secrets.Value, isSecret: true, secretMounts);
+            }
+
+            if (pairs.TryGetValue("configs", out var configs))
+            {
+                AddMounts(part, configs.Value, isSecret: false, configMounts);
+            }
+        }
+
+        var layers = new Dictionary<string, List<ProvenanceStep>>(StringComparer.Ordinal);
+        foreach (var step in ReadEnvFiles(service, envFiles, warnings))
+        {
+            Layer(layers, ((DotEnvEntryRef)step.Reference!).Name).Add(step);
+        }
+
+        foreach (var (name, declarations) in environment)
+        {
+            Layer(layers, name).AddRange(declarations.Select(d => EnvironmentStep(service, d)));
+        }
+
+        // A secret and a config at the same path: the secret is listed, as it is mounted last.
+        var mounts = new Dictionary<string, MountUse>(configMounts, StringComparer.Ordinal);
+        foreach (var (path, mount) in secretMounts)
+        {
+            mounts[path] = mount;
+        }
+
+        var mountSteps = mounts.Values.ToDictionary(m => m.Path, m => MountStep(service, m, warnings), StringComparer.Ordinal);
+        return new ComposeService(service, layers, mountSteps, mounts.Values.Select(m => new ComposeMount(m.Path, m.Name, m.IsSecret)).ToList(), warnings);
+    }
+
+    private static List<ProvenanceStep> Layer(Dictionary<string, List<ProvenanceStep>> layers, string name)
+    {
+        if (!layers.TryGetValue(name, out var list))
+        {
+            layers[name] = list = [];
+        }
+
+        return list;
+    }
+
+    // Puts the parts of the services that part extends before it, recursively, so later parts win.
+    private void Expand(Part part, List<Part> into, List<string> visiting, List<string> warnings)
+    {
+        var key = part.File.Id + "#" + part.Service;
+        if (visiting.Contains(key, StringComparer.Ordinal))
+        {
+            throw new FormatException($"Service {part.Service} in {part.File.Display} extends itself.");
+        }
+
+        if (visiting.Count >= MaxExtendsDepth)
+        {
+            throw new FormatException($"Service {part.Service} in {part.File.Display}: extends nests more than {MaxExtendsDepth} deep.");
+        }
+
+        if (MergedPairs(part.Node, 0).TryGetValue("extends", out var extends))
+        {
+            var at = Yaml.Location(part.File.Display, extends.Key);
+            var baseName = InterpolatedName(extends.Value is YamlMappingNode ? extends.Value.Str("service") : extends.Value.Scalar(), at, warnings)
+                ?? throw new FormatException($"{at}: extends needs a service.");
+            var baseFile = InterpolatedName(extends.Value.Str("file"), at, warnings);
+            visiting.Add(key);
+            if (baseFile is not null)
+            {
+                var file = LoadExtendsFile(part.File, baseFile, at, warnings);
+                if (file is not null && MergedPairs(file.Services, 0).TryGetValue(baseName, out var found) && found.Value is YamlMappingNode node)
+                {
+                    Expand(new Part(file, baseName, node), into, visiting, warnings);
+                }
+                else if (file is not null)
+                {
+                    warnings.Add($"{at}: {file.Display} has no service {baseName} to extend.");
+                }
+            }
+            else if (MergedPairs(part.File.Services, 0).TryGetValue(baseName, out var same) && same.Value is YamlMappingNode node)
+            {
+                Expand(new Part(part.File, baseName, node), into, visiting, warnings);
+            }
+            else if (_parts.TryGetValue(baseName, out var baseParts))
+            {
+                foreach (var basePart in baseParts)
+                {
+                    Expand(basePart, into, visiting, warnings);
+                }
+            }
+            else
+            {
+                warnings.Add($"{at}: service {part.Service} extends {baseName}, which is not defined.");
+            }
+
+            visiting.RemoveAt(visiting.Count - 1);
+        }
+
+        into.Add(part);
+    }
+
+    private ComposeFile? LoadExtendsFile(ComposeFile from, string path, string at, List<string> warnings)
+    {
+        var full = FullPath(from.Base, path);
+        if (full is null)
+        {
+            warnings.Add($"{at}: the extends file {path} was not read, because the compose files were parsed from text without a project directory.");
+            return null;
+        }
+
+        if (string.Equals(full, from.Id, StringComparison.Ordinal))
+        {
+            return from;
+        }
+
+        if (_extendsFiles.TryGetValue(full, out var known))
+        {
+            return known;
+        }
+
+        var text = ReadCapped(full);
+        if (text is null)
+        {
+            warnings.Add($"{at}: the extends file {Display(full)} does not exist.");
+            return null;
+        }
+
+        var file = ParseFile(new ComposeText(full, text), Path.GetDirectoryName(full));
+        _extendsFiles[full] = file;
+        return file;
+    }
+
+    private void AddEnvFiles(Part part, YamlNode node, List<EnvFileDeclaration> envFiles, List<string> warnings)
+    {
+        if (ResetsOrOverrides(node, envFiles.Clear))
+        {
+            return;
+        }
+
+        foreach (var item in ItemsOrSelf(node).Where(i => !i.IsNull()))
+        {
+            var at = Yaml.Location(part.File.Display, item);
+            var path = InterpolatedName(item is YamlMappingNode ? item.Str("path") : item.Scalar(), at, warnings)
+                ?? throw new FormatException($"{at}: an env_file entry needs a path.");
+            var required = !string.Equals(item.Str("required"), "false", StringComparison.OrdinalIgnoreCase);
+            var raw = string.Equals(item.Str("format"), "raw", StringComparison.Ordinal);
+            var full = FullPath(part.File.Base, path);
+            var declaration = new EnvFileDeclaration(full is null ? path : Display(full), full, required, raw, at);
+            envFiles.RemoveAll(e => string.Equals(e.Display, declaration.Display, StringComparison.Ordinal));
+            envFiles.Add(declaration);
+        }
+    }
+
+    private void AddEnvironment(Part part, YamlNode node, Dictionary<string, List<EnvDeclaration>> environment, List<string> warnings)
+    {
+        if (ResetsOrOverrides(node, environment.Clear))
+        {
+            return;
+        }
+
+        List<(string Name, string? Value, YamlNode Node)> entries = node switch
+        {
+            YamlMappingNode map => [.. MergedPairs(map, 0).Values.Select(p => MapEntry(part, p.Key, p.Value))],
+            YamlSequenceNode seq => [.. seq.Children.Select(c => SplitListEntry(part, c))],
+            _ when node.IsNull() => [],
+            _ => throw new FormatException($"{Yaml.Location(part.File.Display, node)}: environment must be a mapping or a list."),
+        };
+
+        foreach (var (name, value, at) in entries.Select(e => (e.Name, e.Value, Yaml.Location(part.File.Display, e.Node))))
+        {
+            if (name.Length == 0)
+            {
+                throw new FormatException($"{at}: an environment entry needs a name.");
+            }
+
+            var interpolation = new Interpolation(Lookup, at);
+            var expanded = value is null ? null : interpolation.Expand(value);
+            warnings.AddRange(interpolation.Unset.Select(v => UnsetWarning(at, v)));
+            if (!environment.TryGetValue(name, out var list))
+            {
+                environment[name] = list = [];
+            }
+
+            list.Add(new EnvDeclaration(name, expanded, interpolation.References, at));
+        }
+    }
+
+    private static (string Name, string? Value, YamlNode Node) MapEntry(Part part, YamlScalarNode key, YamlNode value) =>
+        value is YamlScalarNode
+            ? (key.Value!, value.Scalar(), key)
+            : throw new FormatException($"{Yaml.Location(part.File.Display, value)}: the value of {key.Value} must be a string, a number or a boolean.");
+
+    private static (string Name, string? Value, YamlNode Node) SplitListEntry(Part part, YamlNode item)
+    {
+        var text = item is YamlScalarNode ? item.Scalar() : null;
+        if (text is null)
+        {
+            throw new FormatException($"{Yaml.Location(part.File.Display, item)}: an environment list entry must be NAME=VALUE or NAME.");
+        }
+
+        var eq = text.IndexOf('=', StringComparison.Ordinal);
+        return eq < 0 ? (text.Trim(), null, item) : (text[..eq].Trim(), text[(eq + 1)..], item);
+    }
+
+    private static void AddMounts(Part part, YamlNode node, bool isSecret, Dictionary<string, MountUse> mounts)
+    {
+        if (ResetsOrOverrides(node, mounts.Clear))
+        {
+            return;
+        }
+
+        foreach (var item in node.Items().Where(i => !i.IsNull()))
+        {
+            var at = Yaml.Location(part.File.Display, item);
+            var source = (item is YamlMappingNode ? item.Str("source") : item.Scalar())
+                ?? throw new FormatException($"{at}: a {(isSecret ? "secret" : "config")} entry needs a source.");
+            var target = item.Str("target");
+            var folder = isSecret ? "/run/secrets/" : "/";
+            var path = target is null ? folder + source : target.StartsWith('/') ? target : folder + target;
+            mounts[path] = new MountUse(source, isSecret, path, at);
+        }
+    }
+
+    // !reset clears what earlier files set and adds nothing; !override clears it and adds this node's entries.
+    private static bool ResetsOrOverrides(YamlNode node, Action clear)
+    {
+        var tag = node.Tag.IsEmpty ? null : node.Tag.Value;
+        if (tag is "!reset" or "!override")
+        {
+            clear();
+        }
+
+        return tag == "!reset";
+    }
+
+    private List<ProvenanceStep> ReadEnvFiles(string service, List<EnvFileDeclaration> declarations, List<string> warnings)
+    {
+        var steps = new List<ProvenanceStep>();
+        var earlier = new Dictionary<string, DotEnvEntry>(StringComparer.Ordinal);
+        foreach (var declaration in declarations)
+        {
+            if (declaration.FullPath is null)
+            {
+                warnings.Add($"{declaration.At}: env_file {declaration.Display} was not read, because the compose files were parsed from text without a project directory.");
+                continue;
+            }
+
+            var text = ReadCapped(declaration.FullPath);
+            if (text is null)
+            {
+                if (declaration.Required)
+                {
+                    warnings.Add($"{declaration.At}: env_file {declaration.Display} does not exist (or is larger than 1 MiB); docker compose stops with an error when a required env_file is missing.");
+                }
+
+                continue;
+            }
+
+            var file = DotEnvFile.Parse(text, declaration.Display, declaration.FullPath, Lookup, declaration.Raw, v => earlier.TryGetValue(v, out var e) ? new LookupResult(e.Value, e) : null);
+            warnings.AddRange(file.Warnings);
+            steps.AddRange(file.Entries.Select(e => ComposeSteps.Entry(e, $"env_file {declaration.Display}", $"env_file of service {service} ({declaration.At})")));
+            foreach (var entry in file.Entries)
+            {
+                earlier[entry.Name] = entry;
+            }
+        }
+
+        return steps;
+    }
+
+    private ProvenanceStep EnvironmentStep(string service, EnvDeclaration declaration)
+    {
+        var step = new ProvenanceStep
+        {
+            Kind = LayerKind.DockerCompose,
+            Source = $"compose service {service} env {declaration.Name}",
+            Location = declaration.At,
+            Reference = new ComposeEnvironmentRef(service, declaration.Name),
+        };
+        List<ProvenanceStep> origins;
+        if (declaration.Value is not null)
+        {
+            origins = ComposeSteps.References(declaration.References, declaration.At, 0);
+            step = step with { Value = declaration.Value };
+        }
+        else if (Lookup(declaration.Name) is { } found)
+        {
+            origins = ComposeSteps.References([new DotEnvReference(declaration.Name, found.Entry, IsSet: true) { Value = found.Value }], null, 0);
+            step = step with { Value = found.Value, Note = "a name without a value, so the value comes from the shell or the project's env file" };
+        }
+        else
+        {
+            origins = [];
+            step = step with { IsRemoval = true, Note = "a name without a value that the shell and the project's env file don't set, so the container does not get it" };
+        }
+
+        return step with
+        {
+            IsSensitive = ComposeSteps.IsSensitiveName(declaration.Name) || origins.Exists(o => o.IsSensitive),
+            Origins = origins,
+        };
+    }
+
+    private ProvenanceStep MountStep(string service, MountUse mount, List<string> warnings)
+    {
+        var kind = mount.IsSecret ? "secret" : "config";
+        var step = new ProvenanceStep
+        {
+            Kind = LayerKind.DockerCompose,
+            Source = $"compose {kind} {mount.Name}",
+            Location = mount.At,
+            IsSensitive = mount.IsSecret || ComposeSteps.IsSensitiveName(mount.Name),
+            Note = $"mounted at {mount.Path} on service {service}",
+            Reference = new ComposeMountRef(mount.Name, mount.IsSecret),
+        };
+        if (!(mount.IsSecret ? _secrets : _configs).TryGetValue(mount.Name, out var definition))
+        {
+            warnings.Add($"{mount.At}: service {service} uses {kind} {mount.Name}, which is not defined under the top-level {kind}s.");
+            return step with { Note = step.Note + "; it is not defined" };
+        }
+
+        if (definition.FileName is not null)
+        {
+            step = step with { Location = definition.FullPath is null ? definition.FileName : Display(definition.FullPath) };
+            if (mount.IsSecret && !_options.ReadSecretFiles)
+            {
+                return step with { Note = step.Note + "; the file is not read" };
+            }
+
+            var content = definition.FullPath is null ? null : ReadCapped(definition.FullPath);
+            return content is null
+                ? step with { Note = step.Note + "; the file could not be read" }
+                : step with { Value = content };
+        }
+
+        if (definition.EnvironmentVariable is not null)
+        {
+            var found = Lookup(definition.EnvironmentVariable);
+            return step with
+            {
+                Location = definition.At,
+                Value = found?.Value,
+                IsSensitive = step.IsSensitive || ComposeSteps.IsSensitiveName(definition.EnvironmentVariable),
+                Note = step.Note + $"; from the variable {definition.EnvironmentVariable}" + (found is null ? ", which is not set" : string.Empty),
+            };
+        }
+
+        if (definition.Content is not null)
+        {
+            return step with { Location = definition.At, Value = definition.Content, IsSensitive = step.IsSensitive || definition.ContentIsSensitive };
+        }
+
+        return step with { Location = definition.At, Note = step.Note + (definition.External ? "; it is external, so its contents are not known" : "; its definition has no file, environment or content") };
+    }
+
+    // A path or a name: it ends up in sources, locations and warnings, which are never redacted, so it may not
+    // take its value from a variable named like a secret.
+    private string? InterpolatedName(string? text, string at, List<string> warnings)
+    {
+        if (text is null)
+        {
+            return null;
+        }
+
+        var expanded = InterpolatedContent(text, at, warnings);
+        if (expanded.IsSensitive)
+        {
+            throw new FormatException($"{at}: a path or a name may not refer to a variable named like a secret ({string.Join(", ", expanded.References.Where(r => ComposeSteps.IsSensitiveName(r.Name)).Select(r => r.Name))}).");
+        }
+
+        return expanded.Value;
+    }
+
+    private (string Value, bool IsSensitive, IReadOnlyList<DotEnvReference> References) InterpolatedContent(string text, string at, List<string> warnings)
+    {
+        var interpolation = new Interpolation(Lookup, at);
+        var value = interpolation.Expand(text);
+        warnings.AddRange(interpolation.Unset.Select(v => UnsetWarning(at, v)));
+        var sensitive = interpolation.References.Any(r => ComposeSteps.IsSensitiveName(r.Name) || (r.From is { } entry && ComposeSteps.IsSensitiveName(entry.Name)));
+        return (value, sensitive, interpolation.References);
+    }
+
+    private static string UnsetWarning(string at, string name) => $"{at}: the {name} variable is not set, so an empty string is used.";
+
+    // The keys of a mapping with YAML merge keys (<<: *anchor) applied: the mapping's own keys win over merged ones,
+    // and an earlier merged mapping wins over a later one.
+    private Dictionary<string, (YamlScalarNode Key, YamlNode Value)> MergedPairs(YamlNode? node, int depth)
+    {
+        if (node is not YamlMappingNode map)
+        {
+            return new(StringComparer.Ordinal);
+        }
+
+        if (_merged.TryGetValue(map, out var known))
+        {
+            return known;
+        }
+
+        if (depth > MaxMergeDepth)
+        {
+            throw new FormatException($"Line {map.Line().ToString(CultureInfo.InvariantCulture)}: merge keys nest more than {MaxMergeDepth} deep.");
+        }
+
+        var result = new Dictionary<string, (YamlScalarNode, YamlNode)>(StringComparer.Ordinal);
+        var own = map.Children.Select(c => (Key: c.Key as YamlScalarNode, c.Value)).Where(c => c.Key?.Value is not null).ToList();
+        static bool IsMerge(YamlScalarNode key) => key.Value == "<<" && key.Style == ScalarStyle.Plain;
+        foreach (var source in own.Where(c => IsMerge(c.Key!)).SelectMany(m => ItemsOrSelf(m.Value)).Reverse())
+        {
+            foreach (var (name, pair) in MergedPairs(source, depth + 1))
+            {
+                result[name] = pair;
+            }
+        }
+
+        foreach (var (key, value) in own.Where(c => !IsMerge(c.Key!)))
+        {
+            result[key!.Value!] = (key, value);
+        }
+
+        _merged[map] = result;
+        return result;
+    }
+
+    private IEnumerable<(string Name, (YamlScalarNode Key, YamlNode Value) Node)> Pairs(YamlNode? node) =>
+        MergedPairs(node, 0).Where(p => !string.IsNullOrEmpty(p.Key)).Select(p => (p.Key, p.Value));
+
+    private static IEnumerable<YamlNode> ItemsOrSelf(YamlNode? node) => node switch
+    {
+        null => [],
+        YamlSequenceNode seq => seq.Children,
+        _ => [node],
+    };
+
+    private static string? FullPath(string? baseDirectory, string path)
+    {
+        if (baseDirectory is null || path.Length == 0 || path.Contains('\0', StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // Compose accepts absolute paths (env_file: /etc/app.env) as well as paths relative to the file.
+        return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Join(baseDirectory, path));
+    }
+
+    /// <summary>A path as shown in reports: relative to the project directory when it is inside it, with / separators.</summary>
+    internal string Display(string fullPath)
+    {
+        if (_displayRoot is null)
+        {
+            return fullPath.Replace('\\', '/');
+        }
+
+        var relative = Path.GetRelativePath(_displayRoot, fullPath);
+        return (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? fullPath : relative).Replace('\\', '/');
+    }
+
+    // Reads a text file of at most 1 MiB, or returns null when it does not exist or is bigger. Stops early on a
+    // device such as /dev/zero.
+    private static string? ReadCapped(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buffer = new char[MaxMountedFileChars + 1];
+        var read = reader.ReadBlock(buffer, 0, buffer.Length);
+        return read > MaxMountedFileChars ? null : new string(buffer, 0, read);
+    }
+
+    private sealed record ComposeText(string? Path, string Text, string? Name = null);
+
+    private sealed record ComposeFile(string Id, string Display, string? Base, YamlMappingNode Root, YamlMappingNode? Services);
+
+    private sealed record Part(ComposeFile File, string Service, YamlMappingNode Node);
+
+    private sealed record EnvFileDeclaration(string Display, string? FullPath, bool Required, bool Raw, string At);
+
+    private sealed record EnvDeclaration(string Name, string? Value, IReadOnlyList<DotEnvReference> References, string At);
+
+    private sealed record MountUse(string Name, bool IsSecret, string Path, string At);
+
+    private sealed record MountDefinition(string Name, string At, string? FileName, string? FullPath, string? EnvironmentVariable, string? Content, bool External, bool ContentIsSensitive);
+}

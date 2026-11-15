@@ -1,0 +1,100 @@
+﻿ASPNETCORE_ENVIRONMENT = "Development"
+  set in compose service api env ASPNETCORE_ENVIRONMENT from variable ENVIRONMENT, not set, overridden by compose service api env ASPNETCORE_ENVIRONMENT
+  [overridden] compose service api env ASPNETCORE_ENVIRONMENT (compose.yaml:20) = "Production"
+    <- [effective]  variable ENVIRONMENT, not set
+                    interpolated as ${ENVIRONMENT} in compose.yaml:20; the reference's default is used
+  [effective]  compose service api env ASPNETCORE_ENVIRONMENT (compose.override.yaml:7) = "Development"
+
+Api__Banner = "Welcome\nto the 1.4.2 shop"
+  set in env_file config/api.envfile from project.envfile
+  [effective]  env_file config/api.envfile (line 2) = "Welcome\nto the 1.4.2 shop"
+               env_file of service api (compose.override.yaml:5)
+    <- [effective]  project.envfile (line 2) = "1.4.2"
+                    interpolated as ${TAG} in config/api.envfile line 2
+
+Api__BaseUrl = "https://api.example.test"
+  set in env_file config/api.envfile
+  [effective]  env_file config/api.envfile (line 1) = "https://api.example.test"
+               env_file of service api (compose.override.yaml:5)
+
+Cache__Ttl = "600"
+  set in env_file config/common.envfile, overridden by env_file config/api.envfile
+  [overridden] env_file config/common.envfile (line 3) = "900"
+               env_file of service api (compose.yaml:15)
+  [effective]  env_file config/api.envfile (line 5) = "600"
+               env_file of service api (compose.override.yaml:5)
+
+ConnectionStrings__Cache = "***"
+  set in compose service api env ConnectionStrings__Cache from project.envfile
+  [effective]  compose service api env ConnectionStrings__Cache (compose.yaml:23) = "***"
+    <- [effective]  project.envfile (line 5) = "***"
+                    interpolated as ${REDIS_PASSWORD} in compose.yaml:23
+
+DOTNET_RUNNING_IN_CONTAINER = "true"
+  set in compose service api env DOTNET_RUNNING_IN_CONTAINER
+  [effective]  compose service api env DOTNET_RUNNING_IN_CONTAINER (base.yaml:4) = "true"
+
+Db__Host = "postgres.internal"
+  set in compose service api env Db__Host from project.envfile
+  [effective]  compose service api env Db__Host (compose.yaml:21) = "postgres.internal"
+    <- [effective]  project.envfile (line 3) = "postgres.internal"
+                    interpolated as ${DB_HOST} in compose.yaml:21
+
+Db__Password = "***"
+  set in compose service api env Db__Password from project.envfile
+  [effective]  compose service api env Db__Password (compose.yaml:22) = "***"
+    <- [effective]  project.envfile (line 4) = "***"
+                    interpolated as ${DB_PASSWORD} in compose.yaml:22
+
+Db__Timeout = "60"
+  set in env_file config/common.envfile, overridden by compose service api env Db__Timeout, overridden again by compose service api env Db__Timeout
+  [overridden] env_file config/common.envfile (line 5) = "15"
+               env_file of service api (compose.yaml:15)
+  [overridden] compose service api env Db__Timeout (base.yaml:5) = "30"
+  [effective]  compose service api env Db__Timeout (compose.override.yaml:8) = "60"
+
+Features__Search = "false"
+  set in compose service api env Features__Search from project.envfile
+  [effective]  compose service api env Features__Search (compose.yaml:24) = "false"
+               a name without a value, so the value comes from the shell or the project's env file
+    <- [effective]  project.envfile (line 6) = "false"
+
+Jwt__Key = "***"
+  set in env_file config/api.envfile
+  [effective]  env_file config/api.envfile (line 4) = "***"
+               env_file of service api (compose.override.yaml:5)
+
+Logging__LogLevel__Default = "Information"
+  set in compose service api env Logging__LogLevel__Default
+  [effective]  compose service api env Logging__LogLevel__Default (compose.yaml:5) = "Information"
+
+Logging__LogLevel__Microsoft.AspNetCore = "Warning"
+  set in compose service api env Logging__LogLevel__Microsoft.AspNetCore
+  [effective]  compose service api env Logging__LogLevel__Microsoft.AspNetCore (compose.yaml:6) = "Warning"
+
+Smtp__From = "noreply@${DOMAIN}"
+  set in compose service api env Smtp__From
+  [effective]  compose service api env Smtp__From (compose.yaml:25) = "noreply@${DOMAIN}"
+
+Smtp__Host = "smtp.shop.example.test"
+  set in env_file config/common.envfile from shell variable DOMAIN
+  [effective]  env_file config/common.envfile (line 4) = "smtp.shop.example.test"
+               env_file of service api (compose.yaml:15)
+    <- [effective]  shell variable DOMAIN = "shop.example.test"
+                    interpolated as ${DOMAIN} in config/common.envfile line 4
+
+TZ = "Europe/Amsterdam"
+  set in env_file config/common.envfile
+  [effective]  env_file config/common.envfile (line 2) = "Europe/Amsterdam"
+               env_file of service api (compose.yaml:15)
+
+/app/appsettings.Production.json = "{ "Features": { "Search": true } }\n"
+  set in compose config api_settings
+  [effective]  compose config api_settings (compose.yaml:44) = "{ "Features": { "Search": true } }\n"
+               mounted at /app/appsettings.Production.json on service api
+
+/run/secrets/db_password = "***"
+  set in compose secret db_password
+  [effective]  compose secret db_password (secrets/db_password.txt) = "***"
+               mounted at /run/secrets/db_password on service api
+

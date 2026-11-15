@@ -1,0 +1,5 @@
+services:
+  dotnet-app:
+    environment:
+      DOTNET_RUNNING_IN_CONTAINER: "true"
+      Db__Timeout: "30"
