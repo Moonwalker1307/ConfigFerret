@@ -122,6 +122,23 @@ public sealed class TraceRunner
             results[kubernetes[0]] = null;
         }
 
+        // GitHub variables load first: in an app trace, the workflows' env entries become the app's environment variables.
+        var github = new Dictionary<GitHubSource, GitHubVariables>();
+        foreach (var source in sources.OfType<GitHubSource>())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                github[source] = await LoadGitHubAsync(source, cancellationToken).ConfigureAwait(false);
+                githubVariables.Add(github[source]);
+                results[source] = null;
+            }
+            catch (Exception ex) when (IsInputError(ex, cancellationToken))
+            {
+                results[source] = ex.Message;
+            }
+        }
+
         ConfigTracer tracer;
         if (profile.Mode == TraceMode.Container)
         {
@@ -140,7 +157,7 @@ public sealed class TraceRunner
         }
         else
         {
-            tracer = BuildAppTracer(sources, manifests, kubernetes.FirstOrDefault(), results, notes);
+            tracer = BuildAppTracer(sources, manifests, kubernetes.FirstOrDefault(), github, results, notes);
         }
 
         tracer.WithOptions(o => o.RevealSensitiveValues = revealSecrets);
@@ -160,9 +177,8 @@ public sealed class TraceRunner
                         AddKustomize(tracer, kustomize);
                         results[kustomize] = null;
                         break;
-                    case GitHubSource github:
-                        await AddGitHubAsync(tracer, github, githubVariables, cancellationToken).ConfigureAwait(false);
-                        results[github] = null;
+                    case GitHubSource gitHubSource when github.TryGetValue(gitHubSource, out var variables):
+                        AddGitHub(tracer, gitHubSource, variables);
                         break;
                     case OctopusSource octopus:
                         await AddOctopusAsync(tracer, octopus, octopusVariables, cancellationToken).ConfigureAwait(false);
@@ -317,6 +333,7 @@ public sealed class TraceRunner
         List<SourceSettings> sources,
         KubernetesManifests? manifests,
         KubernetesSource? kubernetes,
+        Dictionary<GitHubSource, GitHubVariables> github,
         Dictionary<SourceSettings, string?> results,
         List<string> notes)
     {
@@ -383,6 +400,7 @@ public sealed class TraceRunner
         }
 
         var prefixes = apps.SelectMany(a => a.EnvironmentPrefixes).Distinct(StringComparer.Ordinal).ToList();
+        AddWorkflowEnvironment(environment, github, builder, prefixes, notes);
         foreach (var prefix in prefixes.Count == 0 ? [string.Empty] : prefixes)
         {
             builder.Add(new SimulatedEnvironmentVariablesSource(environment, prefix));
@@ -471,7 +489,7 @@ public sealed class TraceRunner
         tracer.WithKustomize(Kustomization.Load(kustomize.Folder, kustomize.AllowFilesOutsideFolder));
     }
 
-    private async Task AddGitHubAsync(ConfigTracer tracer, GitHubSource source, List<GitHubVariables> loaded, CancellationToken cancellationToken)
+    private async Task<GitHubVariables> LoadGitHubAsync(GitHubSource source, CancellationToken cancellationToken)
     {
         var parts = source.Repository.Trim().Split('/');
         if (parts.Length != 2 || parts.Any(string.IsNullOrWhiteSpace))
@@ -496,19 +514,16 @@ public sealed class TraceRunner
             options.ApiBaseAddress = ParseUrl(apiUrl, "The GitHub API address");
         }
 
-        GitHubVariables variables;
         if (_httpClientFactory is not null)
         {
             using var client = _httpClientFactory();
-            variables = await GitHubVariables.LoadAsync(options, client, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            variables = await GitHubVariables.LoadAsync(options, cancellationToken).ConfigureAwait(false);
+            return await GitHubVariables.LoadAsync(options, client, cancellationToken).ConfigureAwait(false);
         }
 
-        loaded.Add(variables);
+        return await GitHubVariables.LoadAsync(options, cancellationToken).ConfigureAwait(false);
+    }
 
+    private static void AddGitHub(ConfigTracer tracer, GitHubSource source, GitHubVariables variables) =>
         tracer.WithGitHub(variables, o =>
         {
             foreach (var workflow in source.Workflows)
@@ -516,6 +531,95 @@ public sealed class TraceRunner
                 o.AddWorkflow(workflow);
             }
         });
+
+    // A workflow env entry such as Db__Host: ${{ vars.DB_HOST }} is an environment variable of the app the workflow runs
+    // or deploys. Add the entries that look like app settings, unless something else already sets them, so the trace
+    // shows them and links them to the GitHub variable. Others, such as NODE_VERSION, are left out.
+    private static void AddWorkflowEnvironment(
+        Dictionary<string, string?> environment,
+        Dictionary<GitHubSource, GitHubVariables> github,
+        ConfigurationBuilder appSettings,
+        List<string> prefixes,
+        List<string> notes)
+    {
+        if (github.Count == 0)
+        {
+            return;
+        }
+
+        HashSet<string> keys;
+        try
+        {
+            keys = appSettings.Build().AsEnumerable().Select(e => e.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (IsInputError(ex, CancellationToken.None))
+        {
+            keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var secrets = new List<string>();
+        foreach (var (source, variables) in github)
+        {
+            var options = new GitHubTraceOptions();
+            foreach (var workflow in source.Workflows)
+            {
+                try
+                {
+                    options.AddWorkflow(workflow);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // The trace reports an unreadable workflow when it reads the workflows again.
+                }
+            }
+
+            foreach (var mapping in options.Mappings)
+            {
+                if (environment.ContainsKey(mapping.Name) || !LooksLikeAppSetting(mapping.Name, prefixes, keys))
+                {
+                    continue;
+                }
+
+                if (mapping.Kind == GitHubVariableKind.Secret)
+                {
+                    // GitHub never returns a secret's value. Show the setting with a stand-in, so it is still traced.
+                    environment[mapping.Name] = SecretStandIn;
+                    secrets.Add(mapping.Name);
+                }
+                else
+                {
+                    var found = variables.Find(mapping.VariableName, GitHubVariableKind.Variable);
+                    environment[mapping.Name] = found.Count > 0 ? found[0].Value ?? string.Empty : string.Empty;
+                }
+            }
+        }
+
+        if (secrets.Count > 0)
+        {
+            notes.Add($"GitHub doesn't return secret values, so {string.Join(", ", secrets.Order(StringComparer.Ordinal))} {(secrets.Count == 1 ? "shows" : "show")} {SecretStandIn} instead.");
+        }
+    }
+
+    /// <summary>The value shown for a setting a workflow sets from a GitHub secret.</summary>
+    internal const string SecretStandIn = "(GitHub secret)";
+
+    private static bool LooksLikeAppSetting(string name, List<string> prefixes, HashSet<string> keys)
+    {
+        var rest = name;
+        if (prefixes.Count > 0)
+        {
+            var prefix = prefixes.FirstOrDefault(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+            if (prefix is null)
+            {
+                return false;
+            }
+
+            rest = name[prefix.Length..];
+        }
+
+        return rest.Contains("__", StringComparison.Ordinal)
+            || rest.Contains("CONNSTR_", StringComparison.OrdinalIgnoreCase)
+            || keys.Contains(rest);
     }
 
     private async Task AddOctopusAsync(ConfigTracer tracer, OctopusSource source, List<OctopusVariables> loaded, CancellationToken cancellationToken)
