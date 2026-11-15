@@ -25,6 +25,7 @@
     <!-- The desktop app is a WinExe, but a console app can still reference it for its parsers (it needs InternalsVisibleTo). -->
     <ProjectReference Include="../../src/ConfigFerret.Desktop/ConfigFerret.Desktop.csproj" />
     <ProjectReference Include="../../src/ConfigFerret.Aws/ConfigFerret.Aws.csproj" />
+    <ProjectReference Include="../../src/ConfigFerret.GoogleCloud/ConfigFerret.GoogleCloud.csproj" />
   </ItemGroup>
 
 </Project>
