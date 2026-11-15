@@ -773,7 +773,8 @@ public sealed class ComposeProject
             return null;
         }
 
-        return Path.GetFullPath(Path.Combine(baseDirectory, path));
+        // Compose accepts absolute paths (env_file: /etc/app.env) as well as paths relative to the file.
+        return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Join(baseDirectory, path));
     }
 
     /// <summary>A path as shown in reports: relative to the project directory when it is inside it, with / separators.</summary>
