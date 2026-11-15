@@ -119,9 +119,8 @@ internal static class GcpAuth
         {
             return CredentialFactory.FromJson<ServiceAccountCredential>(json).ToGoogleCredential();
         }
-#pragma warning disable CA1031 // The library throws many types for a bad key; none of their messages may be shown.
-        catch (Exception)
-#pragma warning restore CA1031
+        // The library throws many types for a bad key; none of their messages may be shown.
+        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
         {
             throw new InvalidOperationException($"{what} is not a valid service account key: check its client_email and private_key.");
         }

@@ -35,17 +35,8 @@ public sealed class GcpSecrets
         ProjectId = projectId.Trim();
         Location = string.IsNullOrWhiteSpace(location) ? null : location.Trim();
         Prefix = string.IsNullOrEmpty(prefix) ? null : prefix;
-        var list = new List<GcpSecret>();
-        foreach (var secret in secrets)
-        {
-            // The first one wins, so a server that lists a secret twice cannot make it appear twice.
-            if (_byId.TryAdd(secret.Id, secret))
-            {
-                list.Add(secret);
-            }
-        }
-
-        Secrets = list;
+        // The first one wins, so a server that lists a secret twice cannot make it appear twice.
+        Secrets = [.. secrets.Where(secret => _byId.TryAdd(secret.Id, secret))];
         Warnings = [.. warnings ?? []];
     }
 
@@ -112,9 +103,9 @@ public sealed class GcpSecrets
 
         var secrets = new List<GcpSecret>();
         var skipped = 0;
-        foreach (var listedSecret in listed)
+        for (var i = 0; i < listed.Count; i++)
         {
-            var secret = listedSecret;
+            var secret = listed[i];
             if (options.IncludeVersions || options.IncludeValues)
             {
                 secret = secret with { Versions = await loader.TryReadVersionsAsync(secret, warnings, cancellationToken).ConfigureAwait(false) };
