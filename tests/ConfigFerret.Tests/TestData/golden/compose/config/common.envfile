@@ -1,0 +1,5 @@
+# Shared by every .NET service.
+export TZ=Europe/Amsterdam
+Cache__Ttl=900 # seconds
+Smtp__Host=smtp.${DOMAIN:-example.test}
+Db__Timeout=15

@@ -1,3 +1,4 @@
+using ConfigFerret.Compose;
 using ConfigFerret.DotNet;
 using ConfigFerret.GitOps;
 using ConfigFerret.Helm;
@@ -25,6 +26,7 @@ public sealed class ConfigTracer
     // Exactly one of these is set: the app's own configuration (For), or a container seen from outside (ForContainer).
     private readonly IConfigurationRoot? _root;
     private readonly KubernetesResolver? _container;
+    private readonly ComposeResolver? _compose;
     private readonly List<IOriginResolver> _resolvers = [];
 
     private ConfigTracer(IConfigurationRoot root) => _root = root;
@@ -36,6 +38,8 @@ public sealed class ConfigTracer
         // SecretProviderClasses that fill them.
         _resolvers.Add(container);
     }
+
+    private ConfigTracer(ComposeResolver compose) => _compose = compose;
 
     /// <summary>The trace options.</summary>
     public TraceOptions Options { get; private set; } = new();
@@ -74,6 +78,24 @@ public sealed class ConfigTracer
     {
         ArgumentNullException.ThrowIfNull(manifests);
         return new ConfigTracer(new KubernetesResolver(manifests, workload, container));
+    }
+
+    /// <summary>
+    /// Starts a trace of the environment variables and mounted files a Docker Compose service's containers get, seen
+    /// from outside the app, the way <c>docker compose config</c> works them out: each <c>env_file</c> line, then each
+    /// <c>environment</c> entry, with the <c>.env</c> line or shell variable behind every <c>${VAR}</c>.
+    /// </summary>
+    /// <remarks>
+    /// The report lists the environment variables first, sorted by name, then the files that <c>secrets</c> and
+    /// <c>configs</c> mount, sorted by path. Names are matched case-sensitively. A name listed in <c>environment</c>
+    /// without a value that neither the shell nor the project's env file sets is listed with a null value.
+    /// </remarks>
+    /// <param name="project">The compose project.</param>
+    /// <param name="service">The service name. Needed only when the project has more than one.</param>
+    public static ConfigTracer ForCompose(ComposeProject project, string? service = null)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        return new ConfigTracer(new ComposeResolver(project, service));
     }
 
     /// <summary>Sets the trace options.</summary>
@@ -162,7 +184,9 @@ public sealed class ConfigTracer
         // Reading every key to trace it is not the app using it.
         using var paused = ConfigReadRecorder.Pause();
         var diagnostics = new TraceDiagnostics();
-        var layers = _root is not null ? ReadConfiguration(_root, diagnostics) : ReadContainer(_container!, diagnostics);
+        var layers = _root is not null ? ReadConfiguration(_root, diagnostics)
+            : _compose is not null ? _compose.ReadLayers(diagnostics)
+            : ReadContainer(_container!, diagnostics);
 
         var settings = new List<TracedSetting>(layers.Count);
         foreach (var (key, effectiveValue, steps) in layers)

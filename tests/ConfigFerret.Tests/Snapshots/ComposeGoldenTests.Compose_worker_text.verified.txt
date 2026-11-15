@@ -1,0 +1,15 @@
+﻿Db__Host = "postgres.internal"
+  set in compose service worker env Db__Host from project.envfile
+  [effective]  compose service worker env Db__Host (compose.yaml:36) = "postgres.internal"
+    <- [effective]  project.envfile (line 3) = "postgres.internal"
+                    interpolated as ${DB_HOST} in compose.yaml:36
+
+QUEUE = "orders"
+  set in compose service worker env QUEUE
+  [effective]  compose service worker env QUEUE (compose.yaml:35) = "orders"
+
+TZ = (null)
+  set in compose service worker env TZ
+  [removed]    compose service worker env TZ (compose.yaml:37)
+               a name without a value that the shell and the project's env file don't set, so the container does not get it
+

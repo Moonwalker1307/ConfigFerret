@@ -1,0 +1,110 @@
+﻿Api:Banner = "Welcome\nto the 1.4.2 shop"
+  set in environment variable Api__Banner from env_file config/api.envfile from project.envfile
+  [effective]  environment variable Api__Banner = "Welcome\nto the 1.4.2 shop"
+    <- [effective]  env_file config/api.envfile (line 2) = "Welcome\nto the 1.4.2 shop"
+                    env_file of service api (compose.override.yaml:5)
+      <- [effective]  project.envfile (line 2) = "1.4.2"
+                      interpolated as ${TAG} in config/api.envfile line 2
+
+Api:BaseUrl = "https://api.example.test"
+  set in environment variable Api__BaseUrl from env_file config/api.envfile
+  [effective]  environment variable Api__BaseUrl = "https://api.example.test"
+    <- [effective]  env_file config/api.envfile (line 1) = "https://api.example.test"
+                    env_file of service api (compose.override.yaml:5)
+
+ASPNETCORE_ENVIRONMENT = "Development"
+  set in environment variable ASPNETCORE_ENVIRONMENT from compose service api env ASPNETCORE_ENVIRONMENT
+  [effective]  environment variable ASPNETCORE_ENVIRONMENT = "Development"
+    <- [overridden] compose service api env ASPNETCORE_ENVIRONMENT (compose.yaml:20) = "Production"
+      <- [effective]  variable ENVIRONMENT, not set
+                      interpolated as ${ENVIRONMENT} in compose.yaml:20; the reference's default is used
+    <- [effective]  compose service api env ASPNETCORE_ENVIRONMENT (compose.override.yaml:7) = "Development"
+
+Cache:Ttl = "600"
+  set in appsettings.json, overridden by environment variable Cache__Ttl from env_file config/api.envfile
+  [overridden] appsettings.json (line 3) = "300"
+  [effective]  environment variable Cache__Ttl = "600"
+    <- [overridden] env_file config/common.envfile (line 3) = "900"
+                    env_file of service api (compose.yaml:15)
+    <- [effective]  env_file config/api.envfile (line 5) = "600"
+                    env_file of service api (compose.override.yaml:5)
+
+ConnectionStrings:Cache = "***"
+  set in environment variable ConnectionStrings__Cache from compose service api env ConnectionStrings__Cache from project.envfile
+  [effective]  environment variable ConnectionStrings__Cache = "***"
+    <- [effective]  compose service api env ConnectionStrings__Cache (compose.yaml:23) = "***"
+      <- [effective]  project.envfile (line 5) = "***"
+                      interpolated as ${REDIS_PASSWORD} in compose.yaml:23
+
+Db:Host = "postgres.internal"
+  set in appsettings.json, overridden by environment variable Db__Host from compose service api env Db__Host from project.envfile
+  [overridden] appsettings.json (line 2) = "localhost"
+  [effective]  environment variable Db__Host = "postgres.internal"
+    <- [effective]  compose service api env Db__Host (compose.yaml:21) = "postgres.internal"
+      <- [effective]  project.envfile (line 3) = "postgres.internal"
+                      interpolated as ${DB_HOST} in compose.yaml:21
+
+Db:Password = "***"
+  set in environment variable Db__Password from compose service api env Db__Password from project.envfile
+  [effective]  environment variable Db__Password = "***"
+    <- [effective]  compose service api env Db__Password (compose.yaml:22) = "***"
+      <- [effective]  project.envfile (line 4) = "***"
+                      interpolated as ${DB_PASSWORD} in compose.yaml:22
+
+Db:Timeout = "60"
+  set in appsettings.json, overridden by environment variable Db__Timeout from compose service api env Db__Timeout
+  [overridden] appsettings.json (line 2) = "5"
+  [effective]  environment variable Db__Timeout = "60"
+    <- [overridden] env_file config/common.envfile (line 5) = "15"
+                    env_file of service api (compose.yaml:15)
+    <- [overridden] compose service api env Db__Timeout (base.yaml:5) = "30"
+    <- [effective]  compose service api env Db__Timeout (compose.override.yaml:8) = "60"
+
+DOTNET_RUNNING_IN_CONTAINER = "true"
+  set in environment variable DOTNET_RUNNING_IN_CONTAINER from compose service api env DOTNET_RUNNING_IN_CONTAINER
+  [effective]  environment variable DOTNET_RUNNING_IN_CONTAINER = "true"
+    <- [effective]  compose service api env DOTNET_RUNNING_IN_CONTAINER (base.yaml:4) = "true"
+
+Features:Search = "false"
+  set in appsettings.json, overridden by environment variable Features__Search from compose service api env Features__Search from project.envfile
+  [overridden] appsettings.json (line 4) = "True"
+  [effective]  environment variable Features__Search = "false"
+    <- [effective]  compose service api env Features__Search (compose.yaml:24) = "false"
+                    a name without a value, so the value comes from the shell or the project's env file
+      <- [effective]  project.envfile (line 6) = "false"
+
+Jwt:Key = "***"
+  set in environment variable Jwt__Key from env_file config/api.envfile
+  [effective]  environment variable Jwt__Key = "***"
+    <- [effective]  env_file config/api.envfile (line 4) = "***"
+                    env_file of service api (compose.override.yaml:5)
+
+Logging:LogLevel:Default = "Information"
+  set in environment variable Logging__LogLevel__Default from compose service api env Logging__LogLevel__Default
+  [effective]  environment variable Logging__LogLevel__Default = "Information"
+    <- [effective]  compose service api env Logging__LogLevel__Default (compose.yaml:5) = "Information"
+
+Logging:LogLevel:Microsoft.AspNetCore = "Warning"
+  set in environment variable Logging__LogLevel__Microsoft.AspNetCore from compose service api env Logging__LogLevel__Microsoft.AspNetCore
+  [effective]  environment variable Logging__LogLevel__Microsoft.AspNetCore = "Warning"
+    <- [effective]  compose service api env Logging__LogLevel__Microsoft.AspNetCore (compose.yaml:6) = "Warning"
+
+Smtp:From = "noreply@${DOMAIN}"
+  set in environment variable Smtp__From from compose service api env Smtp__From
+  [effective]  environment variable Smtp__From = "noreply@${DOMAIN}"
+    <- [effective]  compose service api env Smtp__From (compose.yaml:25) = "noreply@${DOMAIN}"
+
+Smtp:Host = "smtp.shop.example.test"
+  set in environment variable Smtp__Host from env_file config/common.envfile from shell variable DOMAIN
+  [effective]  environment variable Smtp__Host = "smtp.shop.example.test"
+    <- [effective]  env_file config/common.envfile (line 4) = "smtp.shop.example.test"
+                    env_file of service api (compose.yaml:15)
+      <- [effective]  shell variable DOMAIN = "shop.example.test"
+                      interpolated as ${DOMAIN} in config/common.envfile line 4
+
+TZ = "Europe/Amsterdam"
+  set in environment variable TZ from env_file config/common.envfile
+  [effective]  environment variable TZ = "Europe/Amsterdam"
+    <- [effective]  env_file config/common.envfile (line 2) = "Europe/Amsterdam"
+                    env_file of service api (compose.yaml:15)
+

@@ -1,0 +1,6 @@
+# Variables for ${VAR} in the compose files: docker compose --env-file project.envfile
+TAG=1.4.2
+DB_HOST=postgres.internal
+DB_PASSWORD="pr0d-s3cret"
+REDIS_PASSWORD='r3dis-pa$$'
+Features__Search=false
