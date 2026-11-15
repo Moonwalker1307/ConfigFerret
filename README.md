@@ -60,6 +60,17 @@ There is also a desktop app that scans a GitHub repository or a local folder and
 comes from. Download it from [GitHub Releases](https://github.com/Moonwalker1307/ConfigFerret/releases) (the
 `desktop-v*` tags), not from NuGet. See [its readme](src/ConfigFerret.Desktop/README.md).
 
+### Web app in Docker
+
+The same app also runs as a website in a container, released as an image on GitHub (`ghcr.io`, the `web-v*` tags),
+not on NuGet:
+
+```
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/moonwalker1307/configferret-web
+```
+
+Then open http://localhost:8080. See [its readme](src/ConfigFerret.Web/README.md).
+
 ## Use
 
 ### From the command line
