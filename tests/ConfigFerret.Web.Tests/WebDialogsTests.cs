@@ -40,10 +40,11 @@ public sealed class WebDialogsTests
     [Fact]
     public async Task Disposing_cancels_an_open_pick()
     {
-        var dialogs = new WebDialogs();
-        var pick = dialogs.PickFolderAsync("Open");
-
-        dialogs.Dispose();
+        Task<string?> pick;
+        using (var dialogs = new WebDialogs())
+        {
+            pick = dialogs.PickFolderAsync("Open");
+        }
 
         Assert.Null(await pick);
     }
@@ -78,11 +79,12 @@ public sealed class WebDialogsTests
     [Fact]
     public async Task Disposing_deletes_an_export_that_was_never_downloaded()
     {
-        var dialogs = new WebDialogs();
-        var path = await dialogs.SaveFileAsync("Export the report", "configferret-report.txt");
-        await File.WriteAllTextAsync(path!, "secret", TestContext.Current.CancellationToken);
-
-        dialogs.Dispose();
+        string? path;
+        using (var dialogs = new WebDialogs())
+        {
+            path = await dialogs.SaveFileAsync("Export the report", "configferret-report.txt");
+            await File.WriteAllTextAsync(path!, "secret", TestContext.Current.CancellationToken);
+        }
 
         Assert.False(File.Exists(path));
         Assert.False(Directory.Exists(Path.GetDirectoryName(path)));

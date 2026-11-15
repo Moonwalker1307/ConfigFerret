@@ -10,6 +10,8 @@ internal static class Hosting
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
         + "font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
+    private static readonly string[] BrandFiles = ["icon.png", "logo.png"];
+
     /// <summary>Adds headers that stop the pages being framed, sniffed or leaking their address.</summary>
     public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder app) =>
         app.Use(async (context, next) =>
@@ -27,9 +29,8 @@ internal static class Hosting
     /// <summary>Serves the logo and icon, which live in the repository's assets folder, from /brand/.</summary>
     public static IEndpointRouteBuilder MapBrandAssets(this IEndpointRouteBuilder endpoints)
     {
-        foreach (var name in new[] { "icon.png", "logo.png" })
+        foreach (var resource in BrandFiles.Select(name => "brand/" + name))
         {
-            var resource = "brand/" + name;
             endpoints.MapGet("/" + resource, (HttpContext context) =>
             {
                 var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource);
