@@ -196,21 +196,21 @@ public sealed partial class TerraformOutputs
             throw new FormatException($"Terraform outputs in {sourceName} must be a JSON object of outputs.");
         }
 
-        foreach (var output in root.EnumerateObject())
+        var outputs = root.EnumerateObject().ToList();
+        _warnings.AddRange(outputs
+            .Where(o => !HasValue(o.Value))
+            .Select(o => $"Terraform output {o.Name} in {sourceName} has no value."));
+        foreach (var output in outputs.Where(o => HasValue(o.Value)))
         {
-            if (output.Value.ValueKind != JsonValueKind.Object || !output.Value.TryGetProperty("value", out var value))
-            {
-                _warnings.Add($"Terraform output {output.Name} in {sourceName} has no value.");
-                continue;
-            }
-
             // Found by fuzzing: JSON may name an output twice. The last one wins, as in most JSON readers.
             _values.RemoveAll(v => string.Equals(v.Output, output.Name, StringComparison.Ordinal));
             var sensitive = output.Value.TryGetProperty("sensitive", out var s) && s.ValueKind == JsonValueKind.True;
             var type = output.Value.TryGetProperty("type", out var t) ? Render(t) : null;
-            Flatten(output.Name, null, value, type, sensitive, sourceName);
+            Flatten(output.Name, null, output.Value.GetProperty("value"), type, sensitive, sourceName);
         }
     }
+
+    private static bool HasValue(JsonElement output) => output.ValueKind == JsonValueKind.Object && output.TryGetProperty("value", out _);
 
     private void Flatten(string output, string? path, JsonElement value, string? type, bool sensitive, string sourceName)
     {

@@ -217,16 +217,16 @@ internal sealed partial class GitOpsResolver : IOriginResolver
     {
         var data = manifests.ConfigMaps.Values.Select(d => (Kind: 'c', Data: d))
             .Concat(manifests.Secrets.Values.Select(d => (Kind: 's', Data: d)))
-            .SelectMany(x => x.Data.Data.Select(kv => (x.Kind, Object: x.Data.Name, kv.Key, kv.Value.Value, kv.Value.Line, File: x.Data.SourceName)));
+            .SelectMany(x => x.Data.Data.Select(kv => (x.Kind, Object: x.Data.Name, Key: kv.Key, Value: kv.Value.Value, kv.Value.Line, File: x.Data.SourceName)));
         var env = manifests.Workloads
-            .SelectMany(w => w.Containers.SelectMany(c => c.Env.Select(e => (Kind: 'e', Object: w.Name + "/" + c.Name, e.Name, (e.Source as EnvValueSource.Literal)?.Value, e.Line, File: w.SourceName))));
-        foreach (var (kind, obj, key, value, line, file) in data.Concat(env))
+            .SelectMany(w => w.Containers.SelectMany(c => c.Env.Select(e => (Kind: 'e', Object: w.Name + "/" + c.Name, Key: e.Name, Value: (e.Source as EnvValueSource.Literal)?.Value, e.Line, File: w.SourceName))));
+        var templates = data.Concat(env)
+            .Where(x => x.Value is not null)
+            .Select(x => (Key: (x.Kind, x.Object, x.Key), Template: new SubstitutionTemplate(x.File, x.Line, x.Value!, ReadVariables(x.Value!))))
+            .Where(x => x.Template.Variables.Count > 0);
+        foreach (var (key, template) in templates)
         {
-            var variables = value is null ? [] : ReadVariables(value);
-            if (variables.Count > 0)
-            {
-                _templates.TryAdd((kind, obj, key), new SubstitutionTemplate(file, line, value!, variables));
-            }
+            _templates.TryAdd(key, template);
         }
     }
 

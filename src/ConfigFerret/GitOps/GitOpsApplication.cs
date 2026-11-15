@@ -239,21 +239,15 @@ public sealed class GitOpsApplication
             });
         }
 
-        foreach (var parameter in helm.Get("parameters").Items())
-        {
-            var path = parameter.Str("name");
-            if (string.IsNullOrWhiteSpace(path))
+        layers.AddRange(helm.Get("parameters").Items()
+            .Select(p => (Node: p, Path: p.Str("name")))
+            .Where(p => !string.IsNullOrWhiteSpace(p.Path))
+            .Select(p => new GitOpsValuesLayer("helm.parameters", GitOpsValuesKind.Parameter, p.Node.Line())
             {
-                continue;
-            }
-
-            layers.Add(new GitOpsValuesLayer("helm.parameters", GitOpsValuesKind.Parameter, parameter.Line())
-            {
-                TargetPath = path,
-                Value = parameter.Get("value").Scalar() ?? "",
-                ForceString = string.Equals(parameter.Str("forceString"), "true", StringComparison.OrdinalIgnoreCase),
-            });
-        }
+                TargetPath = p.Path,
+                Value = p.Node.Get("value").Scalar() ?? "",
+                ForceString = string.Equals(p.Node.Str("forceString"), "true", StringComparison.OrdinalIgnoreCase),
+            }));
 
         if (helm.Get("fileParameters").Items().Any())
         {
