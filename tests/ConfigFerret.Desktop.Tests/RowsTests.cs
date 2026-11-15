@@ -124,13 +124,6 @@ public class RowsTests
         Assert.Throws<ArgumentNullException>(() => new SecretRow(null!));
     }
 
-    [Fact]
-    public void Layer_filter_names_itself()
-    {
-        Assert.Equal("Any layer", new LayerFilter(null).ToString());
-        Assert.Equal("Through Helm", new LayerFilter(LayerKind.Helm).ToString());
-    }
-
     [Theory]
     [InlineData(LayerKind.DotNetProvider, ".NET", "dotnet")]
     [InlineData(LayerKind.KubernetesWorkload, "Workload", "k8s")]

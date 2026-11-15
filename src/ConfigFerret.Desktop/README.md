@@ -4,18 +4,33 @@ A desktop app that shows where every configuration value in a repository comes f
 
 ![The merged configuration of a repository, with the history of Db:Timeout](../../docs/desktop/configuration.png)
 
-![The secrets audit: exposed, to check, and kept in a secret store](../../docs/desktop/secrets.png)
-
 Sign in to GitHub with a token and the app lists the repositories the token can read. Click one and the app downloads
 it and scans it for `appsettings` files, Helm charts, Kustomize overlays, Kubernetes manifests and workflows. It links
-GitHub Actions variables and Octopus Deploy variables to what it finds, then shows:
+GitHub Actions variables and Octopus Deploy variables to what it finds, then shows everything on one page, in one table:
 
-- the merged configuration, with the source of each value
+- every setting, with the source of its value and the layers it went through
+- GitHub Actions and Octopus Deploy variables that no setting picks up, as rows of their own. A GitHub variable or
+  secret a workflow uses directly, such as a publish profile passed to a deploy action, is tagged `workflow` with the
+  file and line that uses it
 - dead variables, marked in red: settings no code reads, Helm values no template reads, GitHub variables no
   setting or workflow uses, and Octopus variables no setting uses
-- values that a later layer always overrides
 - a secrets audit: green means the value is kept in a secret store, orange means check it, red means a secret value
   sits in plain configuration
+
+### Filters
+
+The stat tiles above the table are the filters: click **overridden**, **from upstream**, **secrets protected**,
+**secrets to check**, **secrets exposed**, **dead variables** or **used by workflows** to show only those rows, and
+click it again (or **all variables**) to show everything. The search box looks in keys, values, sources and variable
+names, so `ELWIZ_DB` finds a GitHub secret whether it is a row of its own or a layer of a setting.
+
+Each column header has a filter button, like a spreadsheet: sort A to Z or Z to A, search the column, and tick the
+values to show (sections for KEY, sources for COMES FROM, layer kinds for LAYERS). **Show all** clears every filter.
+
+![The LAYERS column filter: sort, search and a tick list](../../docs/desktop/column-filter.png)
+
+The chips next to the search show what the scan found in the repository, and the notes button lists warnings, source
+problems and what the dead-variable scan read.
 
 A workflow `env:` entry such as `Db__Host: ${{ vars.DB_HOST }}` counts as an environment variable of the app, so
 `Db:Host` gets the variable's value and links back to it. Only entries that look like app settings are used: names with
@@ -26,7 +41,7 @@ over workflow entries. GitHub doesn't return secret values, so a setting a workf
 You can also open a local folder instead of a GitHub repository. Hide the repository sidebar with the button at its top,
 or Ctrl+B (Cmd+B on macOS), to give the results the whole window.
 
-![Dead variables and values that never win](../../docs/desktop/unused.png)
+![The dead variables tile: settings, Helm values and GitHub variables nothing reads](../../docs/desktop/unused.png)
 
 ### How dead settings are found
 

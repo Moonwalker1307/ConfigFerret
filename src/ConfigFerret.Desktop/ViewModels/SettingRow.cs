@@ -1,4 +1,5 @@
 using ConfigFerret.Desktop.Model;
+using ConfigFerret.Desktop.Services;
 
 namespace ConfigFerret.Desktop.ViewModels;
 
@@ -26,8 +27,70 @@ public sealed class SettingRow
         Section = colon > 0 ? setting.Key[..colon] : setting.Key.StartsWith('/') ? "Mounted files" : "(top level)";
     }
 
-    /// <summary>The traced setting.</summary>
+    /// <summary>
+    /// A row for something that is not an app setting: a GitHub or Octopus variable no setting picks up, or a Helm value
+    /// no template reads. It has one layer, so the details pane shows where it is defined.
+    /// </summary>
+    /// <param name="kind">The tool it lives in.</param>
+    /// <param name="what">What it is, for example "GitHub Actions secret", shown as the details caption.</param>
+    /// <param name="name">The variable name or values path.</param>
+    /// <param name="value">The value, or null when unknown or secret.</param>
+    /// <param name="isSecret">True for a secret or sensitive variable.</param>
+    /// <param name="source">Where it is defined, for example "GitHub Actions repository secret (contoso/web)".</param>
+    /// <param name="location">Where in the source, when known.</param>
+    /// <param name="deadReason">Why nothing uses it, when nothing does.</param>
+    /// <param name="workflowUse">Where a workflow uses it, when only a workflow does.</param>
+    public static SettingRow ForVariable(
+        LayerKind kind,
+        string what,
+        string name,
+        string? value,
+        bool isSecret,
+        string source,
+        string? location = null,
+        string? deadReason = null,
+        string? workflowUse = null)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var shown = isSecret && value is null ? "***" : value;
+        var step = new ProvenanceStep
+        {
+            Kind = kind,
+            Source = source,
+            Location = location,
+            Value = shown,
+            IsSensitive = isSecret,
+            IsEffective = true,
+        };
+        return new SettingRow(new TracedSetting(name, shown, [step], isSecret)) { IsSetting = false, What = what, DeadReason = deadReason, WorkflowUse = workflowUse };
+    }
+
+    /// <summary>The traced setting, or a stand-in with one layer for a row that is not an app setting.</summary>
     public TracedSetting Setting { get; }
+
+    /// <summary>False for a GitHub or Octopus variable or a Helm value that no app setting picks up.</summary>
+    public bool IsSetting { get; private init; } = true;
+
+    /// <summary>What the row is, for example "Setting" or "GitHub Actions secret".</summary>
+    public string What { get; private init; } = "Setting";
+
+    /// <summary>The caption above the key in the details pane, for example SETTING.</summary>
+    public string Caption => What.ToUpperInvariant();
+
+    /// <summary>Where a workflow uses this variable, for example "deploy.yml line 12", when only a workflow uses it.</summary>
+    public string? WorkflowUse { get; init; }
+
+    /// <summary>True for a GitHub variable a workflow uses directly while no app setting does.</summary>
+    public bool IsWorkflowOnly => WorkflowUse is not null;
+
+    /// <summary>A line for the details pane about the workflow that uses it.</summary>
+    public string? WorkflowText => WorkflowUse is null ? null : $"Used by {WorkflowUse}, not by an app setting.";
+
+    /// <summary>The secrets audit rating, or null when it does not look like a secret.</summary>
+    public SecretRating? Rating { get; init; }
+
+    /// <summary>The label on the dead badge in the details pane.</summary>
+    public string DeadLabel => IsSetting ? "Dead: not read by code" : "Dead: nothing uses it";
 
     /// <summary>Why no code reads this setting, or null when code reads it or no code was scanned.</summary>
     public string? DeadReason { get; init; }
@@ -77,13 +140,17 @@ public sealed class SettingRow
     /// <summary>The one-sentence history.</summary>
     public string Story => Setting.Story;
 
-    /// <summary>True when the row matches the search text (key, value or any source in the history).</summary>
+    /// <summary>
+    /// True when the row matches the search text: the key, the value, or any source or location in the history. A GitHub
+    /// or Octopus variable is found by its name, whether it is a row of its own or a layer of a setting.
+    /// </summary>
     public bool Matches(string? filter) =>
         string.IsNullOrWhiteSpace(filter)
         || Setting.Key.Contains(filter, StringComparison.OrdinalIgnoreCase)
         || Setting.Key.Replace(":", "__", StringComparison.Ordinal).Contains(filter, StringComparison.OrdinalIgnoreCase)
         || (Setting.Value?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)
-        || AllSteps(Setting.Steps).Any(s => s.Source.Contains(filter, StringComparison.OrdinalIgnoreCase));
+        || AllSteps(Setting.Steps).Any(s => s.Source.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || (s.Location?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false));
 
     internal static IEnumerable<ProvenanceStep> AllSteps(IEnumerable<ProvenanceStep> steps)
     {

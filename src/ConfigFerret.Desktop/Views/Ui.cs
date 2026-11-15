@@ -50,6 +50,10 @@ public static class Converters
     public static readonly IValueConverter SeverityIcon = new FuncValueConverter<string?, Geometry?>(severity =>
         Application.Current?.TryFindResource(severity switch { "error" => "IconAlert", "warning" => "IconAlert", _ => "IconInfo" }, out var value) == true ? value as Geometry : null);
 
+    /// <summary>The arrow beside a sorted column's header: down for Z to A, up for A to Z.</summary>
+    public static readonly IValueConverter SortIcon = new FuncValueConverter<bool, Geometry?>(descending =>
+        Application.Current?.TryFindResource(descending ? "IconArrowDown" : "IconArrowUp", out var value) == true ? value as Geometry : null);
+
     /// <summary>True when a number is greater than zero.</summary>
     public static readonly IValueConverter Positive = new FuncValueConverter<int, bool>(n => n > 0);
 

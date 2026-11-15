@@ -51,7 +51,7 @@ public sealed class RepositoryRow(RepositoryInfo info)
         : $"{(int)(span.TotalDays / 365)}y ago";
 }
 
-/// <summary>Something the scan found in the repository, shown as a card on the overview.</summary>
+/// <summary>Something the scan found in the repository, shown as a chip above the table.</summary>
 /// <param name="Css">The style class that colours the card's icon.</param>
 /// <param name="Icon">The icon resource key.</param>
 /// <param name="Title">What it is, for example "Helm chart".</param>
@@ -106,34 +106,7 @@ public sealed class SecretRow(SecretFinding finding)
     };
 }
 
-/// <summary>A dead variable, or a value that never wins, for the Unused tab.</summary>
-/// <param name="Css">The style class for the chip.</param>
-/// <param name="Kind">What it is: "Setting", "Helm value", "Overridden" or the tool name.</param>
-/// <param name="Name">The key or variable name.</param>
-/// <param name="Where">The layer or variable scope.</param>
-/// <param name="Detail">What wins instead, or why it counts as unused.</param>
-/// <param name="IsDead">True for a variable nothing reads: dead, rather than overridden.</param>
-public sealed record UnusedRow(string Css, string Kind, string Name, string Where, string Detail, bool IsDead = false)
-{
-    /// <summary>True when Show can open it in the Configuration tab: a setting, not a Helm value or a deployment variable.</summary>
-    public bool CanShow { get; init; } = true;
-
-    /// <summary>True for a GitHub variable a workflow uses directly while no setting does: in use, but not by the app's configuration.</summary>
-    public bool IsWorkflowOnly { get; init; }
-
-    /// <summary>True for a value a later layer always overrides.</summary>
-    public bool IsNeverWins => !IsDead && !IsWorkflowOnly;
-}
-
 /// <summary>A line in the problems list.</summary>
 /// <param name="Severity">"error", "warning" or "info".</param>
 /// <param name="Text">The message.</param>
 public sealed record ProblemRow(string Severity, string Text);
-
-/// <summary>A choice in the layer filter: any layer, or one kind.</summary>
-/// <param name="Kind">The kind, or null for any.</param>
-public sealed record LayerFilter(LayerKind? Kind)
-{
-    /// <inheritdoc />
-    public override string ToString() => Kind is { } kind ? "Through " + LayerKinds.ShortName(kind) : "Any layer";
-}

@@ -73,6 +73,72 @@
     <Setter Property="Foreground" Value="{DynamicResource CfBad}" />
   </Style>
 
+  <!-- Stat tiles are the table's filters: a tile is a button, the active one is outlined in orange. -->
+  <Style Selector="Button.tilebutton">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+  <Style Selector="Button.tilebutton:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.tilebutton:pointerover Border.tile">
+    <Setter Property="Background" Value="{DynamicResource CfSurfaceHover}" />
+  </Style>
+  <Style Selector="Button.tilebutton.selected Border.tile">
+    <Setter Property="Background" Value="{DynamicResource CfAccentSoft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CfAccent}" />
+  </Style>
+  <Style Selector="Button.tilebutton:disabled Border.tile">
+    <Setter Property="Opacity" Value="0.5" />
+  </Style>
+
+  <!-- Column header filters -->
+  <Style Selector="Button.headerfilter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="4" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+  <Style Selector="Button.headerfilter PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource CfMuted}" />
+  </Style>
+  <Style Selector="Button.headerfilter:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CfSurfaceHover}" />
+  </Style>
+  <Style Selector="Button.headerfilter.active PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource CfAccent}" />
+  </Style>
+  <Style Selector="Button.menuitem">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+    <Setter Property="Padding" Value="8,6" />
+    <Setter Property="CornerRadius" Value="6" />
+  </Style>
+  <Style Selector="Button.menuitem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CfSurfaceHover}" />
+  </Style>
+  <Style Selector="Button.menuitem.checked">
+    <Setter Property="Foreground" Value="{DynamicResource CfAccent}" />
+  </Style>
+
+  <!-- Sources found in the repository, as chips under the tiles -->
+  <Style Selector="Border.source">
+    <Setter Property="CornerRadius" Value="999" />
+    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="Margin" Value="0,0,8,8" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CfBorder}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Background" Value="{DynamicResource CfSurface}" />
+  </Style>
+  <Style Selector="Border.source.unused">
+    <Setter Property="Opacity" Value="0.55" />
+  </Style>
+
   <!-- Chips: one colour per layer family -->
   <Style Selector="Border.chip">
     <Setter Property="CornerRadius" Value="999" />

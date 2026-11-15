@@ -45,12 +45,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private string? _downloadRoot;
     private List<RepositoryRow> _allRepositories = [];
     private List<SettingRow> _allRows = [];
-    private readonly List<UnusedRow> _allUnused = [];
     private RepositoryScan? _scan;
     private string? _currentKey;
     private string? _currentDownload;
     private TraceResult? _lastResult;
     private bool _populating;
+    private bool _clearing;
     private CancellationTokenSource? _work;
 
     /// <summary>Creates the view model and loads the saved workspace.</summary>
@@ -93,8 +93,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         OctopusSpace = _workspace.OctopusSpace;
         IsDarkTheme = _workspace.DarkTheme;
         IsSidebarOpen = !_workspace.SidebarHidden;
-        LayerFilters = [new LayerFilter(null), .. Enum.GetValues<LayerKind>().Select(k => new LayerFilter(k))];
-        SelectedLayerFilter = LayerFilters[0];
+        KeyFilter = new ColumnFilter(TableColumn.Key, "KEY", "Sections", r => [r.Section], r => [r.Key, r.Key.Replace(":", "__", StringComparison.Ordinal)], OnColumnFilterChanged, SortBy);
+        ValueFilter = new ColumnFilter(TableColumn.Value, "VALUE", "Values", r => [r.Value], r => [r.Value], OnColumnFilterChanged, SortBy);
+        ComesFromFilter = new ColumnFilter(TableColumn.ComesFrom, "COMES FROM", "Sources", r => [r.ComesFrom], r => SettingRow.AllSteps(r.Setting.Steps).Select(s => s.Source), OnColumnFilterChanged, SortBy);
+        LayersFilter = new ColumnFilter(TableColumn.Layers, "LAYERS", "Layers", r => r.AllKinds.Select(LayerKinds.ShortName), r => r.AllKinds.Select(LayerKinds.ShortName), OnColumnFilterChanged, SortBy);
+        ColumnFilters = [KeyFilter, ValueFilter, ComesFromFilter, LayersFilter];
         IsOctopusConnected = OctopusServer.Length > 0 && HasCredential(OctopusAccountName);
     }
 
@@ -298,24 +301,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>The secrets audit, red first.</summary>
     public ObservableCollection<SecretRow> SecretRows { get; } = [];
 
-    /// <summary>Dead variables, values that never win and GitHub variables only workflows use, as filtered by <see cref="OnlyDead"/>.</summary>
-    public ObservableCollection<UnusedRow> Unused { get; } = [];
-
-    /// <summary>Shows only dead variables in the Unused tab, not values that are overridden.</summary>
-    [ObservableProperty]
-    public partial bool OnlyDead { get; set; }
-
     /// <summary>Variables nothing reads: settings no code reads, Helm values no template reads, GitHub variables no setting or workflow uses, and Octopus variables no setting uses.</summary>
     [ObservableProperty]
     public partial int DeadCount { get; set; }
 
-    /// <summary>Values that a later layer always overrides.</summary>
-    [ObservableProperty]
-    public partial int NeverWinsCount { get; set; }
-
     /// <summary>GitHub variables a workflow uses directly while no setting does, such as a deploy action's publish profile.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasWorkflowOnly))]
     public partial int WorkflowOnlyCount { get; set; }
+
+    /// <summary>True when some GitHub variables are used only by workflows, to show their tile.</summary>
+    public bool HasWorkflowOnly => WorkflowOnlyCount > 0;
 
     /// <summary>What the dead-variable scan read, such as "Read 12 C# files".</summary>
     [ObservableProperty]
@@ -324,28 +320,67 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>Warnings and source problems from the last trace.</summary>
     public ObservableCollection<ProblemRow> Problems { get; } = [];
 
-    /// <summary>The choices in the layer filter.</summary>
-    public IReadOnlyList<LayerFilter> LayerFilters { get; }
-
     /// <summary>Search text: matches keys, values and source names.</summary>
     [ObservableProperty]
     public partial string? FilterText { get; set; }
 
-    /// <summary>Shows only keys set by more than one layer.</summary>
+    /// <summary>The stat tile used as a filter. <see cref="TileFilter.All"/> shows every row.</summary>
     [ObservableProperty]
-    public partial bool OnlyOverridden { get; set; }
+    [NotifyPropertyChangedFor(nameof(IsAllTile), nameof(IsOverriddenTile), nameof(IsUpstreamTile), nameof(IsProtectedTile), nameof(IsCheckTile), nameof(IsExposedTile), nameof(IsDeadTile), nameof(IsWorkflowTile))]
+    public partial TileFilter ActiveTile { get; set; }
 
-    /// <summary>Shows only secret values.</summary>
-    [ObservableProperty]
-    public partial bool OnlySecrets { get; set; }
+    /// <summary>The "all" tile is the active filter.</summary>
+    public bool IsAllTile => ActiveTile == TileFilter.All;
 
-    /// <summary>Shows only settings that no code reads.</summary>
-    [ObservableProperty]
-    public partial bool OnlyDeadSettings { get; set; }
+    /// <summary>The overridden tile is the active filter.</summary>
+    public bool IsOverriddenTile => ActiveTile == TileFilter.Overridden;
 
-    /// <summary>Shows only keys whose history includes this kind of layer.</summary>
+    /// <summary>The from-upstream tile is the active filter.</summary>
+    public bool IsUpstreamTile => ActiveTile == TileFilter.Upstream;
+
+    /// <summary>The secrets-protected tile is the active filter.</summary>
+    public bool IsProtectedTile => ActiveTile == TileFilter.Protected;
+
+    /// <summary>The secrets-to-check tile is the active filter.</summary>
+    public bool IsCheckTile => ActiveTile == TileFilter.Check;
+
+    /// <summary>The secrets-exposed tile is the active filter.</summary>
+    public bool IsExposedTile => ActiveTile == TileFilter.Exposed;
+
+    /// <summary>The dead tile is the active filter.</summary>
+    public bool IsDeadTile => ActiveTile == TileFilter.Dead;
+
+    /// <summary>The used-by-workflows tile is the active filter.</summary>
+    public bool IsWorkflowTile => ActiveTile == TileFilter.Workflow;
+
+    /// <summary>The filter behind the KEY header: sections to tick, and a search in the key.</summary>
+    public ColumnFilter KeyFilter { get; }
+
+    /// <summary>The filter behind the VALUE header.</summary>
+    public ColumnFilter ValueFilter { get; }
+
+    /// <summary>The filter behind the COMES FROM header.</summary>
+    public ColumnFilter ComesFromFilter { get; }
+
+    /// <summary>The filter behind the LAYERS header.</summary>
+    public ColumnFilter LayersFilter { get; }
+
+    /// <summary>Every column filter, in column order.</summary>
+    public IReadOnlyList<ColumnFilter> ColumnFilters { get; }
+
+    /// <summary>The column the table is sorted by, or null for the trace's order.</summary>
     [ObservableProperty]
-    public partial LayerFilter? SelectedLayerFilter { get; set; }
+    public partial TableColumn? SortColumn { get; set; }
+
+    /// <summary>True when sorted Z to A.</summary>
+    [ObservableProperty]
+    public partial bool SortDescending { get; set; }
+
+    /// <summary>True when any filter (search, tile or column) hides rows.</summary>
+    public bool IsFiltered => !string.IsNullOrWhiteSpace(FilterText) || ActiveTile != TileFilter.All || ColumnFilters.Any(c => c.IsActive);
+
+    /// <summary>True when there is a result but the filters hide every row.</summary>
+    public bool ShowNoMatches => HasResult && Rows.Count == 0 && _allRows.Count > 0;
 
     /// <summary>Shows secret values instead of ***. Traces again when changed.</summary>
     [ObservableProperty]
@@ -363,9 +398,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool IsSidebarOpen { get; set; } = true;
 
-    /// <summary>How many variables the trace found.</summary>
+    /// <summary>How many settings the trace found.</summary>
     [ObservableProperty]
     public partial int TotalCount { get; set; }
+
+    /// <summary>How many rows the table holds: the settings, plus GitHub and Octopus variables and Helm values no setting picks up.</summary>
+    [ObservableProperty]
+    public partial int RowCount { get; set; }
 
     /// <summary>How many variables are set by more than one layer.</summary>
     [ObservableProperty]
@@ -387,13 +426,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial int ExposedCount { get; set; }
 
-    /// <summary>Possibly unused values and variables.</summary>
-    [ObservableProperty]
-    public partial int UnusedCount { get; set; }
-
     /// <summary>Warnings and problems.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasProblems), nameof(ProblemText))]
     public partial int ProblemCount { get; set; }
+
+    /// <summary>True when the trace left notes, warnings or source problems.</summary>
+    public bool HasProblems => ProblemCount > 0;
+
+    /// <summary>The label on the notes button, such as "3 notes".</summary>
+    public string ProblemText => ProblemCount == 1 ? "1 note" : string.Create(CultureInfo.CurrentCulture, $"{ProblemCount} notes");
 
     /// <summary>A line like "12 of 48 variables".</summary>
     [ObservableProperty]
@@ -446,15 +488,22 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     partial void OnFilterTextChanged(string? value) => ApplyFilter();
 
-    partial void OnOnlyOverriddenChanged(bool value) => ApplyFilter();
+    partial void OnActiveTileChanged(TileFilter value) => ApplyFilter();
 
-    partial void OnOnlyDeadChanged(bool value) => ApplyUnusedFilter();
+    private void OnColumnFilterChanged(ColumnFilter filter) => ApplyFilter();
 
-    partial void OnOnlySecretsChanged(bool value) => ApplyFilter();
+    private void SortBy(TableColumn column, bool? descending)
+    {
+        foreach (var filter in ColumnFilters)
+        {
+            filter.IsSorted = descending is not null && filter.Column == column;
+            filter.IsDescending = filter.IsSorted && descending == true;
+        }
 
-    partial void OnOnlyDeadSettingsChanged(bool value) => ApplyFilter();
-
-    partial void OnSelectedLayerFilterChanged(LayerFilter? value) => ApplyFilter();
+        SortColumn = descending is null ? null : column;
+        SortDescending = descending == true;
+        ApplyFilter();
+    }
 
     partial void OnRevealSecretsChanged(bool value) => RetraceOnChoice();
 
@@ -613,34 +662,35 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
 
-    /// <summary>Clears the search and the filters.</summary>
+    /// <summary>Clears the search, the tile, every column filter and the sort.</summary>
     [RelayCommand]
     private void ClearFilters()
     {
-        FilterText = null;
-        OnlyOverridden = false;
-        OnlySecrets = false;
-        OnlyDeadSettings = false;
-        SelectedLayerFilter = LayerFilters[0];
-    }
-
-    /// <summary>Shows the variable a secrets or unused row is about.</summary>
-    [RelayCommand]
-    private void ShowKey(string? key)
-    {
-        if (key is null)
+        _clearing = true;
+        try
         {
-            return;
+            FilterText = null;
+            ActiveTile = TileFilter.All;
+            foreach (var filter in ColumnFilters)
+            {
+                filter.Clear();
+            }
+        }
+        finally
+        {
+            _clearing = false;
         }
 
-        ClearFilters();
-        SelectedRow = Rows.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase));
-        SelectedTab = 1;
+        SortBy(TableColumn.Key, null);
     }
 
-    /// <summary>The selected tab: 0 overview, 1 configuration, 2 secrets, 3 unused, 4 problems.</summary>
-    [ObservableProperty]
-    public partial int SelectedTab { get; set; }
+    /// <summary>Filters the table by a stat tile: all, overridden, upstream, protected, check, exposed, dead or workflow. Picking the active tile again shows every row.</summary>
+    [RelayCommand]
+    private void SelectTile(string? tile)
+    {
+        var picked = Enum.TryParse<TileFilter>(tile, ignoreCase: true, out var value) ? value : TileFilter.All;
+        ActiveTile = picked == ActiveTile ? TileFilter.All : picked;
+    }
 
     private bool IsIdle() => !IsBusy;
 
@@ -770,7 +820,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         await LoadOctopusChoicesAsync().ConfigureAwait(true);
-        SelectedTab = 0;
         await RetraceAsync().ConfigureAwait(true);
     }
 
@@ -890,7 +939,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             Problems.Add(new ProblemRow("error", ex.Message));
             ProblemCount = Problems.Count;
             StatusText = ex.Message;
-            SelectedTab = 0;
             return default;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or InvalidOperationException
@@ -917,7 +965,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _lastResult = result;
         var previousKey = SelectedRow?.Key;
         var dead = result.DeadSettings.ToDictionary(d => d.Key, d => d.Reason, StringComparer.OrdinalIgnoreCase);
-        _allRows = result.Report.Settings.Select(s => new SettingRow(s) { DeadReason = dead.GetValueOrDefault(s.Key) }).ToList();
+        var ratings = result.Secrets.Where(s => s.Rating != SecretRating.NotSecret)
+            .GroupBy(s => s.Key, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Min(s => s.Rating == SecretRating.Exposed ? 0 : s.Rating == SecretRating.Check ? 1 : 2), StringComparer.Ordinal);
+        _allRows = result.Report.Settings.Select(s => new SettingRow(s)
+        {
+            DeadReason = dead.GetValueOrDefault(s.Key),
+            Rating = ratings.TryGetValue(s.Key, out var worst) ? worst switch { 0 => SecretRating.Exposed, 1 => SecretRating.Check, _ => SecretRating.Protected } : null,
+        }).ToList();
         TotalCount = _allRows.Count;
         OverriddenCount = _allRows.Count(r => r.IsOverridden);
         UpstreamCount = _allRows.Count(r => r.OriginSource.Length > 0);
@@ -932,51 +987,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         CheckCount = result.Secrets.Count(s => s.Rating == SecretRating.Check);
         ExposedCount = result.Secrets.Count(s => s.Rating == SecretRating.Exposed);
 
-        _allUnused.Clear();
-        foreach (var setting in result.DeadSettings)
+        DeadCount = _allRows.Count(r => r.IsDead) + result.DeadHelmValues.Count + result.UnusedVariables.Count;
+        WorkflowOnlyCount = result.WorkflowVariables.Count;
+        _allRows.AddRange(VariableRows(result));
+        RowCount = _allRows.Count;
+        foreach (var filter in ColumnFilters)
         {
-            _allUnused.Add(new UnusedRow("bad", "Setting", setting.Key, string.Join(", ", setting.SetBy), setting.Reason, IsDead: true));
+            filter.Load(_allRows);
         }
 
-        foreach (var value in result.DeadHelmValues)
-        {
-            _allUnused.Add(new UnusedRow("helm", "Helm value", value.Path, value.File, "No template in the chart reads it", IsDead: true) { CanShow = false });
-        }
-
-        foreach (var variable in result.UnusedVariables)
-        {
-            _allUnused.Add(new UnusedRow(
-                variable.Tool.StartsWith("GitHub", StringComparison.Ordinal) ? "github" : "octopus",
-                variable.Tool,
-                variable.Name,
-                variable.Detail,
-                variable.Tool.StartsWith("GitHub", StringComparison.Ordinal) ? "No setting in this trace or workflow uses it" : "No setting in this trace uses it",
-                IsDead: true) { CanShow = false });
-        }
-
-        foreach (var variable in result.WorkflowVariables)
-        {
-            _allUnused.Add(new UnusedRow("github", "GitHub Actions", variable.Name, variable.Detail, $"Used by {variable.UsedBy}, not by an app setting")
-            {
-                CanShow = false,
-                IsWorkflowOnly = true,
-            });
-        }
-
-        foreach (var value in result.Unused.NeverWinning)
-        {
-            _allUnused.Add(new UnusedRow(
-                "dotnet",
-                "Overridden",
-                value.Key,
-                value.Step.Source + (value.Step.Location is null ? string.Empty : $" ({value.Step.Location})"),
-                (value.SameValueAsWinner ? "Same value as " : "Always overridden by ") + value.WonBy.Source));
-        }
-
-        DeadCount = _allUnused.Count(u => u.IsDead);
-        NeverWinsCount = _allUnused.Count(u => u.IsNeverWins);
-        WorkflowOnlyCount = _allUnused.Count(u => u.IsWorkflowOnly);
-        UnusedCount = DeadCount + NeverWinsCount;
         DeadScanText = result.CodeFilesScanned switch
         {
             null => "No app code in this trace, so settings were not checked against code.",
@@ -984,7 +1003,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             var n => $"Read {n} C# {(n == 1 ? "file" : "files")} for the keys the app reads."
                 + (result.DynamicReads.Count > 0 ? $" {result.DynamicReads.Count} {(result.DynamicReads.Count == 1 ? "read builds its key" : "reads build their key")} at run time, so check before deleting." : string.Empty),
         };
-        ApplyUnusedFilter();
 
         Problems.Clear();
         foreach (var source in result.Sources.Where(s => s.Problem is not null))
@@ -995,6 +1013,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         if (result.DynamicReads.Count > 0)
         {
             Problems.Add(new ProblemRow("info", $"Code reads configuration with a key built at run time in {string.Join(", ", result.DynamicReads.Take(5))}{(result.DynamicReads.Count > 5 ? $" and {result.DynamicReads.Count - 5} more" : string.Empty)}. A setting marked dead may still be read there."));
+        }
+
+        if (DeadScanText is not null)
+        {
+            Problems.Add(new ProblemRow("info", DeadScanText));
         }
 
         foreach (var note in notes.Concat(result.Notes))
@@ -1063,46 +1086,98 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _lastResult = null;
         _allRows = [];
         Rows.Clear();
-        Unused.Clear();
-        _allUnused.Clear();
         Problems.Clear();
         SecretRows.Clear();
-        TotalCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = UnusedCount = ProblemCount = DeadCount = NeverWinsCount = WorkflowOnlyCount = 0;
+        TotalCount = RowCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = ProblemCount = DeadCount = WorkflowOnlyCount = 0;
         DeadScanText = null;
         SelectedRow = null;
         HasResult = false;
         ShownText = null;
+        OnPropertyChanged(nameof(ShowNoMatches));
     }
 
-    private void ApplyUnusedFilter()
+    // GitHub and Octopus variables no setting picks up, and Helm values no template reads, as rows of their own so the
+    // one table holds everything: workflow-only variables tagged "workflow", the rest dead.
+    private static IEnumerable<SettingRow> VariableRows(TraceResult result)
     {
-        Unused.Clear();
-        foreach (var row in _allUnused.Where(u => !OnlyDead || u.IsDead))
+        foreach (var variable in result.WorkflowVariables)
         {
-            Unused.Add(row);
+            yield return SettingRow.ForVariable(
+                LayerKind.GitHubActions,
+                variable.IsSecret ? "GitHub Actions secret" : "GitHub Actions variable",
+                variable.Name,
+                variable.Value,
+                variable.IsSecret,
+                "GitHub Actions " + variable.Detail,
+                variable.UsedBy,
+                workflowUse: variable.UsedBy);
+        }
+
+        foreach (var variable in result.UnusedVariables)
+        {
+            var github = variable.Tool.StartsWith("GitHub", StringComparison.Ordinal);
+            yield return SettingRow.ForVariable(
+                github ? LayerKind.GitHubActions : LayerKind.OctopusDeploy,
+                $"{variable.Tool} {(variable.IsSecret ? (github ? "secret" : "sensitive variable") : "variable")}",
+                variable.Name,
+                variable.Value,
+                variable.IsSecret,
+                $"{variable.Tool} {variable.Detail}",
+                deadReason: github ? "No setting in this trace or workflow uses it" : "No setting in this trace uses it");
+        }
+
+        foreach (var value in result.DeadHelmValues)
+        {
+            yield return SettingRow.ForVariable(LayerKind.Helm, "Helm value", value.Path, null, false, value.File, deadReason: "No template in the chart reads it");
         }
     }
+
+    private bool PassesTile(SettingRow row) => ActiveTile switch
+    {
+        TileFilter.Overridden => row.IsOverridden,
+        TileFilter.Upstream => row.OriginSource.Length > 0,
+        TileFilter.Protected => row.Rating == SecretRating.Protected,
+        TileFilter.Check => row.Rating == SecretRating.Check,
+        TileFilter.Exposed => row.Rating == SecretRating.Exposed,
+        TileFilter.Dead => row.IsDead,
+        TileFilter.Workflow => row.IsWorkflowOnly,
+        _ => true,
+    };
 
     private void ApplyFilter()
     {
-        var kind = SelectedLayerFilter?.Kind;
-        var selected = SelectedRow;
-        Rows.Clear();
-        foreach (var row in _allRows)
+        if (_clearing)
         {
-            if (row.Matches(FilterText)
-                && (!OnlyOverridden || row.IsOverridden)
-                && (!OnlySecrets || row.IsSensitive)
-                && (!OnlyDeadSettings || row.IsDead)
-                && (kind is null || row.AllKinds.Contains(kind.Value)))
+            return;
+        }
+
+        var selected = SelectedRow;
+        IEnumerable<SettingRow> shown = _allRows.Where(r => r.Matches(FilterText) && PassesTile(r) && ColumnFilters.All(c => c.Matches(r)));
+        if (SortColumn is { } column)
+        {
+            Func<SettingRow, string> text = column switch
             {
-                Rows.Add(row);
-            }
+                TableColumn.Value => r => r.Value,
+                TableColumn.ComesFrom => r => r.ComesFrom,
+                TableColumn.Layers => r => string.Join(" ", r.Kinds.Select(k => k.Label)),
+                _ => r => r.Key,
+            };
+            shown = SortDescending
+                ? shown.OrderByDescending(text, StringComparer.OrdinalIgnoreCase)
+                : shown.OrderBy(text, StringComparer.OrdinalIgnoreCase);
+        }
+
+        Rows.Clear();
+        foreach (var row in shown)
+        {
+            Rows.Add(row);
         }
 
         ShownText = Rows.Count == _allRows.Count
-            ? string.Create(CultureInfo.CurrentCulture, $"{Rows.Count} settings")
-            : string.Create(CultureInfo.CurrentCulture, $"{Rows.Count} of {_allRows.Count} settings");
+            ? string.Create(CultureInfo.CurrentCulture, $"{Rows.Count} rows")
+            : string.Create(CultureInfo.CurrentCulture, $"{Rows.Count} of {_allRows.Count} rows");
+        OnPropertyChanged(nameof(IsFiltered));
+        OnPropertyChanged(nameof(ShowNoMatches));
         if (selected is not null && Rows.Contains(selected))
         {
             SelectedRow = selected;
@@ -1300,4 +1375,32 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             _http.Dispose();
         }
     }
+}
+
+/// <summary>The stat tiles, each a filter on the table.</summary>
+public enum TileFilter
+{
+    /// <summary>Every row.</summary>
+    All,
+
+    /// <summary>Keys set by more than one .NET layer.</summary>
+    Overridden,
+
+    /// <summary>Values that come from further upstream than the app, such as Helm or Octopus.</summary>
+    Upstream,
+
+    /// <summary>Secrets kept in a secret store.</summary>
+    Protected,
+
+    /// <summary>Secrets to check.</summary>
+    Check,
+
+    /// <summary>Secrets in plain configuration.</summary>
+    Exposed,
+
+    /// <summary>Settings and variables nothing reads.</summary>
+    Dead,
+
+    /// <summary>GitHub variables only a workflow uses.</summary>
+    Workflow,
 }
