@@ -28,13 +28,11 @@ internal sealed class AwsOptionsValidator<TOptions>(string sectionPath, IConfigu
             failures.Add(keys);
         }
 
-        foreach (var key in CredentialSettings.Select(setting => CredentialGuard.Key(sectionPath, setting)))
-        {
-            if (CredentialGuard.FindAppSettingsFile(configuration, key) is { } file)
-            {
-                failures.Add(CredentialGuard.InAppSettings(key, file));
-            }
-        }
+        failures.AddRange(CredentialSettings
+            .Select(setting => CredentialGuard.Key(sectionPath, setting))
+            .Select(key => (Key: key, File: CredentialGuard.FindAppSettingsFile(configuration, key)))
+            .Where(found => found.File is not null)
+            .Select(found => CredentialGuard.InAppSettings(found.Key, found.File!)));
 
         if (AwsClients.CheckServiceUrl(options.ServiceUrl, CredentialGuard.Key(sectionPath, nameof(options.ServiceUrl))) is { } url)
         {
