@@ -96,6 +96,8 @@ jobs:
           echo "$ids" | grep -qx ConfigFerret.GitHub
           echo "$ids" | grep -qx ConfigFerret.Octopus
           echo "$ids" | grep -qx ConfigFerret.GoogleCloud
+          echo "$ids" | grep -qx ConfigFerret.AzureDevOps
+          echo "$ids" | grep -qx ConfigFerret.GitLab
           for id in $ids; do
             pkg="artifacts/$id.$VERSION.nupkg"
             unzip -l "$pkg" > contents.txt

@@ -45,6 +45,8 @@ package stays offline and never handles credentials unless you add one:
 | `ConfigFerret.Azure` | Azure Key Vault secrets (names and properties, values only when asked) and Azure App Configuration key-values, Key Vault references and feature flags, read with the Azure SDK ([readme](src/ConfigFerret.Azure/README.md)) |
 | `ConfigFerret.Aws` | AWS Secrets Manager secrets (and JSON secret properties) and Systems Manager Parameter Store parameters, read with the AWS SDK ([readme](src/ConfigFerret.Aws/README.md)) |
 | `ConfigFerret.GoogleCloud` | Google Cloud Secret Manager secrets (names, labels and version states; values only when asked), read with Application Default Credentials ([readme](src/ConfigFerret.GoogleCloud/README.md)) |
+| `ConfigFerret.AzureDevOps` | Azure Pipelines variable groups (secret names, Key Vault-linked groups) and pipeline YAML variables, read with a personal access token ([readme](src/ConfigFerret.AzureDevOps/README.md)) |
+| `ConfigFerret.GitLab` | GitLab project, group and instance CI/CD variables with the environment scope that applies, and `.gitlab-ci.yml` variables ([readme](src/ConfigFerret.GitLab/README.md)) |
 
 To trace from the command line without writing code, install the `configferret` command instead:
 
@@ -273,6 +275,37 @@ links. Only names and metadata are read unless you turn on `IncludeValues`, and 
 configuration, use `builder.Services.AddConfigFerretGcpSecretManager(builder.Configuration.GetSection("ConfigFerret:GcpSecretManager"))`
 and `await tracer.WithGcpSecretManagerAsync(app.Services)`.
 
+### With Azure DevOps or GitLab CI/CD variables
+
+```csharp
+using ConfigFerret.AzureDevOps;  // dotnet package add ConfigFerret.AzureDevOps
+using ConfigFerret.GitLab;       // dotnet package add ConfigFerret.GitLab
+
+var groups = await AzureDevOpsVariableGroups.LoadAsync(new AzureDevOpsOptions
+{
+    OrganizationUrl = new Uri("https://dev.azure.com/contoso/"), Project = "api",
+    GroupNames = { "api-production" },
+    PersonalAccessToken = Environment.GetEnvironmentVariable("AZURE_DEVOPS_EXT_PAT"),
+});
+var gitlab = await GitLabVariables.LoadAsync(new GitLabOptions
+{
+    Project = "contoso/platform/api",
+    Token = Environment.GetEnvironmentVariable("GITLAB_TOKEN"),
+});
+
+var report = ConfigTracer.For(builder.Configuration)
+    .WithAzureDevOps(groups, o => o.AddPipeline("azure-pipelines.yml"))
+    .WithGitLab(gitlab, o => { o.Environment = "production"; o.AddCiFile(".gitlab-ci.yml"); })
+    .Trace();
+```
+
+Azure DevOps variables match by their exact name or the name scripts see (`Db.Timeout` as `DB_TIMEOUT`), and by
+`NAME: $(Var)` lines in pipeline YAML. GitLab variables match by key and by `NAME: $VAR` or `export NAME=$VAR` lines,
+and each step uses the environment scope that fits `Environment`, ordered instance, groups, project. Both register with
+`AddConfigFerretAzureDevOps(...)` or `AddConfigFerretGitLab(...)` and load with `WithAzureDevOpsAsync` or
+`WithGitLabAsync`, with the same startup checks as above. Secret, masked and hidden variables appear by name and are
+redacted.
+
 ### Inside a running pod
 
 ```csharp
@@ -416,6 +449,8 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | Live cluster (`ConfigFerret.KubernetesCluster`) | The same Kubernetes layers, read from the API server for one workload instead of from manifest files |
 | AWS (`ConfigFerret.Aws`) | The Secrets Manager secret or JSON property, or the Parameter Store parameter, from an External Secrets reference, an explicit link, the same name or the AWS configuration providers' key mapping |
 | Google Cloud Secret Manager (`ConfigFerret.GoogleCloud`) | The secret, from an External Secrets Operator or CSI reference, an explicit link or the same name, with its version state |
+| Azure DevOps (`ConfigFerret.AzureDevOps`) | The variable group variable or pipeline YAML variable, from an `env:` line, an explicit link, the same name or the name scripts see, in the pipeline's group order |
+| GitLab CI/CD (`ConfigFerret.GitLab`) | The project, group or instance variable whose environment scope applies, or the `.gitlab-ci.yml` variable, in GitLab's precedence |
 
 Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and `List` documents.
 
