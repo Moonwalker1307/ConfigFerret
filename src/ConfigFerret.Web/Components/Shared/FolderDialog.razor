@@ -1,0 +1,72 @@
+<div class="overlay">
+    <div class="scrim" @onclick="() => OnClose(null)"></div>
+    <div class="dialog folder-dialog" role="dialog" aria-modal="true" aria-labelledby="folder-title">
+        <div class="dialog-head">
+            <div>
+                <h2 class="h1 dialog-title" id="folder-title">@(Title ?? "Open a folder")</h2>
+                <p class="muted">Folders under <span class="mono">@Browser.Root</span> on the server.</p>
+            </div>
+            <button class="ghost" aria-label="Close" @onclick="() => OnClose(null)"><Icon Name="IconClose" Size="14" /></button>
+        </div>
+        <div class="crumbs">
+            <button class="link" @onclick='() => _current = string.Empty'>@(System.IO.Path.GetFileName(Browser.Root) is { Length: > 0 } name ? name : Browser.Root)</button>
+            @{ var path = string.Empty; }
+            @foreach (var part in _current.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                path = path.Length == 0 ? part : path + "/" + part;
+                var target = path;
+                <span class="muted">/</span>
+                <button class="link" @onclick="() => _current = target">@part</button>
+            }
+        </div>
+        <div class="card folder-list">
+            @{ var children = Browser.List(_current); }
+            @if (children.Count == 0)
+            {
+                <div class="empty"><span class="muted">No folders here.</span></div>
+            }
+            else
+            {
+                <ul class="rows">
+                    @foreach (var child in children)
+                    {
+                        var target = _current.Length == 0 ? child : _current + "/" + child;
+                        <li><button class="folder" @onclick="() => _current = target"><Icon Name="IconFolder" Size="14" Class="accent" /> @child</button></li>
+                    }
+                </ul>
+            }
+        </div>
+        <div class="dialog-actions">
+            <button class="subtle" @onclick="() => OnClose(null)">Cancel</button>
+            <button class="accent-button" @onclick="Open">Open @(_current.Length == 0 ? "this folder" : _current)</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _current = string.Empty;
+
+    /// <summary>The dialog's title.</summary>
+    [Parameter]
+    public string? Title { get; set; }
+
+    /// <summary>Lists the folders that can be opened.</summary>
+    [Parameter, EditorRequired]
+    public required FolderBrowser Browser { get; set; }
+
+    /// <summary>Called with the full path of the chosen folder, or null for cancel.</summary>
+    [Parameter, EditorRequired]
+    public required Action<string?> OnClose { get; set; }
+
+    private void Open()
+    {
+        if (Browser.Resolve(_current) is { } folder)
+        {
+            OnClose(folder);
+        }
+        else
+        {
+            _current = string.Empty;
+        }
+    }
+}

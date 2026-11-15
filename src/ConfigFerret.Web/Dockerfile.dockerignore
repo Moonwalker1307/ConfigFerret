@@ -1,0 +1,10 @@
+# The build context is the repository root. Only what the image build reads is sent.
+**
+!Directory.Build.props
+!README.md
+!LICENSE
+!assets/**
+!src/**
+**/bin/
+**/obj/
+**/*.user

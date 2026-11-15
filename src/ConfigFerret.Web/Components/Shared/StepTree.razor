@@ -1,0 +1,37 @@
+<ul class="tree">
+    @foreach (var node in Nodes)
+    {
+        <li>
+            <div class="node @(node.IsEffective ? "effective" : null)">
+                <div class="node-head">
+                    <span class="chip @node.KindCss">@node.KindLabel</span>
+                    <span class="state @(node.IsEffective ? "effective" : null)">@node.State</span>
+                    @if (node.IsInferred)
+                    {
+                        <span class="muted small" title="Linked by matching names; check it">guessed</span>
+                    }
+                </div>
+                <div class="bold wrap">@node.Source</div>
+                @if (node.HasLocation)
+                {
+                    <div class="muted small wrap">@node.Location</div>
+                }
+                <div class="mono wrap">@node.Value</div>
+                @if (node.HasNote)
+                {
+                    <div class="muted small wrap">@node.Note</div>
+                }
+            </div>
+            @if (node.Children.Count > 0)
+            {
+                <StepTree Nodes="node.Children" />
+            }
+        </li>
+    }
+</ul>
+
+@code {
+    /// <summary>The layers to show.</summary>
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<StepNode> Nodes { get; set; }
+}

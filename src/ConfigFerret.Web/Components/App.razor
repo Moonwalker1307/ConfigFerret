@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <base href="/" />
+    <title>ConfigFerret</title>
+    <link rel="icon" type="image/png" href="brand/icon.png" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <HeadOutlet @rendermode="RenderMode" />
+</head>
+<body>
+    <Routes @rendermode="RenderMode" />
+    <script src="@Assets["app.js"]"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>
+
+@code {
+    // Each tab gets its own view model on the server. No prerendering: it would build a second, throwaway view model
+    // for the first request and sign in to GitHub twice.
+    private static readonly IComponentRenderMode RenderMode = new InteractiveServerRenderMode(prerender: false);
+}

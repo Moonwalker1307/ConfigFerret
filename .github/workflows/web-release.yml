@@ -1,0 +1,190 @@
+name: Web release
+
+# Releases the web app as a container image on GitHub (ghcr.io) only, never on nuget.org. Tags are `web-vX.Y.Z`, which
+# do not match the `v*` filter that ci.yml uses to publish the NuGet packages, or the desktop app's `desktop-v*`.
+on:
+  push:
+    tags: ['web-v*']
+  pull_request:
+    paths:
+      - 'src/ConfigFerret.Web/**'
+      - 'src/ConfigFerret.Desktop/**'
+      - 'src/ConfigFerret/**'
+      - 'src/ConfigFerret.GitHub/**'
+      - 'src/ConfigFerret.Octopus/**'
+      - 'src/Shared/**'
+      - 'Directory.Build.props'
+      - '.github/workflows/web-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+concurrency:
+  group: web-release-${{ github.ref }}
+  # A tag must never release twice, and a release must not be cancelled half way. Only pull request runs are replaced.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  version:
+    name: Pick the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.version.outputs.image }}
+    steps:
+      - name: Pick the version
+        id: version
+        shell: bash
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/web-v* ]]; then
+            version="${GITHUB_REF_NAME#web-v}"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' is not web-vX.Y.Z or web-vX.Y.Z-pre."
+              exit 1
+            fi
+          else
+            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Image names must be lower case.
+          echo "image=ghcr.io/${OWNER,,}/configferret-web" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Build and try the image
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+
+      # The app is not packable. This catches a change that would make `dotnet pack` produce a package for nuget.org.
+      - name: Check the app produces no NuGet package
+        shell: bash
+        run: |
+          dotnet pack src/ConfigFerret.Web -o packcheck -p:TargetFrameworks=net10.0
+          if [[ -d packcheck ]] && [[ -n "$(find packcheck -name '*.nupkg' -print -quit)" ]]; then
+            echo "::error::ConfigFerret.Web produced a .nupkg. It must keep IsPackable=false."
+            find packcheck -name '*.nupkg'
+            exit 1
+          fi
+
+      - name: Build the image
+        shell: bash
+        run: docker build -f src/ConfigFerret.Web/Dockerfile --build-arg VERSION="$VERSION" -t configferret-web:test .
+
+      - name: Check the tools are in the image
+        shell: bash
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/helm configferret-web:test version
+          docker run --rm --entrypoint /usr/local/bin/kubectl configferret-web:test version --client
+
+      - name: Start the image and open the page
+        shell: bash
+        run: |
+          mkdir -p repos
+          cp -r tests/ConfigFerret.Desktop.Tests/TestData/orders-repo repos/
+          chmod -R a+rX repos
+          docker run -d --name web -p 127.0.0.1:8080:8080 -v "$PWD/repos:/repos:ro" configferret-web:test
+          for _ in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' web)
+            [[ "$status" == healthy ]] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' web | grep -qx healthy
+          curl -fsS http://127.0.0.1:8080/healthz | grep -qx ok
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<title>ConfigFerret</title>'
+          curl -fsS -o /dev/null http://127.0.0.1:8080/_framework/blazor.web.js
+          curl -fsS -o /dev/null http://127.0.0.1:8080/brand/logo.png
+          # The app runs as the image's non-root user.
+          [[ "$(docker inspect -f '{{.Config.User}}' web)" != "" ]]
+
+      - name: Show the log
+        if: always()
+        shell: bash
+        run: docker logs web || true
+
+  release:
+    name: Push the image and create the GitHub release
+    needs: [version, test]
+    if: startsWith(github.ref, 'refs/tags/web-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      IMAGE: ${{ needs.version.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sign in to ghcr.io
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      # The Dockerfile cross-compiles in its build stages and only copies files into the final one, so both platforms
+      # build on this runner without emulation.
+      - name: Build and push linux/amd64 and linux/arm64
+        shell: bash
+        run: |
+          tags=(-t "$IMAGE:$VERSION")
+          if [[ "$VERSION" != *-* ]]; then
+            tags+=(-t "$IMAGE:latest")
+          fi
+          docker buildx create --name configferret --driver docker-container --use
+          docker buildx build -f src/ConfigFerret.Web/Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$VERSION" \
+            "${tags[@]}" \
+            --push .
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<NOTES
+          The ConfigFerret web app as a container image for linux/amd64 and linux/arm64:
+
+          \`\`\`
+          docker run --rm -p 127.0.0.1:8080:8080 $IMAGE:$VERSION
+          \`\`\`
+
+          Then open http://localhost:8080. See [the web app's readme](https://github.com/$GH_REPO/blob/$TAG/src/ConfigFerret.Web/README.md) for credentials, mounting folders and keeping settings.
+
+          The ConfigFerret libraries and the \`configferret\` tool are released separately on NuGet, and the desktop app under \`desktop-v*\` tags.
+          NOTES
+          args=()
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          # --latest=false keeps the "latest release" badge on the library releases.
+          gh release create "$TAG" \
+            --title "ConfigFerret Web $VERSION" \
+            --notes-file notes.md \
+            --verify-tag \
+            --latest=false \
+            "${args[@]}"

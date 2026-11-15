@@ -12,6 +12,7 @@
     <Project Path="src/ConfigFerret.GitLab/ConfigFerret.GitLab.csproj" />
     <Project Path="src/ConfigFerret.Tool/ConfigFerret.Tool.csproj" />
     <Project Path="src/ConfigFerret.Desktop/ConfigFerret.Desktop.csproj" />
+    <Project Path="src/ConfigFerret.Web/ConfigFerret.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ConfigFerret.Tests/ConfigFerret.Tests.csproj" />
@@ -26,6 +27,7 @@
     <Project Path="tests/ConfigFerret.GitLab.Tests/ConfigFerret.GitLab.Tests.csproj" />
     <Project Path="tests/ConfigFerret.Tool.Tests/ConfigFerret.Tool.Tests.csproj" />
     <Project Path="tests/ConfigFerret.Desktop.Tests/ConfigFerret.Desktop.Tests.csproj" />
+    <Project Path="tests/ConfigFerret.Web.Tests/ConfigFerret.Web.Tests.csproj" />
   </Folder>
   <Folder Name="/fuzz/">
     <Project Path="fuzz/ConfigFerret.Fuzz/ConfigFerret.Fuzz.csproj" />

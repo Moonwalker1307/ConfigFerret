@@ -18,6 +18,12 @@ updates:
       - dependency-name: 'Microsoft.Extensions.*'
         update-types: ['version-update:semver-major']
 
+  # The web app's base images (src/ConfigFerret.Web/Dockerfile).
+  - package-ecosystem: docker
+    directory: /src/ConfigFerret.Web
+    schedule:
+      interval: weekly
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

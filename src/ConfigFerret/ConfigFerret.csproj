@@ -41,6 +41,7 @@
     <InternalsVisibleTo Include="ConfigFerret.Tests" />
     <InternalsVisibleTo Include="ConfigFerret.Fuzz" />
     <InternalsVisibleTo Include="ConfigFerret.Desktop" />
+    <InternalsVisibleTo Include="ConfigFerret.Web" />
     <InternalsVisibleTo Include="ConfigFerret.Tool" />
   </ItemGroup>
 
