@@ -306,6 +306,38 @@ public class GitHubVariablesTests
     }
 
     [Fact]
+    public async Task Reads_a_user_owned_repository_where_github_rejects_organization_entries()
+    {
+        const string validation = """{"message":"Validation Failed","errors":[{"resource":"Repository","code":"custom","message":"Repository must belong to an organization"}]}""";
+        var handler = new FakeHttpHandler()
+            .Respond($"{Repo}/actions/organization-variables?per_page=30&page=1", validation, HttpStatusCode.UnprocessableEntity)
+            .Respond($"{Repo}/actions/organization-secrets?per_page=100&page=1", validation, HttpStatusCode.UnprocessableEntity)
+            .Respond($"{Repo}/actions/variables?per_page=30&page=1", Variables(("A", "1")))
+            .Respond($"{Repo}/actions/secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""");
+        using var client = handler.Client();
+
+        var github = await GitHubVariables.LoadAsync(Options(environment: null), client, TestContext.Current.CancellationToken);
+
+        Assert.Equal("1", Assert.Single(github.Entries).Value);
+        Assert.Empty(github.Warnings);
+    }
+
+    [Fact]
+    public async Task Fails_on_a_422_for_repository_entries()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond($"{Repo}/actions/variables?per_page=30&page=1", Variables())
+            .Respond($"{Repo}/actions/secrets?per_page=100&page=1", "{}", HttpStatusCode.UnprocessableEntity);
+        using var client = handler.Client();
+        var options = Options(environment: null);
+        options.IncludeOrganization = false;
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => GitHubVariables.LoadAsync(options, client, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, ex.StatusCode);
+    }
+
+    [Fact]
     public async Task Fails_on_other_errors_from_entries_it_may_skip()
     {
         var handler = new FakeHttpHandler()
