@@ -228,47 +228,88 @@
                         }
                     </div>
 
-                    @* Stat tiles *@
+                    @* Stat tiles: each one filters the table. Picking the active tile again shows every row. *@
                     @if (Vm.HasResult)
                     {
-                        <div class="tiles">
-                            <div class="tile"><div class="number">@N(Vm.TotalCount)</div><div class="muted small">settings</div></div>
-                            <div class="tile"><div class="number">@N(Vm.OverriddenCount)</div><div class="muted small">overridden</div></div>
-                            <div class="tile"><div class="number">@N(Vm.UpstreamCount)</div><div class="muted small">from upstream</div></div>
-                            <div class="tile good"><div class="number">@N(Vm.ProtectedCount)</div><div class="muted small">secrets protected</div></div>
-                            <div class="tile check"><div class="number">@N(Vm.CheckCount)</div><div class="muted small">secrets to check</div></div>
-                            <div class="tile bad"><div class="number">@N(Vm.ExposedCount)</div><div class="muted small">secrets exposed</div></div>
-                            <div class="tile bad" title="Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses">
-                                <div class="number">@N(Vm.DeadCount)</div><div class="muted small">dead variables</div>
+                        <div class="tiles" role="toolbar" aria-label="Filter by">
+                            @foreach (var tile in Tiles)
+                            {
+                                @if (tile.Visible(Vm))
+                                {
+                                    <button class="tile @tile.Css @(Vm.ActiveTile == tile.Filter ? "selected" : null)" title="@tile.Tip"
+                                            aria-pressed="@(Vm.ActiveTile == tile.Filter ? "true" : "false")" @onclick="() => Vm.SelectTileCommand.Execute(tile.Filter.ToString())">
+                                        <div class="number">@N(tile.Count(Vm))</div><div class="muted small">@tile.Label</div>
+                                    </button>
+                                }
+                            }
+                        </div>
+
+                        @* Search, what the repository holds, and the trace's notes *@
+                        <div class="toolbar">
+                            <label class="search wide">
+                                <Icon Name="IconSearch" Size="14" Class="muted" />
+                                <input type="search" placeholder="Search keys, values and sources" aria-label="Search keys, values and sources" value="@Vm.FilterText"
+                                       @oninput="e => Vm.FilterText = (string?)e.Value" />
+                            </label>
+                            <div class="menu sources">
+                                <button class="subtle" title="Turn the sources found in the repository on and off" aria-haspopup="true"
+                                        aria-expanded="@(_sourcesOpen ? "true" : "false")" @onclick="() => _sourcesOpen = !_sourcesOpen">
+                                    <Icon Name="IconLayers" Size="13" Class="muted" /> @Vm.SourcesText <Icon Name="IconArrowDown" Size="10" Class="muted" />
+                                </button>
+                                @if (_sourcesOpen)
+                                {
+                                    <div class="popover-scrim" @onclick="() => _sourcesOpen = false"></div>
+                                    <div class="popover sources-popover" role="dialog" aria-label="Sources">
+                                        <div class="caption">SOURCES IN THE REPOSITORY</div>
+                                        @foreach (var source in Vm.Discoveries)
+                                        {
+                                            <label class="source-row @(source.CanToggle ? null : "fixed")" title="@source.Detail">
+                                                <input type="checkbox" checked="@source.IsOn" disabled="@(!source.CanToggle)" @onchange="e => source.IsOn = e.Value is true" />
+                                                <Icon Name="@source.Icon" Size="13" Class="@("kind-" + source.Css)" />
+                                                <span class="source-text">
+                                                    <span class="bold">@source.Title</span>
+                                                    <span class="muted small ellipsis">@source.Detail</span>
+                                                </span>
+                                                <span class="muted small">@source.State</span>
+                                            </label>
+                                        }
+                                        <p class="muted small">Turning a source off traces again without it. App settings are always on.</p>
+                                    </div>
+                                }
+                            </div>
+                            <div class="toolbar-end">
+                                <span class="muted">@Vm.ShownText</span>
+                                @if (Vm.IsFiltered)
+                                {
+                                    <button class="link" title="Clear the search, the tile and every column filter" @onclick="() => Vm.ClearFiltersCommand.Execute(null)">Show all</button>
+                                }
+                                @if (Vm.HasProblems)
+                                {
+                                    <div class="menu">
+                                        <button class="subtle" aria-expanded="@(_notesOpen ? "true" : "false")" @onclick="() => _notesOpen = !_notesOpen">
+                                            <Icon Name="IconInfo" Size="12" Class="muted" /> @Vm.ProblemText
+                                        </button>
+                                        @if (_notesOpen)
+                                        {
+                                            <div class="menu-items notes-popover">
+                                                <ul class="problems">
+                                                    @foreach (var problem in Vm.Problems)
+                                                    {
+                                                        <li class="problem @problem.Severity">
+                                                            <Icon Name="@(problem.Severity is "error" or "warning" ? "IconAlert" : "IconInfo")" Size="14" Class="@problem.Severity" />
+                                                            <span>@problem.Text</span>
+                                                        </li>
+                                                    }
+                                                </ul>
+                                            </div>
+                                        }
+                                    </div>
+                                }
                             </div>
                         </div>
+
+                        <ConfigurationTable Vm="Vm" />
                     }
-
-                    @* Tabs *@
-                    <nav class="tabs" role="tablist">
-                        <button role="tab" class="tab @Selected(0)" aria-selected="@(Vm.SelectedTab == 0 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 0">Overview</button>
-                        <button role="tab" class="tab @Selected(1)" aria-selected="@(Vm.SelectedTab == 1 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 1">Configuration <span class="count muted">@Vm.TotalCount</span></button>
-                        <button role="tab" class="tab @Selected(2)" aria-selected="@(Vm.SelectedTab == 2 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 2">Secrets <span class="count bad-text">@Vm.ExposedCount</span></button>
-                        <button role="tab" class="tab @Selected(3)" aria-selected="@(Vm.SelectedTab == 3 ? "true" : "false")" @onclick="() => Vm.SelectedTab = 3">Unused <span class="count muted">@Vm.UnusedCount</span></button>
-                    </nav>
-
-                    <div class="tab-body">
-                        @switch (Vm.SelectedTab)
-                        {
-                            case 1:
-                                <ConfigurationTab Vm="Vm" />
-                                break;
-                            case 2:
-                                <SecretsTab Vm="Vm" />
-                                break;
-                            case 3:
-                                <UnusedTab Vm="Vm" />
-                                break;
-                            default:
-                                <OverviewTab Vm="Vm" />
-                                break;
-                        }
-                    </div>
                 </section>
             }
 

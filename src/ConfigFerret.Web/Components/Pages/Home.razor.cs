@@ -19,6 +19,21 @@ public sealed partial class Home
     private DotNetObjectReference<Home>? _self;
     private IJSObjectReference? _shortcuts;
     private bool _exportOpen;
+    private bool _notesOpen;
+    private bool _sourcesOpen;
+
+    private static readonly Tile[] Tiles =
+    [
+        new(TileFilter.All, "all variables", null, "Show every row: settings, plus GitHub and Octopus variables and Helm values no setting picks up", vm => vm.RowCount),
+        new(TileFilter.Overridden, "overridden", null, "Keys set by more than one layer", vm => vm.OverriddenCount),
+        new(TileFilter.Upstream, "from upstream", null, "Values that come from further upstream than the app, such as Helm, Kustomize, GitHub or Octopus", vm => vm.UpstreamCount),
+        new(TileFilter.Protected, "secrets protected", "good", "Secrets kept in a secret store", vm => vm.ProtectedCount),
+        new(TileFilter.Check, "secrets to check", "check", "Secrets that may or may not be safe: check them", vm => vm.CheckCount),
+        new(TileFilter.Exposed, "secrets exposed", "bad", "Secrets in plain configuration", vm => vm.ExposedCount),
+        new(TileFilter.Dead, "dead variables", "bad", "Settings no code reads, Helm values no template reads, and GitHub or Octopus variables nothing uses", vm => vm.DeadCount),
+        new(TileFilter.Workflow, "used by workflows", null, "GitHub variables and secrets a workflow uses directly, while no app setting does", vm => vm.WorkflowOnlyCount, vm => vm.HasWorkflowOnly),
+        new(TileFilter.Duplicate, "duplicated names", "check", "Names set in more than one place, such as a secret set for the repository and for an environment, or Db:Host and DB__HOST", vm => vm.DuplicateCount, vm => vm.HasDuplicates),
+    ];
 
     /// <summary>This tab's view model.</summary>
     [Inject]
@@ -44,8 +59,12 @@ public sealed partial class Home
         _collections.AddRange(
         [
             Vm.Repositories, Vm.Discoveries, Vm.Apps, Vm.Environments, Vm.ValuesFiles, Vm.GitHubEnvironments, Vm.OctopusProjects,
-            Vm.OctopusEnvironments, Vm.Rows, Vm.SecretRows, Vm.Unused, Vm.Problems,
+            Vm.OctopusEnvironments, Vm.Rows, Vm.SecretRows, Vm.Problems, .. Vm.ColumnFilters.Select(c => c.Choices),
         ]);
+        foreach (var filter in Vm.ColumnFilters)
+        {
+            filter.PropertyChanged += OnViewModelChanged;
+        }
         foreach (var collection in _collections)
         {
             collection.CollectionChanged += OnCollectionChanged;
@@ -93,6 +112,8 @@ public sealed partial class Home
         }
 
         _exportOpen = false;
+        _notesOpen = false;
+        _sourcesOpen = false;
         StateHasChanged();
     }
 
@@ -126,8 +147,6 @@ public sealed partial class Home
         }
     }
 
-    private string? Selected(int tab) => Vm.SelectedTab == tab ? "selected" : null;
-
     private static string N(int value) => value.ToString("N0", CultureInfo.CurrentCulture);
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
@@ -143,6 +162,11 @@ public sealed partial class Home
     public async ValueTask DisposeAsync()
     {
         Vm.PropertyChanged -= OnViewModelChanged;
+        foreach (var filter in Vm.ColumnFilters)
+        {
+            filter.PropertyChanged -= OnViewModelChanged;
+        }
+
         Dialogs.Changed -= OnDialogsChanged;
         foreach (var collection in _collections)
         {
@@ -164,4 +188,11 @@ public sealed partial class Home
 
         _self?.Dispose();
     }
+}
+
+/// <summary>A stat tile and the filter it sets.</summary>
+internal sealed record Tile(TileFilter Filter, string Label, string? Css, string Tip, Func<MainWindowViewModel, int> Count, Func<MainWindowViewModel, bool>? Shown = null)
+{
+    /// <summary>True when the tile is shown.</summary>
+    public bool Visible(MainWindowViewModel vm) => Shown?.Invoke(vm) ?? true;
 }

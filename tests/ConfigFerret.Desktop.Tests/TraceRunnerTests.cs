@@ -210,8 +210,74 @@ public class TraceRunnerTests
         var unused = result.UnusedVariables.Select(v => v.Name).ToList();
         Assert.DoesNotContain("DB_HOST", unused);
         Assert.DoesNotContain("DB_PASSWORD", unused);
-        Assert.Contains("NODE_VERSION", unused);
+        // NODE_VERSION is not an app setting, but the workflow still uses it, so it is not dead.
+        Assert.DoesNotContain("NODE_VERSION", unused);
         Assert.DoesNotContain(result.Secrets, s => s.Key == "Db:Password" && s.Rating == SecretRating.Exposed);
+    }
+
+    [Fact]
+    public async Task Github_variables_a_workflow_uses_outside_app_settings_are_not_listed_as_unused()
+    {
+        using var repo = new TempFolder();
+        repo.Write("src/Web/appsettings.json", """{ "ConnectionStrings": { "Db": "" } }""");
+        repo.Write(".github/workflows/deploy.yml", """
+            jobs:
+              deploy:
+                environment: production
+                env:
+                  ConnectionStrings__Db: ${{ secrets.ELWIZ_DB_CONNECTION_STRING }}
+                steps:
+                  - if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+                    uses: azure/webapps-deploy@v3
+                    with:
+                      app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+                      publish-profile: ${{ secrets.AzureAppService_PublishProfile_B980 }}
+                  - run: ./notify.sh "${{ secrets['SLACK_WEBHOOK'] }}"
+                  # - run: echo ${{ secrets.OLD_DEPLOY_KEY }}
+            """);
+        var profile = new Profile { Name = "web", Mode = TraceMode.App };
+        profile.Sources.Add(new AppSettingsSource { Name = "app", Folder = repo.Full("src/Web"), UseUserSecrets = false });
+        var github = new GitHubSource { Name = "github", Repository = "contoso/web", Environment = "production", Workflows = [repo.Full(".github/workflows/deploy.yml")] };
+        profile.Sources.Add(github);
+        var store = new InMemoryCredentialStore();
+        store.Write(github.CredentialAccount, Token);
+        const string api = "/repos/contoso/web";
+        var handler = new FakeHttpHandler()
+            .Respond($"{api}/actions/organization-variables?per_page=30&page=1", """{"total_count":0,"variables":[]}""")
+            .Respond($"{api}/actions/organization-secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""")
+            .Respond($"{api}/actions/variables?per_page=30&page=1", """{"total_count":1,"variables":[{"name":"DEPLOY_ENABLED","value":"true"}]}""")
+            .Respond($"{api}/actions/secrets?per_page=100&page=1", """
+                {"total_count":3,"secrets":[
+                  {"name":"AZUREAPPSERVICE_PUBLISHPROFILE_B980"},
+                  {"name":"ELWIZ_DB_CONNECTION_STRING"},
+                  {"name":"OLD_DEPLOY_KEY"}]}
+                """)
+            .Respond($"{api}/environments/production/variables?per_page=30&page=1", """
+                {"total_count":2,"variables":[{"name":"AZURE_WEBAPP_NAME","value":"elwiz"},{"name":"UNUSED_NAME","value":"x"}]}
+                """)
+            .Respond($"{api}/environments/production/secrets?per_page=100&page=1", """
+                {"total_count":3,"secrets":[{"name":"ELWIZ_DB_CONNECTION_STRING"},{"name":"SLACK_WEBHOOK"},{"name":"AZURE_WEBAPP_NAME"}]}
+                """);
+
+        var result = await new TraceRunner(store, httpClientFactory: handler.Client).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.All(result.Sources, s => Assert.Null(s.Problem));
+        var unused = result.UnusedVariables.Select(v => (v.Name, v.Detail)).ToList();
+        Assert.DoesNotContain(unused, u => u.Name is "AZUREAPPSERVICE_PUBLISHPROFILE_B980" or "ELWIZ_DB_CONNECTION_STRING" or "DEPLOY_ENABLED" or "SLACK_WEBHOOK");
+        Assert.DoesNotContain(("AZURE_WEBAPP_NAME", "environment variable (production)"), unused);
+        // The workflow reads vars.AZURE_WEBAPP_NAME, not the secret of the same name, and the commented-out line is not a use.
+        Assert.Contains(("AZURE_WEBAPP_NAME", "environment secret (production)"), unused);
+        Assert.Contains(("OLD_DEPLOY_KEY", "repository secret (contoso/web)"), unused);
+        Assert.Contains(("UNUSED_NAME", "environment variable (production)"), unused);
+
+        // The ones only the workflow uses are still listed, with where the workflow uses them.
+        var workflow = result.WorkflowVariables.ToDictionary(v => (v.Name, v.Detail), v => v.UsedBy);
+        Assert.Equal("deploy.yml line 10", workflow[("AZURE_WEBAPP_NAME", "environment variable (production)")]);
+        Assert.Equal("deploy.yml line 11", workflow[("AZUREAPPSERVICE_PUBLISHPROFILE_B980", "repository secret (contoso/web)")]);
+        Assert.Equal("deploy.yml line 7", workflow[("DEPLOY_ENABLED", "repository variable (contoso/web)")]);
+        Assert.Equal("deploy.yml line 12", workflow[("SLACK_WEBHOOK", "environment secret (production)")]);
+        // ConnectionStrings__Db is an app setting, so the trace links the connection string secret and it is not a workflow-only row.
+        Assert.DoesNotContain(result.WorkflowVariables, v => v.Name == "ELWIZ_DB_CONNECTION_STRING" && v.Detail.StartsWith("environment", StringComparison.Ordinal));
     }
 
     [Fact]
