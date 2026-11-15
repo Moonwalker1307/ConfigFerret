@@ -54,6 +54,8 @@ internal static partial class Targets
         ["aws-secrets"] = new("AWS Secrets Manager API responses (split by %%) through the AWS SDK, then the resolver", AwsSecretsTarget),
         ["aws-parameters"] = new("AWS Parameter Store API responses (split by %%) through the AWS SDK, then the resolver", AwsParametersTarget),
         ["gcp-secrets"] = new("Google Cloud Secret Manager API responses (split by %%), then the Secret Manager resolver", GcpSecrets),
+        ["azure-devops"] = new("Azure DevOps variable group API responses (split by %%, with headers), then pipeline YAML and the resolver", AzureDevOpsApi),
+        ["gitlab"] = new("GitLab CI/CD variables API responses (split by %%, with headers), then CI YAML and the resolver", GitLabApi),
         ["unused"] = new("FindUnused and read recording over JSON, KEY=VALUE and Kubernetes layers (split by %%)", Unused),
     };
 

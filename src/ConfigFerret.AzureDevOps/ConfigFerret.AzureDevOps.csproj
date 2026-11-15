@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ConfigFerret.AzureDevOps</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>ConfigFerret.AzureDevOps</PackageId>
+    <Version>0.2.0</Version>
+    <Description>Azure DevOps source for ConfigFerret: links configuration values to the Azure Pipelines variable group variables (and secret names) and pipeline YAML variables that set them, read through the Azure DevOps REST API.</Description>
+    <PackageTags>configuration;provenance;azure-devops;azure-pipelines;variable-groups;debugging</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/ConfigFerret</PackageProjectUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <MicrosoftExtensionsVersion>10.0.15</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0'">
+    <MicrosoftExtensionsVersion>11.0.0</MicrosoftExtensionsVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- No third-party dependencies: HttpClient and System.Text.Json come with the framework, and options binding and DI
+         come from Microsoft.Extensions, like the core's configuration packages. -->
+    <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.404" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="ConfigFerret.AzureDevOps.Tests" />
+    <InternalsVisibleTo Include="ConfigFerret.Fuzz" />
+  </ItemGroup>
+
+</Project>

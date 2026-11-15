@@ -1,0 +1,10 @@
+{"id":42,"path_with_namespace":"contoso/api","namespace":{"kind":"user","full_path":"someone"}}
+%%
+HTTP 403
+{"message":"403 Forbidden"}
+%%
+> X-Next-Page: 2
+[{"key":"A","value":"1","environment_scope":"review/*"}]
+%%
+> X-Next-Page:
+[{"key":"B","value":"2"}]

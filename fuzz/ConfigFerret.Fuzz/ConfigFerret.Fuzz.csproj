@@ -26,6 +26,8 @@
     <ProjectReference Include="../../src/ConfigFerret.Desktop/ConfigFerret.Desktop.csproj" />
     <ProjectReference Include="../../src/ConfigFerret.Aws/ConfigFerret.Aws.csproj" />
     <ProjectReference Include="../../src/ConfigFerret.GoogleCloud/ConfigFerret.GoogleCloud.csproj" />
+    <ProjectReference Include="../../src/ConfigFerret.AzureDevOps/ConfigFerret.AzureDevOps.csproj" />
+    <ProjectReference Include="../../src/ConfigFerret.GitLab/ConfigFerret.GitLab.csproj" />
   </ItemGroup>
 
 </Project>
