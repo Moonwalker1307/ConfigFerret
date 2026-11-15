@@ -47,6 +47,26 @@ public class JsonApiTests
         Assert.StartsWith("Address must use https", ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("""{"a":[1,"x",{"b":null,"c":true}],"d":"\u00e9\ud83d\ude00"}""", true)]
+    [InlineData("""{"a":"\ud800"}""", false)]
+    [InlineData("""{"a":{"\udc00":1}}""", false)]
+    [InlineData("""[["\ud800x"]]""", false)]
+    public void RequireValidText_refuses_lone_surrogates_anywhere(string json, bool valid)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var ex = Record.Exception(() => JsonApi.RequireValidText(doc, "Example", Api));
+        if (valid)
+        {
+            Assert.Null(ex);
+        }
+        else
+        {
+            var http = Assert.IsType<HttpRequestException>(ex);
+            Assert.Equal("Example returned a response for /v1/items whose text is not valid UTF-16.", http.Message);
+        }
+    }
+
     [Fact]
     public void Refuses_ftp_even_when_http_is_allowed()
     {

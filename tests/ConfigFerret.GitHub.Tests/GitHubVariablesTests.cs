@@ -181,6 +181,20 @@ public class GitHubVariablesTests
         return options;
     }
 
+    [Theory]
+    [InlineData("""{"total_count":1,"variables":[{"name":"A","value":"1","\ud800":1}]}""")]
+    [InlineData("""{"total_count":1,"variables":[{"name":"A","value":"\udfff"}]}""")]
+    [InlineData("""{"\ud800":0,"variables":[]}""")]
+    public async Task Reports_a_response_with_a_lone_surrogate_as_an_unexpected_response(string body)
+    {
+        // TryGetProperty and GetString throw InvalidOperationException on a lone surrogate escape.
+        var handler = new FakeHttpHandler().Respond($"{Repo}/actions/variables?per_page=30&page=1", body);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken));
+        Assert.Contains("not valid UTF-16", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Skips_entries_that_are_not_objects_or_have_no_string_name()
     {
