@@ -116,7 +116,8 @@ public sealed partial class AzureDevOpsTraceOptions
                 text = text[1..].TrimStart();
             }
 
-            if (KeyValue().Match(text) is not { Success: true } pair)
+            var pair = KeyValue().Match(text);
+            if (!pair.Success)
             {
                 continue;
             }

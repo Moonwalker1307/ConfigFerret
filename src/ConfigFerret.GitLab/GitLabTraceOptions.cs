@@ -125,7 +125,8 @@ public sealed partial class GitLabTraceOptions
                 pending = null;
             }
 
-            if (KeyValue().Match(text) is not { Success: true } pair)
+            var pair = KeyValue().Match(text);
+            if (!pair.Success)
             {
                 continue;
             }

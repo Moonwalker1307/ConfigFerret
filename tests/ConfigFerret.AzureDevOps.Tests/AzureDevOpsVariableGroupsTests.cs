@@ -70,18 +70,18 @@ public sealed class AzureDevOpsVariableGroupsTests : IDisposable
     {
         _handler.Respond(Query("shared"), Page(Shared)).Respond(Query("api-production"), Page(Production));
 
-        var groups = await Load(Options("shared", "api-production"));
+        var groups = await Load(Options("api-production", "shared"));
 
         Assert.Equal("contoso/api", groups.Project);
-        Assert.Equal(["shared", "api-production"], groups.Groups.Select(g => g.Name));
-        var production = groups.Groups[1];
+        Assert.Equal(["api-production", "shared"], groups.Groups.Select(g => g.Name));
+        var production = groups.Groups[0];
         Assert.Equal(7, production.Id);
         Assert.Equal(AzureDevOpsGroupType.Vsts, production.Type);
         Assert.Equal("api-production settings", production.Description);
         Assert.Null(production.KeyVaultName);
         Assert.Equal(new DateTimeOffset(2026, 3, 4, 5, 6, 7, TimeSpan.Zero), production.ModifiedOn);
-        Assert.Equal(["10", "30"], groups.Find("db.timeout").Select(v => v.Value));
-        Assert.Equal(["shared", "api-production"], groups.Find("DB.TIMEOUT").Select(v => v.Group));
+        Assert.Equal(["30", "10"], groups.Find("db.timeout").Select(v => v.Value));
+        Assert.Equal(["api-production", "shared"], groups.Find("DB.TIMEOUT").Select(v => v.Group));
         Assert.Equal(4, groups.Variables.Count);
         Assert.Empty(groups.Warnings);
     }

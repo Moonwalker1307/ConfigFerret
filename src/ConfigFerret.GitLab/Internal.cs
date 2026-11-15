@@ -63,17 +63,22 @@ internal static class JsonRead
 
         foreach (var property in element.EnumerateObject())
         {
-            string name;
-            try
+            if (Name(property) is { } name)
             {
-                name = property.Name;
+                yield return (name, property.Value);
             }
-            catch (InvalidOperationException)
-            {
-                continue;
-            }
+        }
+    }
 
-            yield return (name, property.Value);
+    private static string? Name(JsonProperty property)
+    {
+        try
+        {
+            return property.Name;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 
