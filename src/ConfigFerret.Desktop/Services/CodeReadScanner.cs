@@ -392,7 +392,7 @@ public sealed partial class CodeReadScanner
             return value.Length == 0 || value.Contains('{', StringComparison.Ordinal) ? null : value;
         }
 
-        if (arg.StartsWith("@\"", StringComparison.Ordinal) && arg.EndsWith('"'))
+        if (arg.Length >= 3 && arg.StartsWith("@\"", StringComparison.Ordinal) && arg[^1] == '"')
         {
             return arg[2..^1];
         }
@@ -751,7 +751,7 @@ public sealed partial class CodeReadScanner
     [GeneratedRegex(@"^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$", RegexOptions.CultureInvariant)]
     private static partial Regex Identifier();
 
-    [GeneratedRegex(@"\b(?:class|record(?:\s+class)?|struct)\s+(?<name>[A-Za-z_]\w*)\s*(?:<[^>{]*>)?\s*(?:\((?<parameters>[^()]*)\))?\s*(?::\s*(?<base>[\w.<>, ]+?))?\s*(?:where\b[^{;]*)?[{;]", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(?:class|record(?:\s+class)?|struct)\s+(?<name>[A-Za-z_]\w*)\s*(?:<[^>{]*>\s*)?(?:\((?<parameters>[^()]*)\)\s*)?(?::\s*(?<base>[\w.<>, ]+?)\s*)?(?:where\b[^{;]*)?[{;]", RegexOptions.CultureInvariant)]
     private static partial Regex TypeDeclaration();
 
     [GeneratedRegex(@"^\s*(?:\[[^\]]*\]\s*)*(?<type>[\w.<>\[\], ?]+?)\s+(?<name>[A-Za-z_]\w*)\s*(?:=.*)?$", RegexOptions.CultureInvariant | RegexOptions.Singleline)]

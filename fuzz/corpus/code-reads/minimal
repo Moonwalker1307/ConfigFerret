@@ -1,0 +1,3 @@
+var v = config.GetSection("Logging").GetSection("LogLevel")["Default"];
+services.Configure<O>(config.GetSection("O"));
+class O { public int A { get; set; } }

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ConfigFerret.Internal;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -129,18 +130,13 @@ public static partial class HelmValueUsage
     // Every leaf of the values document: scalars and sequences, by their dotted path.
     internal static IEnumerable<string> Leaves(string yaml)
     {
-        var stream = new YamlStream();
-        using (var reader = new StringReader(yaml))
-        {
-            stream.Load(reader);
-        }
-
+        // Yaml.LoadDocuments also rejects the recursive anchors and alias bombs that overflow the stack in YamlDotNet.
         var result = new List<string>();
-        foreach (var document in stream.Documents)
+        foreach (var root in Yaml.LoadDocuments(yaml))
         {
-            if (document.RootNode is YamlMappingNode root)
+            if (root is YamlMappingNode mapping)
             {
-                Walk(root, string.Empty, result, 0);
+                Walk(mapping, string.Empty, result, 0);
             }
         }
 

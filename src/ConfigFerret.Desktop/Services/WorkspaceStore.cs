@@ -37,7 +37,40 @@ public sealed class WorkspaceStore
         }
 
         using var stream = File.OpenRead(Path);
-        return JsonSerializer.Deserialize<Workspace>(stream, JsonOptions) ?? new Workspace();
+        return Sanitize(JsonSerializer.Deserialize<Workspace>(stream, JsonOptions));
+    }
+
+    /// <summary>
+    /// A file can say <c>null</c> for any member, and the app reads the members without checking. Returns a workspace
+    /// with every member set, dropping what is null.
+    /// </summary>
+    private static Workspace Sanitize(Workspace? loaded)
+    {
+        if (loaded is null)
+        {
+            return new Workspace();
+        }
+
+        var workspace = new Workspace
+        {
+            Version = loaded.Version,
+            GitHubApiUrl = loaded.GitHubApiUrl ?? string.Empty,
+            OctopusServer = loaded.OctopusServer ?? string.Empty,
+            OctopusSpace = loaded.OctopusSpace ?? string.Empty,
+            DarkTheme = loaded.DarkTheme,
+            SidebarHidden = loaded.SidebarHidden,
+            RecentFolders = (loaded.RecentFolders ?? []).Where(f => f is not null).ToList(),
+        };
+        foreach (var (name, choices) in loaded.Repositories ?? [])
+        {
+            if (name is not null && choices is not null)
+            {
+                choices.Environment ??= new AnalysisChoices().Environment;
+                workspace.Repositories[name] = choices;
+            }
+        }
+
+        return workspace;
     }
 
     /// <summary>Writes the workspace, replacing the file in one step so a crash never leaves half a file.</summary>

@@ -1,0 +1,11 @@
+data: {{ toYaml .Values | nindent 2 }}
+%%
+a: 1
+b:
+  c: [1, 2]
+anchors: &x
+  k: v
+merged:
+  <<: *x
+empty: {}
+nulls: ~

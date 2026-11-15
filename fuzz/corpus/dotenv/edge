@@ -1,0 +1,7 @@
+MULTI="line one
+line two"
+A=b\
+C=d
+﻿BOM=1
+=novalue
+NOEQUALS

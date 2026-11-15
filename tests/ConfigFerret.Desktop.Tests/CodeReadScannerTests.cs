@@ -673,4 +673,39 @@ public class CodeReadScannerTests
         Assert.True(scanner.Check("A:Key").IsRead);
         Assert.True(scanner.Check("B:Key").IsRead);
     }
+
+    [Fact]
+    public void A_verbatim_string_with_no_content_does_not_throw()
+    {
+        // Found by fuzzing: the argument @" is both the start and the end of a verbatim string.
+        var scanner = Scan("var x = configuration.GetSection(@\"    ); class A { A get; set; } }");
+
+        Assert.False(scanner.Check("A").IsRead && string.IsNullOrEmpty(scanner.Check("A").Reason));
+    }
+
+    [Fact]
+    public void A_type_keyword_followed_by_long_whitespace_does_not_backtrack_for_seconds()
+    {
+        // Found by fuzzing: the adjacent \s* in the type declaration pattern made each run of blanks cost a power of its length.
+        var source = string.Concat(Enumerable.Repeat("class A" + new string(' ', 120) + "x\n", 20));
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Scan(source);
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"Took {watch.Elapsed.TotalSeconds:0.0}s.");
+    }
+
+    [Fact]
+    public void Class_declarations_with_generics_parameters_base_and_constraints_still_parse()
+    {
+        var scanner = Scan("""
+            public class Options<T> : Base<T> where T : class { public int A { get; set; } }
+            public record Pair(string X, int Y) : Base;
+            public class Base<T> { public string Name { get; set; } }
+            public class Base { public string Z { get; set; } }
+            services.Configure<Options<int>>(config.GetSection("Opt"));
+            """);
+
+        Assert.True(scanner.Check("Opt:A").IsRead);
+    }
 }

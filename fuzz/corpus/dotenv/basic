@@ -1,0 +1,7 @@
+# Local settings
+ConnectionStrings__Default="Server=db;Database=orders;User Id=app;Password=s3cret"
+Db__Timeout=30
+export Features__Search=true
+EMPTY=
+SINGLE='literal $value'
+Logging__LogLevel__Default = Information # trailing comment

@@ -1,0 +1,27 @@
+using Microsoft.Extensions.Configuration;
+var builder = WebApplication.CreateBuilder(args);
+// Db:Timeout is read below
+var conn = builder.Configuration.GetConnectionString("Default");
+var host = builder.Configuration["Db:Host"];
+var timeout = builder.Configuration.GetValue<int>("Db:Timeout");
+builder.Services.Configure<FeatureOptions>(builder.Configuration.GetSection("Features"));
+builder.Services.AddOptions<DbOptions>().BindConfiguration("Db");
+var key = "Dyn:" + args[0];
+var dyn = builder.Configuration[key];
+/* block comment "Not:AKey" */
+%%
+public class FeatureOptions
+{
+    public bool Search { get; set; }
+    public List<string> Names { get; init; } = new();
+    public InnerOptions Inner { get; set; } = new();
+}
+public sealed record DbOptions(string Host, int Timeout);
+public class InnerOptions { public string Url { get; set; } = ""; }
+%%
+var raw = @"C:\path ""quoted"" // not a comment";
+var s = $"interp {x} // still string";
+var r = """
+    raw // string
+    """;
+char c = '"';
