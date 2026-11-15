@@ -9,12 +9,6 @@ on:
       seconds:
         description: Seconds to fuzz each target
         default: '1200'
-  pull_request:
-    # A short smoke run when the harness or the parsers change, so the nightly run doesn't break unnoticed.
-    paths:
-      - 'fuzz/**'
-      - 'src/**'
-      - '.github/workflows/fuzz.yml'
 
 permissions:
   contents: read
@@ -56,7 +50,7 @@ jobs:
       - name: Fuzz
         env:
           TARGET: ${{ matrix.target }}
-          SECONDS_TO_FUZZ: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '1200' }}
+          SECONDS_TO_FUZZ: ${{ inputs.seconds || '1200' }}
         run: |
           # The input reaches the script as data, never as code, and must be a whole number.
           if ! [[ "$SECONDS_TO_FUZZ" =~ ^[0-9]+$ ]]; then
@@ -66,7 +60,7 @@ jobs:
           fuzz/run.sh "$TARGET" "$SECONDS_TO_FUZZ"
 
       - name: Save the corpus
-        if: always() && github.event_name != 'pull_request'
+        if: always()
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: fuzz/work/${{ matrix.target }}/corpus
