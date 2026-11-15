@@ -20,7 +20,7 @@ namespace ConfigFerret.Fuzz;
 /// </summary>
 internal static partial class Targets
 {
-    private const string Vault = "https://contoso.vault.azure.net/";
+    private const string AzureVault = "https://contoso.vault.azure.net/";
 
     private static void AzureKeyVault(ReadOnlySpan<byte> data)
     {
@@ -28,7 +28,7 @@ internal static partial class Targets
         var responses = Responses(data.Length > 0 ? data[1..] : data);
         var options = new AzureKeyVaultOptions
         {
-            VaultUri = new Uri(Vault),
+            VaultUri = new Uri(AzureVault),
             IncludeValues = (flags & 1) != 0,
             IncludeDisabled = (flags & 2) != 0,
         };
@@ -84,7 +84,7 @@ internal static partial class Targets
             var layers = NamedLayers(name)
                 .Append(Step(LayerKind.KubernetesSecret, new ExternalSecretRef((flags & 16) != 0 ? "azurekv" : null, "store", name, Version: "v1"), LayerValue))
                 .Append(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "AzureKeyVaultConfigurationProvider", Value = LayerValue, ConfigurationKey = secret.ConfigurationKey });
-            if (Uri.TryCreate($"{Vault}secrets/{Uri.EscapeDataString(name)}", UriKind.Absolute, out var secretId))
+            if (Uri.TryCreate($"{AzureVault}secrets/{Uri.EscapeDataString(name)}", UriKind.Absolute, out var secretId))
             {
                 layers = layers.Append(new ProvenanceStep { Kind = LayerKind.AzureAppConfiguration, Source = "ref", Reference = new AzureAppConfigurationSettingRef("store", name, null, secretId) });
             }
