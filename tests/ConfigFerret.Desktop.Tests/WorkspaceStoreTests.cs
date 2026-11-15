@@ -200,6 +200,37 @@ public class WorkspaceStoreTests : IDisposable
     }
 
     [Fact]
+    public void Replaces_a_stale_temporary_file_and_keeps_its_content_out_of_the_result()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        var stale = FilePath + ".tmp";
+        File.WriteAllText(stale, "{ half a file from a crash, and a much longer line so truncation shows ........................................ }");
+        File.SetUnixFileMode(stale, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        var store = new WorkspaceStore(FilePath);
+
+        store.Save(new Workspace { OctopusSpace = "fresh" });
+
+        Assert.False(File.Exists(stale));
+        Assert.Equal("fresh", store.Load().OctopusSpace);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(FilePath));
+    }
+
+    [Fact]
+    public void Writes_utf8_without_a_byte_order_mark()
+    {
+        new WorkspaceStore(FilePath).Save(new Workspace());
+
+        var bytes = File.ReadAllBytes(FilePath);
+
+        Assert.Equal((byte)'{', bytes[0]);
+    }
+
+    [Fact]
     public void The_default_path_is_in_the_application_data_folder()
     {
         Assert.EndsWith(Path.Join("ConfigFerret", "workspace.json"), WorkspaceStore.DefaultPath, StringComparison.Ordinal);
