@@ -43,6 +43,7 @@ package stays offline and never handles credentials unless you add one:
 | `ConfigFerret.HashiCorp` | HashiCorp Vault KV secrets (names and metadata, values only when asked) and Consul KV keys, read with a token ([readme](src/ConfigFerret.HashiCorp/README.md)) |
 | `ConfigFerret.KubernetesCluster` | A workload, its ConfigMaps, opt-in Secrets, ExternalSecrets and SecretProviderClasses, read from a live cluster through a kubeconfig or the pod's service account ([readme](src/ConfigFerret.KubernetesCluster/README.md)) |
 | `ConfigFerret.Azure` | Azure Key Vault secrets (names and properties, values only when asked) and Azure App Configuration key-values, Key Vault references and feature flags, read with the Azure SDK ([readme](src/ConfigFerret.Azure/README.md)) |
+| `ConfigFerret.Aws` | AWS Secrets Manager secrets (and JSON secret properties) and Systems Manager Parameter Store parameters, read with the AWS SDK ([readme](src/ConfigFerret.Aws/README.md)) |
 
 To trace from the command line without writing code, install the `configferret` command instead:
 
@@ -231,6 +232,27 @@ and to values from the Key Vault configuration provider. Only names and properti
 on, and every secret is redacted. `AddConfigFerretAzureKeyVault` and `AddConfigFerretAzureAppConfiguration` set both up
 from configuration; startup fails if a client secret or connection string is in an appsettings file.
 
+### With AWS Secrets Manager or Parameter Store
+
+```csharp
+using ConfigFerret.Aws;   // dotnet package add ConfigFerret.Aws
+
+// The default AWS credential chain signs in; set Profile or Credentials to pick another identity.
+var secrets = await AwsSecrets.LoadAsync(new AwsSecretsManagerOptions { Region = "eu-west-1", NamePrefix = "prod/orders/" });
+var parameters = await AwsParameters.LoadAsync(new AwsParameterStoreOptions { Region = "eu-west-1", Path = "/orders/prod/" });
+
+var report = ConfigTracer.For(builder.Configuration)
+    .WithAwsSecretsManager(secrets)
+    .WithAwsParameterStore(parameters)
+    .Trace();
+```
+
+External Secrets Operator references link to the secret, JSON property or parameter they name. Environment variables
+and keys from `AddSecretsManager` or `AddSystemsManager` link by name, with the prefix or path removed and `/` mapped
+to `:`. Only names and metadata are read unless `IncludeValues` is on; secret and `SecureString` values are always
+redacted. `AddConfigFerretAwsSecretsManager` and `AddConfigFerretAwsParameterStore` register both from configuration;
+startup fails if an access key is in an `appsettings*.json` file.
+
 ### Inside a running pod
 
 ```csharp
@@ -372,6 +394,7 @@ match environment variables, Kubernetes env entries and ConfigMap or Secret keys
 | HashiCorp Vault (`ConfigFerret.HashiCorp`) | The KV secret (and key, when values are read) behind an External Secrets or CSI reference, an explicit link or the same name, with version and update time |
 | Consul KV (`ConfigFerret.HashiCorp`) | The key under the prefix that sets the configuration key, including keys inside expanded JSON values |
 | Live cluster (`ConfigFerret.KubernetesCluster`) | The same Kubernetes layers, read from the API server for one workload instead of from manifest files |
+| AWS (`ConfigFerret.Aws`) | The Secrets Manager secret or JSON property, or the Parameter Store parameter, from an External Secrets reference, an explicit link, the same name or the AWS configuration providers' key mapping |
 
 Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and `List` documents.
 

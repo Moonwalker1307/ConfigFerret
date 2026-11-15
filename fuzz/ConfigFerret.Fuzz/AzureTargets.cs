@@ -109,7 +109,10 @@ internal static partial class Targets
         }
 
         // Every value must be redacted: a value may show up in the report only if it shows up without any values too.
-        var values = secrets.Secrets.ToDictionary<AzureKeyVaultSecret, string, string?>(s => s.ConfigurationKey, s => s.Value ?? LayerValue, StringComparer.OrdinalIgnoreCase);
+        // Two secret names can map to one configuration key (keys ignore case), so keep the first of each.
+        var values = secrets.Secrets
+            .GroupBy(s => s.ConfigurationKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary<IGrouping<string, AzureKeyVaultSecret>, string, string?>(g => g.Key, g => g.First().Value ?? LayerValue, StringComparer.OrdinalIgnoreCase);
         var withValues = Render(secrets.ToLoadedSource(), values, provider: true);
         var withoutValues = Render(new AzureKeyVaultSecrets(secrets.Vault, secrets.Secrets.Select(s => s with { Value = null }), secrets.Warnings).ToLoadedSource(), values.ToDictionary<KeyValuePair<string, string?>, string, string?>(p => p.Key, _ => LayerValue, StringComparer.OrdinalIgnoreCase), provider: true);
         foreach (var value in secrets.Secrets.Select(s => s.Value).OfType<string>().Where(v => v.Length >= 4))

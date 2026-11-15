@@ -1,0 +1,1 @@
+ {"value":[{"id":"https://contoso.vault.azure.net/secrets/Old","attributes":{"enabled":true}},{"id":"https://contoso.vault.azure.net/secrets/Old--","attributes":{"enabled":true}}],"nextLink":null}
