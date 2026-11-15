@@ -38,7 +38,7 @@ if [[ ! -f "$out/.instrumented" ]]; then
   rm -rf "$out"
   dotnet publish "$here/ConfigFerret.Fuzz" -c Release -f net10.0 -o "$out" -p:TargetFrameworks=net10.0 --nologo -v quiet
   # The harness instruments with the SharpFuzz library it references, so no separate tool is needed.
-  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/ConfigFerret.HashiCorp.dll" "$out/ConfigFerret.KubernetesCluster.dll" "$out/ConfigFerret.Azure.dll" "$out/ConfigFerret.Aws.dll" "$out/ConfigFerret.Desktop.dll" "$out/ConfigFerret.GoogleCloud.dll" "$out/YamlDotNet.dll"
+  "$out/ConfigFerret.Fuzz" --instrument "$out/ConfigFerret.dll" "$out/ConfigFerret.GitHub.dll" "$out/ConfigFerret.Octopus.dll" "$out/ConfigFerret.HashiCorp.dll" "$out/ConfigFerret.KubernetesCluster.dll" "$out/ConfigFerret.Azure.dll" "$out/ConfigFerret.Aws.dll" "$out/ConfigFerret.Desktop.dll" "$out/ConfigFerret.GoogleCloud.dll" "$out/ConfigFerret.AzureDevOps.dll" "$out/ConfigFerret.GitLab.dll" "$out/YamlDotNet.dll"
   touch "$out/.instrumented"
 fi
 
@@ -52,6 +52,7 @@ case "$target" in
   aws-secrets|aws-parameters) dict=(-dict="$here/dictionaries/aws.dict") ;;
   env-names|desktop-tar|dotenv|secret-audit) ;;
   gcp-secrets) dict=(-dict="$here/dictionaries/gcp.dict") ;;
+  azure-devops|gitlab) dict=(-dict="$here/dictionaries/cicd.dict") ;;
   *) dict=(-dict="$here/dictionaries/yaml.dict") ;;
 esac
 

@@ -1,0 +1,16 @@
+{"id":42,"path_with_namespace":"contoso/api","namespace":{"kind":"user"}}
+%%
+[{"key":"TIMEOUT","value":"30"}]
+%%
+variables:
+  DB_TIMEOUT: "15"
+  ALIAS: $TIMEOUT
+  GREETING:
+    value: hello
+
+deploy:
+  variables:
+    BRACED: ${TIMEOUT}
+  script:
+    - export DB_PASSWORD="$DB_PASSWORD"
+    - MISSING=$NOT_THERE

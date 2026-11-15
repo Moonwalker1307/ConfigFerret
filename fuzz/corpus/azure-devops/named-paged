@@ -1,0 +1,6 @@
+{"count":1,"value":[{"id":3,"name":"shared","variables":{"Db.Timeout":{"value":"10"}}}]}
+%%
+> X-MS-ContinuationToken: 8
+{"count":1,"value":[{"id":9,"name":"api-kv","type":"AzureKeyVault","providerData":{"serviceEndpointId":"e1","vault":"contoso-prod"},"variables":{"Db--Password":{"isSecret":true}}}]}
+%%
+{"count":0,"value":[]}

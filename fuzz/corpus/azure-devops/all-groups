@@ -1,0 +1,1 @@
+{"count":2,"value":[{"id":3,"name":"shared","type":"Vsts","variables":{"Db.Timeout":{"value":"10"},"Region":{"value":"eu"}}},{"id":7,"name":"api-production","type":"Vsts","modifiedOn":"2026-03-04T05:06:07Z","variables":{"Db.Timeout":{"value":"30"},"Db.Password":{"isSecret":true,"value":null}}}]}
