@@ -276,6 +276,7 @@ public sealed class GitLabSourceTests : IDisposable
             Assert.Equal("project variable, environment scope *, masked", password.Detail);
             Assert.Equal("project variable, environment scope *, masked, hidden", loaded.Entries.Single(e => e.Name == "API_KEY").Detail);
             Assert.Equal("project variable, environment scope *, protected, file", loaded.Entries.Single(e => e.Name == "KUBECONFIG").Detail);
+            Assert.True(loaded.Entries.Single(e => e.Name == "KUBECONFIG").IsSensitive);
             Assert.Equal("contoso", loaded.Entries[0].Location);
 
             var unused = loaded.FindUnused(report);

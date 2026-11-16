@@ -134,7 +134,7 @@ public class GitLabResolverTests
         var kube = Assert.Single(Resolve(EnvStep("KUBECONFIG", "/builds/tmp/KUBECONFIG")));
 
         Assert.Equal("matched by name; protected: only pipelines on protected branches and tags get it; a file variable: the job gets the path of a temporary file that holds the value", kube.Note);
-        Assert.False(kube.IsSensitive);
+        Assert.True(kube.IsSensitive);
     }
 
     [Fact]
@@ -387,6 +387,91 @@ public class GitLabResolverTests
         static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
             steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
     }
+
+    [Fact]
+    public void Redacts_the_content_of_a_file_variable_end_to_end()
+    {
+        const string prefix = "CFGLFILE_";
+        const string secret = "fake-kube-token";
+        var variables = new GitLabVariables(
+        [
+            new(prefix + "KUBECONFIG", $"apiVersion: v1\nusers:\n- user:\n    token: {secret}\n", GitLabVariableLevel.Project, "contoso/api", IsFile: true),
+        ]);
+
+        var report = TraceOne(prefix, "KUBECONFIG", "/builds/contoso/api.tmp/KUBECONFIG", variables, null);
+
+        AssertNowhere(report, "KUBECONFIG", secret);
+        var setting = report.Find("KUBECONFIG")!;
+        Assert.True(setting.IsSensitive);
+        var origin = Assert.Single(Assert.Single(setting.Steps).Origins);
+        Assert.Equal($"GitLab project variable {prefix}KUBECONFIG", origin.Source);
+        Assert.True(origin.IsSensitive);
+        Assert.Equal("***", origin.Value);
+    }
+
+    [Theory]
+    [InlineData("variables:\n  {0}MAIL_AUTH: ${0}SMTP_PASSWORD\n", "GitLab project variable {0}SMTP_PASSWORD")]
+    [InlineData("deploy:\n  script:\n    - export {0}MAIL_AUTH=\"${0}SMTP_PASSWORD\"\n", "GitLab project variable {0}SMTP_PASSWORD")]
+    [InlineData("variables:\n  {0}SMTP_PASSWORD: fake-smtp-pass\n  {0}MAIL_AUTH: ${0}SMTP_PASSWORD\n", "GitLab CI variable {0}SMTP_PASSWORD")]
+    public void Redacts_a_value_from_a_variable_named_like_a_secret_end_to_end(string ciFile, string source)
+    {
+        const string prefix = "CFGLNAMED_";
+        const string secret = "fake-smtp-pass";
+
+        // Not masked in GitLab, as for a value with characters GitLab cannot mask. The last case sets it only in the CI file.
+        var variables = new GitLabVariables(source.StartsWith("GitLab project", StringComparison.Ordinal)
+            ? [new(prefix + "SMTP_PASSWORD", secret, GitLabVariableLevel.Project, "contoso/api")]
+            : []);
+
+        var report = TraceOne(prefix, "MAIL_AUTH", secret, variables, string.Format(CultureInfo.InvariantCulture, ciFile, prefix));
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        var effective = Flatten(setting.Steps).Last(s => s.IsEffective && s.Origins.Count == 0);
+        Assert.Equal(string.Format(CultureInfo.InvariantCulture, source, prefix), effective.Source);
+        Assert.True(effective.IsSensitive);
+    }
+
+    private static ProvenanceReport TraceOne(string prefix, string key, string value, GitLabVariables variables, string? ciFile)
+    {
+        Environment.SetEnvironmentVariable(prefix + key, value);
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            return ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [prefix + key] = value })
+                .WithGitLab(variables, o =>
+                {
+                    if (ciFile is not null)
+                    {
+                        o.AddCiFileText(ciFile, ".gitlab-ci.yml");
+                    }
+                })
+                .Trace();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(prefix + key, null);
+        }
+    }
+
+    private static void AssertNowhere(ProvenanceReport report, string key, string secret)
+    {
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.Explain(key), StringComparison.Ordinal);
+        Assert.All(Flatten(report.Find(key)!.Steps), s =>
+        {
+            Assert.DoesNotContain(secret, s.Value ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, s.Note ?? string.Empty, StringComparison.Ordinal);
+        });
+        Assert.All(report.Warnings, w => Assert.DoesNotContain(secret, w, StringComparison.Ordinal));
+    }
+
+    private static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
+        steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
 
     [Fact]
     public void Checks_the_tracer_extension_arguments()

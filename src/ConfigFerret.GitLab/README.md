@@ -115,8 +115,12 @@ line or an explicit link ties a layer to such a key and it is masked, the layer 
 - Masked and hidden variables are marked sensitive. GitLab never returns hidden values. It does return masked values,
   but ConfigFerret drops them unless `IncludeMaskedValues` is on; then they are only compared to say whether they
   differ, and are redacted like any other secret.
-- File variables (`variable_type: file`) are noted: the job gets the path of a temporary file, not the value, so the
-  value is not compared. Protected variables are noted too.
+- Variables whose key looks like a secret's (`SMTP_PASSWORD`, by `TraceOptions.DefaultSensitiveKeyPattern`, whatever
+  `SensitiveKeyPattern` is set to) are marked sensitive even when they are not masked, both in the settings and in CI
+  files, so every layer they set is redacted.
+- File variables (`variable_type: file`) are noted and marked sensitive, since GitLab cannot mask a value with several
+  lines: the job gets the path of a temporary file, not the value, so the value is not compared. A layer that holds
+  the path is then redacted too. Protected variables are noted.
 
 ## Limits
 

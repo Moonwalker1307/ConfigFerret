@@ -1,9 +1,10 @@
+using System.Text.RegularExpressions;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.GitLab;
 
 /// <summary>Links environment variables, Kubernetes env entries and ConfigMap/Secret keys to GitLab CI/CD variables.</summary>
-internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptions options) : IOriginResolver
+internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTraceOptions options) : IOriginResolver
 {
     private readonly List<string> _fileWarnings = options.ReadConfiguredCiFiles();
     private readonly HashSet<string> _scopeWarnings = new(StringComparer.Ordinal);
@@ -13,7 +14,7 @@ internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptio
     public IEnumerable<SourceEntry> Entries() => variables.Entries.Select(v => new SourceEntry(
         v.Key,
         Reference(v),
-        v.IsSensitive,
+        IsSensitive(v),
         Detail(v),
         Location(v)));
 
@@ -159,7 +160,7 @@ internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptio
                 Source = $"GitLab {GitLabVariables.Describe(v.Level)} variable {v.Key}",
                 Location = Location(v),
                 Value = v.Value,
-                IsSensitive = v.IsSensitive,
+                IsSensitive = IsSensitive(v),
                 IsInferred = inferred,
                 Note = string.Join("; ", notes),
                 Reference = Reference(v),
@@ -173,11 +174,16 @@ internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptio
             Source = $"GitLab CI variable {file.Name}{(file.Job is null ? string.Empty : $" (job {file.Job})")}",
             Location = $"{file.File} line {file.Line}",
             Value = file.Value,
+            IsSensitive = SensitiveName().IsMatch(file.Name),
             IsInferred = inferred,
             Note = string.Join("; ", notes),
             Reference = new GitLabCiVariableRef(file.File, file.Line, file.Name),
         };
     }
+
+    // GitLab masks a value only when asked to and cannot mask one with several lines, so a variable named like a secret
+    // and a file variable, which often holds a kubeconfig or a key, are treated as secret too.
+    private static bool IsSensitive(GitLabVariable variable) => variable.IsSensitive || variable.IsFile || SensitiveName().IsMatch(variable.Key);
 
     private static string Location(GitLabVariable variable) =>
         variable.EnvironmentScope == "*" ? variable.Owner : $"{variable.Owner}, environment {variable.EnvironmentScope}";
@@ -194,4 +200,9 @@ internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptio
     private static GitLabVariableRef Reference(GitLabVariable variable) => new(variable.Level, variable.Owner, variable.Key, variable.EnvironmentScope);
 
     private sealed record Candidate(GitLabVariable? Variable, GitLabCiVariable? File);
+
+    // The default rule a trace uses for configuration keys. A resolver is built without the trace, so it cannot see the
+    // trace's own SensitiveKeyPattern.
+    [GeneratedRegex(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SensitiveName();
 }
