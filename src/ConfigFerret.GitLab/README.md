@@ -92,7 +92,9 @@ variables that cannot be read fail the load.
 
 - **Explicit links** (`Map("Db__Timeout", "DB_TIMEOUT")`).
 - **CI files** (`AddCiFile`): every `NAME: $VAR` line outside a `variables:` block, and every script line
-  `export NAME=$VAR` or `NAME=$VAR`, links `NAME` to `VAR`. `${VAR}` works too.
+  `export NAME=$VAR` or `NAME=$VAR`, links `NAME` to `VAR`. `${VAR}` works too. The report names a file by its path
+  from the current directory (its full path when it is outside it), so CI files of one name in different folders are
+  told apart.
 - **Same key** (on by default, `MatchByName`). GitLab keys are case-sensitive, so the match is too. These links are
   marked as inferred.
 

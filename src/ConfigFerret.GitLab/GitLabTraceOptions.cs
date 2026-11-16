@@ -71,11 +71,24 @@ public sealed partial class GitLabTraceOptions
     /// and in hidden jobs (<c>.name</c>, since <c>extends:</c> is not read) counts for every job; variables from
     /// <c>workflow:</c> rules count only as alternatives, since the trace cannot tell whether a rule matched. Each job's
     /// own <c>environment:</c> is read too, so <see cref="Environment"/> can leave out the jobs for other environments.
+    /// The report names the file by its path from the current directory, with <c>/</c> between folders, or by its full
+    /// path when it is not below the current directory.
     /// </summary>
     public GitLabTraceOptions AddCiFile(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return AddCiFileText(File.ReadAllText(path), Path.GetFileName(path));
+        return AddCiFileText(File.ReadAllText(path), NameOf(path));
+    }
+
+    // A file inside the current directory is named by its path from there, and any other by its full path, so that files
+    // of the same name in different folders get different names and locations. Only the system's own separator becomes
+    // "/": on Linux and macOS a "\" is part of a file name.
+    private static string NameOf(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), full);
+        var outside = relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relative);
+        return (outside ? full : relative).Replace(Path.DirectorySeparatorChar, '/');
     }
 
     /// <summary>Like <see cref="AddCiFile"/>, for CI YAML you already have in memory.</summary>
@@ -350,7 +363,7 @@ public sealed record GitLabMapping(string Name, string Key, string? Where);
 /// <summary>A variable set in a CI file's <c>variables:</c> block.</summary>
 /// <param name="Name">The variable name.</param>
 /// <param name="Value">The value as written, which may refer to another variable, for example <c>$TIMEOUT</c>.</param>
-/// <param name="File">The file name.</param>
+/// <param name="File">The file's name in the report, as <see cref="GitLabTraceOptions.AddCiFile"/> gives it or as passed to <see cref="GitLabTraceOptions.AddCiFileText"/>.</param>
 /// <param name="Line">The 1-based line.</param>
 /// <param name="Job">The job it is set on, or null for a global (default) variable.</param>
 public sealed record GitLabCiVariable(string Name, string Value, string File, int Line, string? Job);

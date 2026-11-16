@@ -1141,6 +1141,58 @@ public class AzureDevOpsResolverTests
     }
 
     [Fact]
+    public void Tells_pipeline_files_of_one_name_in_different_folders_apart()
+    {
+        // Two environments with a variables file of the same name, each setting Db.Timeout on line 2 from its own variable.
+        var folder = $"cf-ado-{Guid.NewGuid():N}";
+        var first = Path.Join(folder, "dev", "variables.yml");
+        var second = Path.Join(folder, "prod", "variables.yml");
+        Directory.CreateDirectory(Path.GetDirectoryName(first)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(second)!);
+        File.WriteAllText(first, "variables:\n  Db.Timeout: $(Dev.Timeout)\n");
+        File.WriteAllText(second, "variables:\n  Db.Timeout: $(Prod.Timeout)\n");
+        try
+        {
+            var groups = new AzureDevOpsVariableGroups("contoso/api",
+            [
+                new AzureDevOpsVariableGroup(1, "timeouts", AzureDevOpsGroupType.Vsts, null, null, null, [new("Dev.Timeout", "5", false, "timeouts", 1), new("Prod.Timeout", "60", false, "timeouts", 1)]),
+            ]);
+            var resolver = Resolver(o => o.AddPipeline(first).AddPipeline(second), groups);
+
+            var chain = resolver.Resolve(EnvStep("DB_TIMEOUT", "60"), new TraceDiagnostics());
+            var origin = Assert.Single(resolver.Resolve(chain[^1], new TraceDiagnostics()));
+
+            Assert.Equal("Azure DevOps variable group timeouts variable Prod.Timeout", origin.Source);
+            // A file in the current directory is named by its path from there, with "/" on every platform.
+            Assert.Equal([$"{folder}/dev/variables.yml line 2", $"{folder}/prod/variables.yml line 2"], chain.Select(s => s.Location));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Keeps_a_backslash_in_a_pipeline_file_path_as_part_of_the_name()
+    {
+        // On Windows a backslash is the separator, so no name can hold one.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A Windows file name cannot hold a backslash.");
+        var folder = $"cf-ado-{Guid.NewGuid():N}";
+        Directory.CreateDirectory(Path.Join(folder, "a\\b"));
+        File.WriteAllText(Path.Join(folder, "a\\b", "variables.yml"), "variables:\n  A: 1\n");
+        try
+        {
+            var options = new AzureDevOpsTraceOptions().AddPipeline(Path.Join(folder, "a\\b", "variables.yml"));
+
+            Assert.Equal($"{folder}/a\\b/variables.yml", Assert.Single(options.Variables).File);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Reads_configured_pipeline_files_once_and_warns_about_missing_ones()
     {
         var path = Path.Join(Path.GetTempPath(), $"cf-ado-{Guid.NewGuid():N}.yml");
@@ -1159,7 +1211,7 @@ public class AzureDevOpsResolverTests
             _ = new AzureDevOpsResolver(Groups, options);
 
             Assert.False(step.IsInferred);
-            Assert.StartsWith($"{Path.GetFileName(path)} line 4 sets", step.Note, StringComparison.Ordinal);
+            Assert.Contains($"{Path.GetFileName(path)} line 4 sets", step.Note, StringComparison.Ordinal);
             var warning = Assert.Single(diagnostics.Warnings);
             Assert.StartsWith("Could not read Azure Pipelines file does-not-exist/azure-pipelines.yml: ", warning, StringComparison.Ordinal);
             Assert.Single(options.Mappings);

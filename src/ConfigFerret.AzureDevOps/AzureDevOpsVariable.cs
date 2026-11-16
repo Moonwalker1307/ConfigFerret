@@ -68,7 +68,7 @@ public sealed record AzureDevOpsVariable(
 public sealed record AzureDevOpsVariableRef(string Project, string Group, string Name) : SourceRef;
 
 /// <summary>A pointer to a variable set in pipeline YAML (<c>variables:</c>).</summary>
-/// <param name="File">The pipeline file name, as passed to <see cref="AzureDevOpsTraceOptions.AddPipelineText"/>.</param>
+/// <param name="File">The pipeline file's name in the report, as <see cref="AzureDevOpsTraceOptions.AddPipeline"/> gives it or as passed to <see cref="AzureDevOpsTraceOptions.AddPipelineText"/>.</param>
 /// <param name="Line">The 1-based line of the variable.</param>
 /// <param name="Name">The variable name.</param>
 public sealed record AzurePipelinesVariableRef(string File, int Line, string Name) : SourceRef;

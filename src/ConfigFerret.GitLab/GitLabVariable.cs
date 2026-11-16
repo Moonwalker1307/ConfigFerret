@@ -51,7 +51,7 @@ public sealed record GitLabVariable(
 public sealed record GitLabVariableRef(GitLabVariableLevel Level, string Owner, string Key, string EnvironmentScope) : SourceRef;
 
 /// <summary>A pointer to a variable set in <c>.gitlab-ci.yml</c> (<c>variables:</c>).</summary>
-/// <param name="File">The file name, as passed to <see cref="GitLabTraceOptions.AddCiFileText"/>.</param>
+/// <param name="File">The file's name in the report, as <see cref="GitLabTraceOptions.AddCiFile"/> gives it or as passed to <see cref="GitLabTraceOptions.AddCiFileText"/>.</param>
 /// <param name="Line">The 1-based line of the variable.</param>
 /// <param name="Name">The variable name.</param>
 public sealed record GitLabCiVariableRef(string File, int Line, string Name) : SourceRef;
