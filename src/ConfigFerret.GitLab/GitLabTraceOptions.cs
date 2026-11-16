@@ -102,9 +102,9 @@ public sealed partial class GitLabTraceOptions
 
             var indent = YamlLine.Indent(line);
             var text = line[indent..].TrimEnd();
-            if (indent == 0 && TopKey().Match(text) is { Success: true } topKey)
+            if (indent == 0 && TopKey(text) is { } topKey)
             {
-                top = topKey.Groups["quoted"].Success ? YamlLine.Scalar(topKey.Groups["quoted"].Value) : topKey.Groups["key"].Value;
+                top = topKey;
             }
 
             if (environmentIndent >= 0 && indent <= environmentIndent)
@@ -286,9 +286,33 @@ public sealed partial class GitLabTraceOptions
         value is not null && WholeReference().Match(value) is { Success: true } match ? match.Groups["var"].Value : null;
 
     // A top-level key ends at the first colon followed by white space or the end of the line, so deploy:staging: is one
-    // key; a quoted key is read as a quoted scalar.
-    [GeneratedRegex("""^(?:(?<quoted>"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')|(?<key>[^\s:#'"-].*?))\s*:(?=\s|$)""", RegexOptions.CultureInvariant)]
-    private static partial Regex TopKey();
+    // key; a quoted key is read as a quoted scalar. A plain key is found by a scan rather than a pattern, because a
+    // pattern for it backtracks over a long run of spaces and takes time in the square of the line's length.
+    private static string? TopKey(string text)
+    {
+        if (text.Length == 0 || char.IsWhiteSpace(text[0]) || text[0] is ':' or '#' or '-')
+        {
+            return null;
+        }
+
+        if (text[0] is '"' or '\'')
+        {
+            return QuotedTopKey().Match(text) is { Success: true } quoted ? YamlLine.Scalar(quoted.Groups["quoted"].Value) : null;
+        }
+
+        for (var i = 1; i < text.Length; i++)
+        {
+            if (text[i] == ':' && (i + 1 == text.Length || char.IsWhiteSpace(text[i + 1])))
+            {
+                return text[..i].TrimEnd();
+            }
+        }
+
+        return null;
+    }
+
+    [GeneratedRegex("""^(?<quoted>"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')\s*:(?=\s|$)""", RegexOptions.CultureInvariant)]
+    private static partial Regex QuotedTopKey();
 
     // variables:, optionally with an anchor or a tag such as &defaults.
     [GeneratedRegex("""^variables\s*:(?:\s+[&!]\S+)*\s*(?:#.*)?$""", RegexOptions.CultureInvariant)]

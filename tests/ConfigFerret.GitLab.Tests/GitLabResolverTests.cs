@@ -1015,6 +1015,19 @@ public class GitLabResolverTests
             options.Variables.Select(v => $"{v.Name}={v.Value}@{v.Job ?? "-"}"));
     }
 
+    [Fact(Timeout = 15_000)]
+    public async Task Reads_a_long_line_without_a_key_quickly()
+    {
+        // Top-level lines with a long run of spaces and no key colon must be read in time linear in their length.
+        var spaces = new string(' ', 400_000);
+        var yaml = "a" + spaces + "b\n'a'" + spaces + "b\nvariables:\n  A: 1\n";
+
+        var options = await Task.Run(() => new GitLabTraceOptions().AddCiFileText(yaml, ".gitlab-ci.yml"), TestContext.Current.CancellationToken);
+
+        var variable = Assert.Single(options.Variables);
+        Assert.Equal("A=1@-", $"{variable.Name}={variable.Value}@{variable.Job ?? "-"}");
+    }
+
     [Fact]
     public void Ends_a_variables_block_and_reads_odd_lines_safely()
     {
