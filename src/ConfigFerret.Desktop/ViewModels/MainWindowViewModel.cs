@@ -60,6 +60,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _populating;
     private bool _clearing;
     private CancellationTokenSource? _work;
+    private CancellationTokenSource? _repositoryLoad;
 
     // Counts the repositories and folders opened. An open that finds a newer one started when it resumes stops there, so
     // the one picked last is the one shown even when an earlier one was still scanning.
@@ -781,15 +782,27 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // A reload, or closing the window or tab, stops the load still running.
+        if (_repositoryLoad is not null)
+        {
+            await _repositoryLoad.CancelAsync().ConfigureAwait(true);
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        _repositoryLoad = cancellation;
         IsLoadingRepositories = true;
         try
         {
             var account = CreateGitHub(token, serverToken);
-            GitHubLogin ??= await account.GetLoginAsync().ConfigureAwait(true);
-            var repositories = await account.ListRepositoriesAsync().ConfigureAwait(true);
+            GitHubLogin ??= await account.GetLoginAsync(cancellation.Token).ConfigureAwait(true);
+            var repositories = await account.ListRepositoriesAsync(cancellation.Token).ConfigureAwait(true);
             _allRepositories = repositories.Select(r => new RepositoryRow(r)).ToList();
             ApplyRepositoryFilter();
             StatusText = $"Signed in to GitHub as {GitHubLogin}.";
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // The newer load shows its own result.
         }
         catch (Exception ex) when (ex is HttpRequestException or ArgumentException or UriFormatException or TaskCanceledException or JsonException)
         {
@@ -799,7 +812,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            IsLoadingRepositories = false;
+            if (ReferenceEquals(_repositoryLoad, cancellation))
+            {
+                _repositoryLoad = null;
+                IsLoadingRepositories = false;
+            }
         }
     }
 
@@ -1729,6 +1746,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _opening++;
         _disposed = true;
         _work?.Cancel();
+        _repositoryLoad?.Cancel();
         DeleteDownload();
         DeleteOwnedDownloadRoot();
         if (_ownsHttp)

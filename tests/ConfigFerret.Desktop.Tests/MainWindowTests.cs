@@ -366,6 +366,43 @@ public sealed class MainWindowTests : IDisposable
         Assert.True(handler.BytesRead <= limit + (1024 * 1024), $"{handler.BytesRead} bytes were read");
     }
 
+    [Fact]
+    public async Task Reloading_the_repository_list_stops_the_load_still_running()
+    {
+        using var github = new FirstListWaits(new FakeGitHub());
+        var credentials = new InMemoryCredentialStore();
+        credentials.Write(MainWindowViewModel.GitHubAccountName, FakeGitHub.Token);
+        using var viewModel = CreateViewModel(github, credentials);
+
+        var first = viewModel.LoadRepositoriesAsync();
+        await github.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await viewModel.LoadRepositoriesAsync();
+        await first.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, viewModel.Repositories.Count);
+        Assert.False(viewModel.IsLoadingRepositories);
+        Assert.Null(viewModel.ConnectionError);
+    }
+
+    /// <summary>Holds the first request for the repository list until it is cancelled.</summary>
+    private sealed class FirstListWaits(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        private int _lists;
+
+        public TaskCompletionSource Waiting { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath == "/user/repos" && Interlocked.Increment(ref _lists) == 1)
+            {
+                Waiting.SetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            return await base.SendAsync(request, cancellationToken);
+        }
+    }
+
     /// <summary>Answers every request with a JSON user padded to more than <paramref name="padding"/> bytes, sent without a length.</summary>
     private sealed class LargeAnswerHandler(long padding) : HttpMessageHandler
     {
