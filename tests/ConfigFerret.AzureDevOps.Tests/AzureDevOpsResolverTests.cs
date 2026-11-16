@@ -373,6 +373,604 @@ public class AzureDevOpsResolverTests
 
     private static int Count(IEnumerable<ProvenanceStep> steps) => steps.Sum(s => 1 + Count(s.Origins));
 
+    private static ProvenanceReport TraceMany(string prefix, Dictionary<string, string> values, AzureDevOpsVariableGroups groups, string pipeline)
+    {
+        var environment = values.ToDictionary(v => prefix + v.Key, v => (string?)v.Value);
+        foreach (var (name, value) in environment)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            return ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = environment)
+                .WithAzureDevOps(groups, o => o.AddPipelineText(pipeline.Replace("PFX_", prefix, StringComparison.Ordinal), "azure-pipelines.yml"))
+                .Trace();
+        }
+        finally
+        {
+            foreach (var name in environment.Keys)
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
+    }
+
+    private static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
+        steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
+
+    [Fact]
+    public void Warns_and_infers_when_sibling_stages_disagree()
+    {
+        const string prefix = "CFADOSTAGES_";
+        const string pipeline = """
+            variables:
+            - group: shared
+
+            stages:
+            - stage: Staging
+              variables:
+                PFX_App.Mode: Staging
+              jobs:
+              - deployment: DeployStaging
+                environment: staging
+                strategy:
+                  runOnce:
+                    deploy:
+                      steps:
+                      - script: ./deploy.sh
+                        env:
+                          PFX_Db__Host: $(Staging.Db.Host)
+            - stage: Production
+              variables:
+                PFX_App.Mode: Production
+              jobs:
+              - deployment: DeployProduction
+                environment: production
+                strategy:
+                  runOnce:
+                    deploy:
+                      steps:
+                      - script: ./deploy.sh
+                        env:
+                          PFX_Db__Host: $(Prod.Db.Host)
+            """;
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "shared", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Staging.Db.Host", "db-staging.example", false, "shared", 1),
+                new("Prod.Db.Host", "db-prod.example", false, "shared", 1),
+            ]),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["APP_MODE"] = "Staging", ["Db__Host"] = "db-staging.example" }, groups, pipeline);
+
+        // The tracer marks the last step effective, so the alternative with the value seen here goes last.
+        var host = Assert.Single(report.Find("Db:Host")!.Steps).Origins;
+        Assert.Equal(["Azure DevOps variable group shared variable Prod.Db.Host", "Azure DevOps variable group shared variable Staging.Db.Host"], host.Select(s => s.Source));
+        Assert.All(host, s => Assert.True(s.IsInferred));
+        Assert.All(host, s => Assert.DoesNotContain("differs", s.Note, StringComparison.Ordinal));
+        var mode = Assert.Single(report.Find("APP_MODE")!.Steps).Origins;
+        Assert.Equal([$"Azure Pipelines variable {prefix}App.Mode (stage Production)", $"Azure Pipelines variable {prefix}App.Mode (stage Staging)"], mode.Select(s => s.Source));
+        Assert.All(mode, s => Assert.True(s.IsInferred));
+        Assert.All(mode, s => Assert.Equal("matched by name: scripts see " + prefix + "App.Mode as " + prefix + "APP_MODE", s.Note));
+
+        const string why = ", and the trace cannot tell which one ran this, so their steps are marked inferred.";
+        Assert.Contains($"Azure Pipelines job DeployStaging in stage Staging, job DeployProduction in stage Production link {prefix}Db__Host to different values{why}", report.Warnings);
+        Assert.Contains($"Azure Pipelines stage Staging, stage Production set {prefix}App.Mode differently{why}", report.Warnings);
+        Assert.All(report.Warnings, w => Assert.DoesNotContain(".example", w, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Gives_a_group_only_to_the_stage_that_links_it()
+    {
+        const string prefix = "CFADOGROUP_";
+        const string pipeline = """
+            stages:
+            - stage: Staging
+              variables:
+              - group: api-staging
+              - name: Db.Alias
+                value: $(Db.Host)
+              jobs:
+              - job: Deploy
+                steps:
+                - script: ./deploy.sh
+                  env:
+                    PFX_Db__Host: $(Db.Host)
+                    PFX_MAIL_AUTH: $(Mail.Auth)
+            - stage: Production
+              variables:
+              - group: api-production
+              jobs:
+              - job: Deploy
+                steps:
+                - script: ./deploy.sh
+                  env:
+                    PFX_Db__Host: $(Db.Host)
+                    PFX_MAIL_AUTH: $(Mail.Auth)
+            """;
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "api-staging", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Db.Host", "db-staging.example", false, "api-staging", 1),
+                new("Mail.Auth", null, true, "api-staging", 1),
+            ]),
+            new(2, "api-production", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Db.Host", "db-prod.example", false, "api-production", 2),
+                new("Mail.Auth", null, true, "api-production", 2),
+            ]),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["Db__Host"] = "db-staging.example", ["MAIL_AUTH"] = "fake-mail-auth" }, groups, pipeline);
+
+        var host = Assert.Single(report.Find("Db:Host")!.Steps).Origins;
+        Assert.Equal(["Azure DevOps variable group api-production variable Db.Host", "Azure DevOps variable group api-staging variable Db.Host"], host.Select(s => s.Source));
+        Assert.All(host, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"Azure Pipelines job Deploy in stage Staging, job Deploy in stage Production link {prefix}Db__Host to different values", StringComparison.Ordinal));
+
+        // Links that disagree are not matches by name, so the note about env: blocks does not apply. The key does not
+        // look secret, so only the secret group variables make it sensitive.
+        var auth = report.Find("MAIL_AUTH")!;
+        Assert.True(auth.IsSensitive);
+        var secrets = Assert.Single(auth.Steps).Origins;
+        Assert.Equal(["Azure DevOps variable group api-staging secret Mail.Auth", "Azure DevOps variable group api-production secret Mail.Auth"], secrets.Select(s => s.Source));
+        Assert.All(secrets, s => Assert.True(s.IsInferred));
+        Assert.All(secrets, s => Assert.DoesNotContain("reach scripts", s.Note, StringComparison.Ordinal));
+        Assert.DoesNotContain("fake-mail-auth", report.ToText(), StringComparison.Ordinal);
+
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), groups);
+        var alias = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.AzureDevOps, Source = "a", Reference = new AzurePipelinesVariableRef("azure-pipelines.yml", 5, "Db.Alias") }, new TraceDiagnostics());
+        var only = Assert.Single(alias);
+        Assert.Equal("Azure DevOps variable group api-staging variable Db.Host", only.Source);
+        Assert.False(only.IsInferred);
+    }
+
+    [Fact]
+    public void Follows_a_stage_variable_to_its_own_stage_only()
+    {
+        const string pipeline = """
+            variables:
+              Db.Name: default-db
+              Pipeline.Alias: $(Db.Name)
+            stages:
+            - stage: Staging
+              variables:
+                Db.Name: staging-db
+                Db.Alias: $(Db.Name)
+            - stage: Production
+              variables:
+                Db.Name: prod-db
+            """;
+        var diagnostics = new TraceDiagnostics();
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []));
+
+        var staging = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.AzureDevOps, Source = "a", Reference = new AzurePipelinesVariableRef("azure-pipelines.yml", 8, "Db.Alias") }, diagnostics);
+
+        Assert.Equal(["default-db", "staging-db"], staging.Select(s => s.Value));
+        Assert.Equal(["Azure Pipelines variable Db.Name", "Azure Pipelines variable Db.Name (stage Staging)"], staging.Select(s => s.Source));
+        Assert.All(staging, s => Assert.False(s.IsInferred));
+        Assert.Empty(diagnostics.Warnings);
+
+        var shared = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.AzureDevOps, Source = "a", Reference = new AzurePipelinesVariableRef("azure-pipelines.yml", 3, "Pipeline.Alias") }, diagnostics);
+
+        Assert.Equal(["default-db", "staging-db", "prod-db"], shared.Select(s => s.Value));
+        Assert.Equal([false, true, true], shared.Select(s => s.IsInferred));
+        Assert.Equal("Azure Pipelines stage Staging, stage Production set Db.Name differently, and the trace cannot tell which one ran this, so their steps are marked inferred.", Assert.Single(diagnostics.Warnings));
+    }
+
+    [Fact]
+    public void Counts_a_stage_variable_for_the_stage_jobs_that_do_not_set_it_again()
+    {
+        const string pipeline = """
+            stages:
+            - stage: Deploy
+              variables:
+                Db.Name: stage-db
+                Stage.Alias: $(Db.Name)
+              jobs:
+              - job: Migrate
+                variables:
+                  Db.Name: migrate-db
+                  Job.Alias: $(Db.Name)
+              - job: Web
+                steps:
+                - script: ./run.sh
+            """;
+        var diagnostics = new TraceDiagnostics();
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []));
+
+        var job = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.AzureDevOps, Source = "a", Reference = new AzurePipelinesVariableRef("azure-pipelines.yml", 10, "Job.Alias") }, diagnostics);
+
+        Assert.Equal(["stage-db", "migrate-db"], job.Select(s => s.Value));
+        Assert.All(job, s => Assert.False(s.IsInferred));
+        Assert.Empty(diagnostics.Warnings);
+
+        var stage = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.AzureDevOps, Source = "a", Reference = new AzurePipelinesVariableRef("azure-pipelines.yml", 5, "Stage.Alias") }, diagnostics);
+
+        Assert.Equal(["stage-db", "migrate-db"], stage.Select(s => s.Value));
+        Assert.All(stage, s => Assert.True(s.IsInferred));
+        Assert.Equal("Azure Pipelines stage Deploy, job Migrate in stage Deploy set Db.Name differently, and the trace cannot tell which one ran this, so their steps are marked inferred.", Assert.Single(diagnostics.Warnings));
+    }
+
+    [Theory]
+    [InlineData("env", "Password,User,User")]
+    [InlineData("env", "User,Password,User")]
+    [InlineData("env", "Password,User,Password")]
+    [InlineData("env", "User,User,Password")]
+    [InlineData("variables", "Password,User")]
+    [InlineData("variables", "User,Password")]
+    public void Redacts_every_alternative_when_one_may_be_secret(string form, string order)
+    {
+        const string prefix = "CFADOALT_";
+        const string secret = "fake-smtp-pass";
+        var pipeline = new StringBuilder("stages:\n");
+        var stage = 0;
+        foreach (var source in order.Split(','))
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- stage: s{stage++}\n");
+            pipeline.Append(form == "env"
+                ? $"  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        PFX_MAIL_AUTH: $(Smtp.{source})\n"
+                : $"  variables:\n    PFX_Mail.Auth: $(Smtp.{source})\n");
+        }
+
+        // Neither is secret in Azure DevOps; one is named like a secret. The value seen here is neither of them.
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "mail", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Smtp.Password", secret, false, "mail", 1),
+                new("Smtp.User", "fake-user", false, "mail", 1),
+            ]),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = $"smtp://fake-user:{secret}@mail" }, groups, pipeline.ToString());
+
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.Explain("MAIL_AUTH"), StringComparison.Ordinal);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
+        Assert.All(report.Warnings, w => Assert.DoesNotContain(secret, w, StringComparison.Ordinal));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Does_work_in_proportion_to_the_stages_that_link_a_name()
+    {
+        // Each stage links the shared group and sets Db.Host, and its job links Db__Host to it. Following each link may
+        // look at its own stage and job only. There are fewer than the bound on one step, so every link is followed.
+        const int stages = 400;
+        var pipeline = new StringBuilder("stages:\n");
+        for (var i = 0; i < stages; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- stage: s{i}\n  variables:\n  - group: shared\n  - name: Db.Host\n    value: h{i}\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        Db__Host: $(Db.Host)\n");
+        }
+
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "shared", AzureDevOpsGroupType.Vsts, null, null, null, [new("Db.Host", "g", false, "shared", 1)]),
+        ]);
+        var resolver = Resolver(o => o.AddPipelineText(pipeline.ToString(), "azure-pipelines.yml"), groups);
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = await Task.Run(
+            () =>
+            {
+                var found = resolver.Resolve(EnvStep("Db__Host", "h7"), diagnostics);
+                foreach (var step in found)
+                {
+                    resolver.Resolve(step, diagnostics);
+                }
+
+                return found;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2 * stages, steps.Count);
+        Assert.Equal("h7", steps[^1].Value);
+        Assert.InRange(resolver.Examined, stages, 30L * stages);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task Bounds_the_work_when_every_link_sees_many_pipeline_variables()
+    {
+        // Each stage's job links Db__Host to Db.X, and every job sees each of the pipeline's Db.X items.
+        const int stages = 1_000;
+        const int items = 1_000;
+        var pipeline = new StringBuilder("variables:\n");
+        for (var i = 0; i < items; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- name: Db.X\n  value: v{i}\n");
+        }
+
+        pipeline.Append("stages:\n");
+        for (var i = 0; i < stages; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- stage: s{i}\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        Db__Host: $(Db.X)\n");
+        }
+
+        var resolver = Resolver(o => o.AddPipelineText(pipeline.ToString(), "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = await Task.Run(() => resolver.Resolve(EnvStep("Db__Host", "v7"), diagnostics), TestContext.Current.CancellationToken);
+
+        Assert.InRange(resolver.Examined, stages, 20L * (stages + items));
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.All(steps, s =>
+        {
+            Assert.True(s.IsSensitive);
+            Assert.True(s.IsInferred);
+        });
+        Assert.Contains("Db__Host is linked or set in more Azure Pipelines stages, jobs and variables than the trace follows for one step (1,000), so not all of them were followed; the steps listed are marked inferred and sensitive.", diagnostics.Warnings);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Lets_a_stage_variable_win_over_the_pipeline_one_wherever_it_is_written(bool rootFirst)
+    {
+        const string root = "variables:\n  H: root\n";
+        const string stages = "stages:\n"
+            + "- stage: s1\n  variables:\n    H: a\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        MAIL_AUTH: $(H)\n"
+            + "- stage: s2\n  variables:\n    H: b\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        MAIL_AUTH: $(H)\n";
+        var resolver = Resolver(o => o.AddPipelineText(rootFirst ? root + stages : stages + root, "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "a"), diagnostics);
+
+        // Each stage's own H wins over the pipeline's, so the two stages disagree.
+        Assert.Equal(["root", "b", "root", "a"], steps.Select(s => s.Value));
+        Assert.All(steps, s => Assert.True(s.IsInferred));
+        Assert.Contains("Azure Pipelines job run in stage s1, job run in stage s2 link MAIL_AUTH to different values, and the trace cannot tell which one ran this, so their steps are marked inferred.", diagnostics.Warnings);
+    }
+
+    [Fact]
+    public void Lets_a_job_variable_win_over_a_stage_one_written_after_it()
+    {
+        const string pipeline = "stages:\n- stage: s1\n  jobs:\n  - job: run\n    variables:\n      H: job\n    steps:\n    - script: ./run.sh\n      env:\n        MAIL_AUTH: $(H)\n  variables:\n    H: stage\n";
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []));
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "job"), new TraceDiagnostics());
+
+        Assert.Equal(["stage", "job"], steps.Select(s => s.Value));
+        Assert.All(steps, s => Assert.False(s.IsInferred));
+    }
+
+    [Fact]
+    public void Compares_what_a_reference_comes_to_in_each_stage()
+    {
+        const string prefix = "CFADOREF_";
+        const string pipeline = """
+            stages:
+            - stage: Staging
+              variables:
+                Host.Var: db-staging.example
+                PFX_Db.Host: $(Host.Var)
+              jobs:
+              - job: Deploy
+                steps:
+                - script: ./deploy.sh
+                  env:
+                    PFX_Db__Host: $(PFX_Db.Host)
+            - stage: Production
+              variables:
+                Host.Var: db-production.example
+                PFX_Db.Host: $(Host.Var)
+              jobs:
+              - job: Deploy
+                steps:
+                - script: ./deploy.sh
+                  env:
+                    PFX_Db__Host: $(PFX_Db.Host)
+            """;
+        var groups = new AzureDevOpsVariableGroups("contoso/api", []);
+
+        var report = TraceMany(prefix, new() { ["Db__Host"] = "db-staging.example", ["DB_HOST"] = "db-staging.example" }, groups, pipeline);
+
+        var host = Assert.Single(report.Find("Db:Host")!.Steps).Origins;
+        Assert.Equal([$"Azure Pipelines variable {prefix}Db.Host (stage Production)", $"Azure Pipelines variable {prefix}Db.Host (stage Staging)"], host.Select(s => s.Source));
+        Assert.All(host, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"Azure Pipelines job Deploy in stage Staging, job Deploy in stage Production link {prefix}Db__Host to different values", StringComparison.Ordinal));
+        var byName = Assert.Single(report.Find("DB_HOST")!.Steps).Origins;
+        Assert.Equal(2, byName.Count);
+        Assert.All(byName, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"Azure Pipelines stage Staging, stage Production set {prefix}Db.Host differently", StringComparison.Ordinal));
+
+        // When the reference comes to the same variable in each stage, it is one certain link.
+        const string agreeing = "variables:\n  Host.Var: db.example\nstages:\n"
+            + "- stage: Staging\n  variables:\n    PFX_Db.Host: $(Host.Var)\n  jobs:\n  - job: Deploy\n    steps:\n    - script: ./deploy.sh\n      env:\n        PFX_Db__Host: $(PFX_Db.Host)\n"
+            + "- stage: Production\n  variables:\n    PFX_Db.Host: $(Host.Var)\n  jobs:\n  - job: Deploy\n    steps:\n    - script: ./deploy.sh\n      env:\n        PFX_Db__Host: $(PFX_Db.Host)\n";
+        var shared = TraceMany(prefix, new() { ["Db__Host"] = "db.example" }, groups, agreeing);
+        Assert.False(Assert.Single(Assert.Single(shared.Find("Db:Host")!.Steps).Origins).IsInferred);
+    }
+
+    [Theory]
+    [InlineData("steps:\n- script: ./run.sh\n  env:\n    PFX_MAIL_AUTH: $(Smtp.Password)\nstages:\n- stage: Test\n  jobs:\n  - job: run\n    steps:\n    - script: ./test.sh\n      env:\n        PFX_MAIL_AUTH: $(Smtp.User)\n", "the pipeline, job run in stage Test link")]
+    [InlineData("stages:\n- stage: A\n  variables:\n    PFX_Mail.Auth: $(Smtp.Password)\n- stage: B\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        PFX_MAIL_AUTH: $(Smtp.User)\n", "job run in stage B, stage A link or set")]
+    public void Keeps_every_stage_or_job_that_may_set_a_linked_name_as_an_alternative(string pipeline, string parts)
+    {
+        const string prefix = "CFADOMIXED_";
+        const string secret = "fake-smtp-pass";
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "mail", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Smtp.Password", secret, false, "mail", 1),
+                new("Smtp.User", "fake-user", false, "mail", 1),
+            ]),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = "fake-user" }, groups, pipeline);
+
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.Explain("MAIL_AUTH"), StringComparison.Ordinal);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        var origins = Assert.Single(setting.Steps).Origins;
+        Assert.Equal(2, origins.Count);
+        Assert.All(origins, s => Assert.True(s.IsInferred));
+        Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"Azure Pipelines {parts} {prefix}MAIL_AUTH to values that cannot be compared", StringComparison.Ordinal));
+        Assert.All(report.Warnings, w => Assert.DoesNotContain(secret, w, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Marks_a_link_to_a_variable_set_from_a_secret_sensitive_whatever_is_traced_first(bool otherFirst)
+    {
+        // B leads to C, C to A, and A to B in one stage and to Smtp.Password in another.
+        const string pipeline = """
+            variables:
+              B: $(C)
+              C: $(A)
+            stages:
+            - stage: a
+              variables:
+                A: $(B)
+            - stage: b
+              variables:
+                A: $(Smtp.Password)
+            - stage: other_a
+              jobs:
+              - job: run
+                steps:
+                - script: ./run.sh
+                  env:
+                    OTHER: $(A)
+            - stage: other_b
+              jobs:
+              - job: run
+                steps:
+                - script: ./run.sh
+                  env:
+                    OTHER: $(Plain)
+            - stage: mail_a
+              jobs:
+              - job: run
+                steps:
+                - script: ./run.sh
+                  env:
+                    MAIL_AUTH: $(B)
+            - stage: mail_b
+              jobs:
+              - job: run
+                steps:
+                - script: ./run.sh
+                  env:
+                    MAIL_AUTH: $(User.Var)
+            """;
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "plain", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Plain", "p", false, "plain", 1),
+                new("User.Var", "u", false, "plain", 1),
+            ]),
+        ]);
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), groups);
+        var diagnostics = new TraceDiagnostics();
+
+        if (otherFirst)
+        {
+            resolver.Resolve(EnvStep("OTHER", "p"), diagnostics);
+        }
+
+        var mail = resolver.Resolve(EnvStep("MAIL_AUTH", "u"), diagnostics);
+
+        Assert.Equal(2, mail.Count);
+        Assert.All(mail, s => Assert.True(s.IsSensitive));
+    }
+
+    [Fact]
+    public void Orders_alternatives_by_the_value_seen_through_a_reference()
+    {
+        const string prefix = "CFADOSEEN_";
+        const string pipeline = "variables:\n  PFX_Alias: $(Timeout)\nstages:\n- stage: Staging\n  variables:\n    Timeout: 5\n- stage: Production\n  variables:\n    Timeout: 9\n";
+
+        var report = TraceMany(prefix, new() { ["ALIAS"] = "5" }, new AzureDevOpsVariableGroups("contoso/api", []), pipeline);
+
+        // The tracer marks the last step effective, so the alternative with the value seen at the start goes last.
+        var alias = Assert.Single(Assert.Single(report.Find("ALIAS")!.Steps).Origins);
+        Assert.Equal(["9", "5"], alias.Origins.Select(s => s.Value));
+        Assert.True(alias.Origins[^1].IsEffective);
+    }
+
+    [Fact]
+    public void Compares_group_variables_by_value_unless_one_may_be_secret()
+    {
+        const string prefix = "CFADOVALUE_";
+        const string pipeline = """
+            stages:
+            - stage: Staging
+              variables:
+              - group: api-staging
+              jobs:
+              - job: Deploy
+                steps:
+                - script: ./deploy.sh
+                  env:
+                    PFX_Db__Host: $(Db.Host)
+                    PFX_MAIL_AUTH: $(Mail.Auth)
+            - stage: Production
+              variables:
+              - group: api-production
+              jobs:
+              - job: Deploy
+                steps:
+                - script: ./deploy.sh
+                  env:
+                    PFX_Db__Host: $(Db.Host)
+                    PFX_MAIL_AUTH: $(Mail.Auth)
+            """;
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "api-staging", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Db.Host", "db.example", false, "api-staging", 1),
+                new("Mail.Auth", null, true, "api-staging", 1),
+            ]),
+            new(2, "api-production", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Db.Host", "db.example", false, "api-production", 2),
+                new("Mail.Auth", null, true, "api-production", 2),
+            ]),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["Db__Host"] = "db.example", ["MAIL_AUTH"] = "fake-mail-auth" }, groups, pipeline);
+
+        // The same value in both groups is one certain link.
+        Assert.False(Assert.Single(Assert.Single(report.Find("Db:Host")!.Steps).Origins).IsInferred);
+        Assert.DoesNotContain(report.Warnings, w => w.Contains("Db__Host", StringComparison.Ordinal));
+
+        // Secret values are not returned, so the two stay alternatives, and the warning does not say they differ.
+        var auth = report.Find("MAIL_AUTH")!;
+        Assert.True(auth.IsSensitive);
+        Assert.All(Assert.Single(auth.Steps).Origins, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"Azure Pipelines job Deploy in stage Staging, job Deploy in stage Production link {prefix}MAIL_AUTH to values that cannot be compared", StringComparison.Ordinal));
+        Assert.DoesNotContain("fake-mail-auth", report.ToText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Lists_one_link_per_name_with_the_later_line()
+    {
+        const string yaml = "stages:\n- stage: A\n  jobs:\n  - job: run\n    steps:\n    - script: run\n      env:\n        Db__Host: $(A.Host)\n- stage: B\n  jobs:\n  - job: run\n    steps:\n    - script: run\n      env:\n        DB__HOST: $(B.Host)\n";
+
+        var options = new AzureDevOpsTraceOptions().AddPipelineText(yaml, "azure-pipelines.yml");
+
+        var mapping = Assert.Single(options.Mappings);
+        Assert.Equal("DB__HOST>B.Host@azure-pipelines.yml line 15", $"{mapping.Name}>{mapping.VariableName}@{mapping.Where}");
+    }
+
     [Fact]
     public void Ends_a_variables_block_at_the_next_key_and_reads_inline_and_template_forms()
     {
