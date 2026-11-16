@@ -237,6 +237,32 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Compares_a_JSON_key_value_with_the_value_seen_as_JSON()
+    {
+        var handler = Handler().Respond(KeysPath(), Page(
+            null,
+            Kv("Orders:Retry", """{"Count":3,"Delay":5}""", contentType: "application/json"),
+            Kv("Plain", "1", contentType: "text/plain")));
+        var settings = await Load(handler, o => o.IncludeFeatureFlags = false);
+        var resolver = new AzureAppConfigurationResolver(settings, new AzureAppConfigurationTraceOptions().Map("RETRY", "Orders:Retry").Map("PLAIN", "Plain"));
+        string? Note(string name, string value) =>
+            Assert.Single(resolver.Resolve(TestLayers.Env(name, value), new TraceDiagnostics())).Note;
+        const string Differs = "the store's value differs from the value seen here, so the app may need a refresh or the value was transformed";
+
+        Assert.Null(Note("RETRY", """{ "Count": 3,  "Delay": 5 }"""));
+        Assert.Null(Note("RETRY", """{"Delay":5,"Count":3}"""));
+        Assert.Null(Note("RETRY", """{"Count":3.0,"Delay":5}"""));
+        Assert.Equal(Differs, Note("RETRY", """{"Count":4,"Delay":5}"""));
+        Assert.Equal(Differs, Note("RETRY", """{"Count":3}"""));
+        Assert.Equal(Differs, Note("RETRY", "Count=3"));
+        Assert.Equal(Differs, Note("RETRY", new string('[', 100) + new string(']', 100)));
+
+        // A value that is not a JSON content type, and a value flattened from one, are compared as text.
+        Assert.Equal(Differs, Note("PLAIN", "1.0"));
+        Assert.Equal("matched by configuration key; " + Differs, Assert.Single(resolver.Resolve(TestLayers.Env("Orders__Retry__Count", "3.0"), new TraceDiagnostics())).Note);
+    }
+
+    [Fact]
     public async Task Links_a_name_to_a_large_JSON_key_value_in_two_labels_without_cutting_the_trace()
     {
         var retry = "[" + string.Join(",", Enumerable.Repeat("1", 600)) + "]";

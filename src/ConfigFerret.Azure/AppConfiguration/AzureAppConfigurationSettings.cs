@@ -30,7 +30,7 @@ public sealed class AzureAppConfigurationSettings
     internal const int MaxJsonKeyCharactersPerLoad = 10_000_000;
 
     // The provider parses a JSON value wrapped in one more object, with JsonDocument's default depth of 64.
-    private static readonly JsonDocumentOptions JsonOptions = new() { CommentHandling = JsonCommentHandling.Skip, MaxDepth = 63 };
+    internal static readonly JsonDocumentOptions JsonOptions = new() { CommentHandling = JsonCommentHandling.Skip, MaxDepth = 63 };
 
     private static readonly Dictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> NoneFlattened = [];
 
@@ -490,7 +490,7 @@ public sealed class AzureAppConfigurationSettings
     // subtype split on '+' is json, case ignored. The provider leaves out the Key Vault reference and feature flag types
     // only when they match exactly; here case is ignored, so a reference typed in other case is still kept as a
     // reference and its content is never shown as values.
-    private static bool IsJson(string? contentType)
+    internal static bool IsJson(string? contentType)
     {
         var mediaType = contentType?.Split(';')[0].Trim();
         if (string.IsNullOrEmpty(mediaType) || IsContentType(mediaType, KeyVaultReferenceContentType) || IsContentType(mediaType, FeatureFlagContentType))
