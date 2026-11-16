@@ -201,16 +201,31 @@ public static partial class HelmValueUsage
             return [];
         }
 
+        var all = values.ToList();
         var skip = new HashSet<string>(subcharts, StringComparer.Ordinal) { "global" };
-        var dead = new List<DeadHelmValue>();
-        foreach (var (path, file) in values)
-        {
-            if (skip.Contains(path.Split('.')[0]) || references.Any(r => Related(r, path)))
-            {
-                continue;
-            }
 
-            if (!dead.Any(d => d.Path == path && d.File == file))
+        // The values above a reference: those whose path is the text before one of its dots. The text is looked up as a
+        // span, so no string is built for it, and only up to the length of the longest value.
+        var longest = all.Count == 0 ? 0 : all.Max(v => v.Path.Length);
+        var paths = all.Select(v => v.Path).ToHashSet(StringComparer.Ordinal).GetAlternateLookup<ReadOnlySpan<char>>();
+        var above = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in references)
+        {
+            for (var dot = reference.IndexOf('.'); dot >= 0 && dot <= longest; dot = reference.IndexOf('.', dot + 1))
+            {
+                if (paths.TryGetValue(reference.AsSpan(0, dot), out var path))
+                {
+                    above.Add(path);
+                }
+            }
+        }
+
+        var read = references.GetAlternateLookup<ReadOnlySpan<char>>();
+        var seen = new HashSet<(string Path, string File)>();
+        var dead = new List<DeadHelmValue>();
+        foreach (var (path, file) in all)
+        {
+            if (!skip.Contains(path.Split('.')[0]) && !IsRead(path, read, above) && seen.Add((path, file)))
             {
                 dead.Add(new DeadHelmValue(path, file));
             }
@@ -219,10 +234,24 @@ public static partial class HelmValueUsage
         return dead;
     }
 
-    private static bool Related(string reference, string path) =>
-        reference == path
-        || path.StartsWith(reference + ".", StringComparison.Ordinal)
-        || reference.StartsWith(path + ".", StringComparison.Ordinal);
+    // Whether a reference is the path or a path above it, or the path is above a reference.
+    private static bool IsRead(string path, HashSet<string>.AlternateLookup<ReadOnlySpan<char>> references, HashSet<string> above)
+    {
+        if (references.Contains(path) || above.Contains(path))
+        {
+            return true;
+        }
+
+        for (var dot = path.IndexOf('.'); dot >= 0; dot = path.IndexOf('.', dot + 1))
+        {
+            if (references.Contains(path.AsSpan(0, dot)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // Every leaf of the values document: scalars and sequences, by their dotted path. A path longer than MaxPathLength is
     // left out: one long key above many values would otherwise make the paths far bigger than the file. More than
