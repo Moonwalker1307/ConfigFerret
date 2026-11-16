@@ -248,7 +248,8 @@ public sealed class TraceRunner
         var dead = new List<DeadSetting>();
         if (code is { FilesScanned: > 0 })
         {
-            var verdicts = report.Settings.ToDictionary(s => s.Key, s => code.Check(s.Key), StringComparer.OrdinalIgnoreCase);
+            var prefixes = sources.OfType<AppSettingsSource>().SelectMany(a => a.EnvironmentPrefixes).Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var verdicts = report.Settings.ToDictionary(s => s.Key, s => CheckRead(code, s, prefixes), StringComparer.OrdinalIgnoreCase);
             unused = report.FindUnused(verdicts.Where(v => v.Value.IsRead).Select(v => v.Key).ToList());
             foreach (var setting in unused.NotRead ?? [])
             {
@@ -284,6 +285,28 @@ public sealed class TraceRunner
     internal static string SkippedCodeNote(IReadOnlyList<string> files) =>
         $"Reading {string.Join(", ", files.Take(5))}{(files.Count > 5 ? $" and {files.Count - 5} more" : string.Empty)} for the keys the app reads took too long, "
         + $"so {(files.Count == 1 ? "it was" : "they were")} skipped. A setting marked dead may still be read there.";
+
+    // A variable a prefix strips also sets its whole name, such as ORDERS_Db:Password next to Db:Password. Both rows come
+    // from the one variable, so the whole name counts as read when the name without the prefix is. Only a row an
+    // environment variable with that prefix sets gets this: a key in a file that merely starts with the prefix does not.
+    private static ReadVerdict CheckRead(CodeReadScanner code, TracedSetting setting, List<string> prefixes)
+    {
+        var key = setting.Key;
+        var verdict = code.Check(key);
+        foreach (var prefix in prefixes.Where(p => !verdict.IsRead && key.Length > p.Length && key.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (SetByVariableWithPrefix(setting.Steps, prefix) && code.Check(key[prefix.Length..]) is { IsRead: true } stripped)
+            {
+                return stripped;
+            }
+        }
+
+        return verdict;
+    }
+
+    private static bool SetByVariableWithPrefix(IReadOnlyList<ProvenanceStep> steps, string prefix) =>
+        steps.Any(s => (s.Reference is EnvironmentVariableRef variable && variable.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            || SetByVariableWithPrefix(s.Origins, prefix));
 
     private static List<UnusedVariable> FindUnusedVariables(
         ProvenanceReport report,
@@ -486,7 +509,8 @@ public sealed class TraceRunner
 
         var prefixes = apps.SelectMany(a => a.EnvironmentPrefixes).Distinct(StringComparer.Ordinal).ToList();
         AddWorkflowEnvironment(environment, github, builder, prefixes, notes);
-        foreach (var prefix in prefixes.Count == 0 ? [string.Empty] : prefixes)
+        // As the .NET hosts do: the unprefixed provider always, then one more for each prefix the app strips.
+        foreach (var prefix in prefixes.Prepend(string.Empty).Distinct(StringComparer.Ordinal))
         {
             builder.Add(new SimulatedEnvironmentVariablesSource(environment, prefix));
         }
@@ -691,18 +715,9 @@ public sealed class TraceRunner
 
     private static bool LooksLikeAppSetting(string name, List<string> prefixes, HashSet<string> keys)
     {
-        var rest = name;
-        if (prefixes.Count > 0)
-        {
-            var prefix = prefixes.FirstOrDefault(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase));
-            if (prefix is null)
-            {
-                return false;
-            }
-
-            rest = name[prefix.Length..];
-        }
-
+        // The unprefixed provider reads every variable, a prefixed one also reads it without its prefix.
+        var prefix = prefixes.FirstOrDefault(p => p.Length > 0 && name.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+        var rest = prefix is null ? name : name[prefix.Length..];
         return rest.Contains("__", StringComparison.Ordinal)
             || rest.Contains("CONNSTR_", StringComparison.OrdinalIgnoreCase)
             || keys.Contains(rest);

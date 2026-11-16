@@ -435,7 +435,7 @@ public class TraceRunnerSourcesTests : IDisposable
     }
 
     [Fact]
-    public async Task Prefixes_of_all_apps_pick_and_strip_the_variables_they_name()
+    public async Task Prefixes_of_all_apps_strip_the_variables_they_name_and_every_variable_still_counts()
     {
         var one = App("{}", "one");
         one.EnvironmentPrefixes = ["ORDERS_", "SHARED_"];
@@ -448,9 +448,70 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Equal("1", result.Report.Find("A")!.Value);
         Assert.Equal("2", result.Report.Find("B")!.Value);
         Assert.Equal("3", result.Report.Find("C")!.Value);
-        Assert.Null(result.Report.Find("D"));
-        Assert.Null(result.Report.Find("PLAIN"));
         Assert.Single(result.Report.Settings, s => s.Key == "B");
+
+        // The host's unprefixed provider reads every variable under its whole name, as the .NET hosts do.
+        Assert.Null(result.Report.Find("D"));
+        Assert.Equal("4", result.Report.Find("OTHER_D")!.Value);
+        Assert.Equal("5", result.Report.Find("PLAIN")!.Value);
+        Assert.Equal("1", result.Report.Find("ORDERS_A")!.Value);
+    }
+
+    [Fact]
+    public async Task A_prefix_the_app_strips_does_not_hide_the_containers_other_variables()
+    {
+        var app = App("""{"Db":{"Host":"localhost","Password":""}}""");
+        app.EnvironmentPrefixes = ["CFG_"];
+        var manifests = new KubernetesSource
+        {
+            Paths = [Write("k8s/orders.yaml", """
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: orders-config
+                data:
+                  Cache__Ttl: "60"
+                ---
+                apiVersion: v1
+                kind: Secret
+                metadata:
+                  name: db-secret
+                stringData:
+                  password: fake-password-for-tests
+                ---
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: orders
+                spec:
+                  template:
+                    spec:
+                      containers:
+                        - name: orders
+                          image: orders:1
+                          env:
+                            - name: Db__Host
+                              value: prod-db.internal
+                            - name: Db__Password
+                              valueFrom:
+                                secretKeyRef:
+                                  name: db-secret
+                                  key: password
+                          envFrom:
+                            - prefix: CFG_
+                              configMapRef:
+                                name: orders-config
+                """)],
+        };
+
+        var result = await Run(ProfileOf(app, manifests));
+
+        var host = result.Report.Find("Db:Host")!;
+        Assert.Equal("prod-db.internal", host.Value);
+        Assert.DoesNotContain("appsettings", host.EffectiveStep!.Source, StringComparison.Ordinal);
+        Assert.Contains(host.EffectiveStep.Origins, o => o.Kind == LayerKind.KubernetesWorkload);
+        Assert.Contains(result.Report.Find("Db:Password")!.EffectiveStep!.Origins, o => o.Kind == LayerKind.KubernetesSecret);
+        Assert.Equal("60", result.Report.Find("Cache:Ttl")!.Value);
     }
 
     [Fact]
@@ -936,6 +997,20 @@ public class TraceRunnerSourcesTests : IDisposable
 
         Assert.Null(ProblemOf(result, github));
         Assert.Contains(handler.Requests, r => r.RequestUri!.AbsolutePath == "/repos/contoso/orders/environments/prod/variables");
+    }
+
+    [Fact]
+    public async Task A_workflow_variable_without_the_apps_prefix_still_reaches_the_setting()
+    {
+        var app = App("""{"Db":{"Host":"base"}}""");
+        app.EnvironmentPrefixes = ["ORDERS_"];
+        var github = GitHubSourceFor();
+        github.Workflows = [Write("workflows/deploy.yml", "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    env:\n      Db__Host: ${{ vars.Db__Host }}\n    steps:\n      - run: ./deploy.sh\n")];
+
+        var result = await Run(ProfileOf(app, github), name => Token, http: GitHub().Client);
+
+        Assert.Null(ProblemOf(result, github));
+        Assert.Equal("gh-host", result.Report.Find("Db:Host")!.Value);
     }
 
     [Fact]

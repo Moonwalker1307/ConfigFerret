@@ -92,7 +92,10 @@ public sealed partial class AppSettingsSource : SourceSettings
     /// <summary>More JSON settings files, added after the app's own.</summary>
     public List<string> ExtraFiles { get; set; } = [];
 
-    /// <summary>The prefixes the app's environment variables provider strips, for example ORDERS_. Empty means no prefix.</summary>
+    /// <summary>
+    /// The prefixes the app strips with AddEnvironmentVariables(prefix), for example ORDERS_. Each adds a provider next to
+    /// the unprefixed one the host always adds.
+    /// </summary>
     public List<string> EnvironmentPrefixes { get; set; } = [];
 
     /// <summary><see cref="ExtraFiles"/> as one file per line.</summary>

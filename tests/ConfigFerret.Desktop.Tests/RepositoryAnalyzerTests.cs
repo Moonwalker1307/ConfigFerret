@@ -141,7 +141,7 @@ public class RepositoryAnalyzerTests : IDisposable
     }
 
     [Fact]
-    public void Finds_the_environment_prefix_in_the_app_code_when_the_manifests_give_none()
+    public void Finds_the_environment_prefix_in_the_app_code_without_manifests()
     {
         var scan = RepositoryScanner.Scan(OrdersRepo.Root);
         var choices = new AnalysisChoices { App = "src/Orders.Api", HelmChart = null };

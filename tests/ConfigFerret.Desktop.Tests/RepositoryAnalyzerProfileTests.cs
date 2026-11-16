@@ -812,15 +812,15 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     }
 
     [Fact]
-    public void Prefixes_come_from_the_env_from_entries_of_the_traced_container_without_duplicates_or_blanks()
+    public void An_env_from_prefix_alone_is_not_taken_for_one_the_app_strips()
     {
+        // Kubernetes adds the prefix to the variable names; only the app's code says it strips one.
         Write("src/Orders/appsettings.json", "{}");
-        Write("k8s/all.yaml", Deployment("orders", Container("orders", prefixes: EnvFrom("ORDERS_") + EnvFrom("ORDERS_") + EnvFrom(null) + EnvFrom("CACHE_"))));
-        Write("src/Orders/Program.cs", "builder.Configuration.AddEnvironmentVariables(\"CODE_\");");
+        Write("k8s/all.yaml", Deployment("orders", Container("orders", prefixes: EnvFrom("ORDERS_") + EnvFrom(null) + EnvFrom("CACHE_"))));
 
         var (profile, _) = Build(NoTools(), new AnalysisChoices { App = "src/Orders" });
 
-        Assert.Equal(["ORDERS_", "CACHE_"], profile.Sources.OfType<AppSettingsSource>().Single().EnvironmentPrefixes);
+        Assert.Empty(profile.Sources.OfType<AppSettingsSource>().Single().EnvironmentPrefixes);
     }
 
     [Fact]
@@ -917,8 +917,38 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         Assert.Empty(AppFor("src/Orders/Program.vb", "x.AddEnvironmentVariables(\"VB_\")").EnvironmentPrefixes);
     }
 
+    [Theory]
+    [InlineData("const string Prefix = \"ORDERS_\";\nbuilder.Configuration.AddEnvironmentVariables(prefix: Prefix);")]
+    [InlineData("builder.Configuration.AddEnvironmentVariables(o => o.Prefix = \"ORDERS_\");")]
+    public void An_env_from_prefix_the_code_scan_cannot_find_is_named_in_a_note(string code)
+    {
+        Write("src/Orders/appsettings.json", "{}");
+        Write("src/Orders/Program.cs", code);
+        Write("k8s/all.yaml", Deployment("orders", Container("orders", prefixes: EnvFrom("ORDERS_"))));
+
+        var (profile, notes) = Build(NoTools(), new AnalysisChoices { App = "src/Orders" });
+
+        Assert.Empty(profile.Sources.OfType<AppSettingsSource>().Single().EnvironmentPrefixes);
+        Assert.Contains(
+            "The container's envFrom adds the prefix ORDERS_ to the names of the variables it adds, and no AddEnvironmentVariables(\"ORDERS_\") call was found in the app's code, so they are traced under their whole names. "
+            + "If the app strips ORDERS_ another way, such as with a constant or the options overload, its keys are the names without it.",
+            notes);
+    }
+
     [Fact]
-    public void Manifest_prefixes_win_over_prefixes_in_code()
+    public void No_prefix_note_when_the_code_strips_the_env_from_prefix()
+    {
+        Write("src/Orders/appsettings.json", "{}");
+        Write("src/Orders/Program.cs", "builder.Configuration.AddEnvironmentVariables(\"orders_\");");
+        Write("k8s/all.yaml", Deployment("orders", Container("orders", prefixes: EnvFrom("ORDERS_"))));
+
+        var (_, notes) = Build(NoTools(), new AnalysisChoices { App = "src/Orders" });
+
+        Assert.DoesNotContain(notes, n => n.Contains("envFrom adds the prefix", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Prefixes_come_from_the_code_and_not_from_the_manifests()
     {
         Write("src/Orders/Program.cs", "x.AddEnvironmentVariables(\"CODE_\");");
         Write("k8s/all.yaml", Deployment("orders", Container("orders", prefixes: EnvFrom("K8S_"))));
@@ -926,7 +956,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
 
         var (profile, _) = Build(NoTools(), new AnalysisChoices { App = "src/Orders" });
 
-        Assert.Equal(["K8S_"], profile.Sources.OfType<AppSettingsSource>().Single().EnvironmentPrefixes);
+        Assert.Equal(["CODE_"], profile.Sources.OfType<AppSettingsSource>().Single().EnvironmentPrefixes);
     }
 
     // Running tools

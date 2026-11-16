@@ -87,16 +87,22 @@ public sealed class MainWindowTests : IDisposable
         Assert.True(viewModel.Rows.Single(r => r.Key == "Payments:ApiKey").IsDead);
         Assert.False(viewModel.Rows.Single(r => r.Key == "Cache:Ttl").IsDead);
 
+        // The ORDERS_ variable also sets its whole name; the app reads it without the prefix, so neither row is dead.
+        Assert.False(viewModel.Rows.Single(r => r.Key == "Db:Password").IsDead);
+        Assert.False(viewModel.Rows.Single(r => r.Key == "ORDERS_Db:Password").IsDead);
+
         // The stat tiles are the filters; picking the active one again shows every row.
         viewModel.SelectTileCommand.Execute("Dead");
         Assert.True(viewModel.IsDeadTile);
         Assert.All(viewModel.Rows, r => Assert.True(r.IsDead));
+        Assert.DoesNotContain(viewModel.Rows, r => r.Key == "ORDERS_Db:Password");
         Assert.Equal(viewModel.DeadCount, viewModel.Rows.Count);
+        // The host's unprefixed provider also reads the ORDERS_ variables under their whole name.
         viewModel.SelectTileCommand.Execute("Exposed");
-        Assert.Equal(["Db:Password", "Payments:ApiKey"], viewModel.Rows.Select(r => r.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(["Db:Password", "ORDERS_Db:Password", "Payments:ApiKey"], viewModel.Rows.Select(r => r.Key).Order(StringComparer.Ordinal));
         viewModel.SelectTileCommand.Execute("Protected");
         Assert.True(viewModel.ProtectedCount > 0);
-        Assert.Equal("Maps:ApiKey", Assert.Single(viewModel.Rows).Key);
+        Assert.Equal(["Maps:ApiKey", "ORDERS_Maps:ApiKey"], viewModel.Rows.Select(r => r.Key).Order(StringComparer.Ordinal));
         Assert.Equal(viewModel.ProtectedCount, viewModel.Rows.Count);
         viewModel.SelectTileCommand.Execute("Overridden");
         Assert.All(viewModel.Rows, r => Assert.True(r.IsOverridden));
