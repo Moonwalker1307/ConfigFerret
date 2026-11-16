@@ -43,7 +43,7 @@ public class HelmResolverTests
         var step = Assert.Single(Resolve(ConfigMapStep("KEY", "9")));
 
         Assert.Equal(new HelmValueRef("a"), step.Reference);
-        Assert.Equal("renders .Values.a; the values give '1' but the manifest has '9', so the release may be out of date or the template transforms it", step.Note);
+        Assert.Equal("renders .Values.a; the values differ from the manifest, so the release may be out of date or the template transforms it", step.Note);
     }
 
     [Fact]
