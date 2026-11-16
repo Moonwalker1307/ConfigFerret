@@ -14,11 +14,29 @@ public class TraceRunnerTests
     public void The_note_on_skipped_code_files_names_the_first_five()
     {
         Assert.Equal(
-            "The search for the keys the app reads skipped A.cs, because it is over 1 MB or took too long to read. A setting marked dead may still be read there.",
+            "The search for the keys the app reads skipped A.cs, because it is over 1 MB, doesn't fit in the 64 MB of code the scan holds, comes past the first 5000 files, or took too long to read. A setting marked dead may still be read there.",
             TraceRunner.SkippedCodeNote(["A.cs"]));
         Assert.Equal(
-            "The search for the keys the app reads skipped F0.cs, F1.cs, F2.cs, F3.cs, F4.cs and 4995 more, because they are over 1 MB or took too long to read. A setting marked dead may still be read there.",
-            TraceRunner.SkippedCodeNote(Enumerable.Range(0, 5000).Select(i => $"F{i}.cs").ToList()));
+            "The search for the keys the app reads skipped A.cs, because it is over 1 MB, doesn't fit in the 64 MB of code the scan holds, comes past the first 5000 files, or took too long to read. A setting marked dead may still be read there. The scan didn't look for the classes it declares, so every class counts as having any property.",
+            TraceRunner.SkippedCodeNote(["A.cs"], allClassesOpen: true));
+        Assert.Equal(
+            "The search for the keys the app reads skipped F0.cs, F1.cs, F2.cs, F3.cs, F4.cs and 4995 more, because they are over 1 MB, don't fit in the 64 MB of code the scan holds, come past the first 5000 files, or took too long to read. A setting marked dead may still be read there. The scan didn't look for the classes they declare, so every class counts as having any property.",
+            TraceRunner.SkippedCodeNote(Enumerable.Range(0, 5000).Select(i => $"F{i}.cs").ToList(), allClassesOpen: true));
+        Assert.StartsWith(
+            "The search for the keys the app reads skipped F0.cs, F1.cs, F2.cs, F3.cs, F4.cs and 99995 more, because they are",
+            TraceRunner.SkippedCodeNote(Enumerable.Range(0, 1000).Select(i => $"F{i}.cs").ToList(), count: 100_000),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_note_on_project_references_not_followed_names_the_first_five()
+    {
+        Assert.Equal(
+            "The search for the keys the app reads did not follow all project references: \"../P50/P50.csproj\" (past the first 50 projects). A setting marked dead may still be read there.",
+            TraceRunner.SkippedReferencesNote(["\"../P50/P50.csproj\" (past the first 50 projects)"]));
+        Assert.Equal(
+            "The search for the keys the app reads did not follow all project references: \"P0\" (x), \"P1\" (x), \"P2\" (x), \"P3\" (x), \"P4\" (x) and 2 more. A setting marked dead may still be read there.",
+            TraceRunner.SkippedReferencesNote(Enumerable.Range(0, 7).Select(i => $"\"P{i}\" (x)").ToList()));
     }
 
     [Fact]

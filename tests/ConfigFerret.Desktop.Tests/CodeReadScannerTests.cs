@@ -985,6 +985,37 @@ public class CodeReadScannerTests
     }
 
     [Fact]
+    public void Code_past_what_the_scan_holds_at_once_is_skipped_and_listed()
+    {
+        using var temp = new TempFolder();
+        temp.Write("Program.cs", """services.Configure<AppOptions>(cfg.GetSection("App"));""" + new string(' ', 50));
+        temp.Write("AppOptions.cs", """public partial class AppOptions { public int Port { get; set; } }""" + new string(' ', 40));
+        temp.Write("Later.cs", """public partial class AppOptions { public string Region { get; set; } = ""; }""" + new string(' ', 1000));
+
+        // Whatever order the files come in, the two small ones fit in 250 bytes and the big one never does.
+        var scanner = CodeReadScanner.Scan(temp.Path, 250, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, scanner.FilesScanned);
+        Assert.Equal(["Later.cs"], scanner.SkippedFiles);
+        Assert.True(scanner.AllClassesOpen);
+        Assert.True(scanner.Check("App:Port").IsRead);
+        Assert.True(scanner.Check("App:Region").IsRead);
+    }
+
+    [Fact]
+    public void Reads_the_scan_cannot_work_out_are_listed_for_the_first_thousand_places_and_all_counted()
+    {
+        var scanner = Scan(Repeat("var a = config[x]; var b = config[y];\n", 3000), "var c = config[z];");
+
+        Assert.Equal(3001, scanner.DynamicReadCount);
+        Assert.Equal(1000, scanner.DynamicReads.Count);
+        Assert.Equal("File0.cs (line 1)", scanner.DynamicReads[0]);
+        Assert.Equal("File0.cs (line 1000)", scanner.DynamicReads[^1]);
+
+        static string Repeat(string line, int count) => string.Concat(Enumerable.Repeat(line, count));
+    }
+
+    [Fact]
     public void The_classes_of_a_file_over_one_megabyte_are_left_open()
     {
         using var temp = new TempFolder();
@@ -999,21 +1030,31 @@ public class CodeReadScannerTests
         var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(["Generated/Big.cs".Replace('/', Path.DirectorySeparatorChar)], scanner.SkippedFiles);
+        Assert.False(scanner.AllClassesOpen);
         Assert.True(scanner.Check("App:Port").IsRead);
         Assert.True(scanner.Check("App:Region").IsRead);
         Assert.Equal(new ReadVerdict(false, "Checked is bound to CheckedOptions, which has no property Color"), scanner.Check("Checked:Color"));
     }
 
     [Fact]
-    public void Reads_at_most_five_thousand_files()
+    public void Reads_at_most_five_thousand_files_and_lists_the_rest_in_name_order()
     {
         using var temp = new TempFolder();
-        for (var i = 0; i < 5002; i++)
+        temp.Write("A.cs", """services.Configure<AppOptions>(cfg.GetSection("App")); public partial class AppOptions { public int Port { get; set; } }""");
+        for (var i = 0; i < 5000; i++)
         {
             File.WriteAllText(temp.Full($"F{i}.cs"), "var x = 1;");
         }
 
-        Assert.Equal(5000, CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken).FilesScanned);
+        temp.Write("Z.cs", """public partial class AppOptions { public int Late { get; set; } }""");
+
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(5000, scanner.FilesScanned);
+        Assert.Equal(["F999.cs", "Z.cs"], scanner.SkippedFiles);
+        Assert.True(scanner.AllClassesOpen);
+        Assert.True(scanner.Check("App:Late").IsRead);
+        Assert.True(scanner.Check("App:Anything").IsRead);
     }
 
     [Fact]
@@ -1027,7 +1068,149 @@ public class CodeReadScannerTests
             temp.Write($"P{i}/Code.cs", "var x = 1;");
         }
 
-        Assert.Equal(50, CodeReadScanner.Scan(temp.Full("P0"), TestContext.Current.CancellationToken).FilesScanned);
+        var scanner = CodeReadScanner.Scan(temp.Full("P0"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(50, scanner.FilesScanned);
+        Assert.Empty(scanner.SkippedFiles);
+        Assert.Equal(["\"..\\P50\\P50.csproj\" (past the first 50 projects)"], scanner.SkippedReferences);
+    }
+
+    // The walk of Api reads the files of M50 to M60, but their project files come past the first 50, so their own
+    // references aren't followed, and each is named.
+    [Fact]
+    public void A_project_past_the_first_fifty_inside_a_walked_folder_is_named()
+    {
+        using var temp = new TempFolder();
+        var references = string.Concat(Enumerable.Range(1, 60).Select(i => $"""<ProjectReference Include="Modules/M{i:D2}/M{i:D2}.csproj" />"""));
+        temp.Write("src/Api/Api.csproj", $"<Project><ItemGroup>{references}</ItemGroup></Project>");
+        temp.Write("src/Api/Program.cs", "var x = 1;");
+        for (var i = 1; i <= 60; i++)
+        {
+            var reference = i == 55 ? """<ProjectReference Include="../../../Shared/Shared.csproj" />""" : string.Empty;
+            temp.Write($"src/Api/Modules/M{i:D2}/M{i:D2}.csproj", $"<Project><ItemGroup>{reference}</ItemGroup></Project>");
+            temp.Write($"src/Api/Modules/M{i:D2}/M{i:D2}.cs", $"""var m = configuration["M{i:D2}:Key"];""");
+        }
+
+        temp.Write("src/Shared/Shared.csproj", "<Project />");
+        temp.Write("src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
+
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+
+        Assert.True(scanner.Check("M60:Key").IsRead);
+        Assert.False(scanner.Check("Shared:Key").IsRead);
+        Assert.Equal(
+            Enumerable.Range(50, 11).Select(i => $"\"Modules/M{i:D2}/M{i:D2}.csproj\" (past the first 50 projects, so its references aren't followed)"),
+            scanner.SkippedReferences);
+    }
+
+    [Fact]
+    public void A_project_folder_inside_another_is_read_once()
+    {
+        using var temp = new TempFolder();
+        temp.Write("App.csproj", """<Project><ItemGroup><ProjectReference Include="Inner\Inner.csproj" /></ItemGroup></Project>""");
+        temp.Write("Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write("Inner/Inner.csproj", "<Project />");
+        temp.Write("Inner/Inner.cs", """var b = configuration["B:Key"];""");
+
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, scanner.FilesScanned);
+        Assert.True(scanner.Check("B:Key").IsRead);
+        Assert.Empty(scanner.SkippedReferences);
+    }
+
+    [Theory]
+    [InlineData("bin")]
+    [InlineData("obj")]
+    [InlineData("node_modules")]
+    [InlineData(".git")]
+    public void A_project_below_a_folder_the_walk_skips_is_read_on_its_own(string skipped)
+    {
+        using var temp = new TempFolder();
+        temp.Write("App.csproj", $"""<Project><ItemGroup><ProjectReference Include="{skipped}/Tool/Tool.csproj" /></ItemGroup></Project>""");
+        temp.Write("Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write($"{skipped}/Tool/Tool.csproj", "<Project />");
+        temp.Write($"{skipped}/Tool/Tool.cs", """var t = configuration["Tool:Key"];""");
+
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, scanner.FilesScanned);
+        Assert.True(scanner.Check("Tool:Key").IsRead);
+    }
+
+    [Fact]
+    public void A_project_behind_a_link_below_another_project_is_read_on_its_own()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Making a symbolic link on Windows needs rights the tests may not have.");
+        using var temp = new TempFolder();
+        temp.Write("src/Api/Api.csproj", """<Project><ItemGroup><ProjectReference Include="Plugins/Plugins.csproj" /></ItemGroup></Project>""");
+        temp.Write("src/Api/Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write("plugins/Plugins.csproj", "<Project />");
+        temp.Write("plugins/Reader.cs", """var p = configuration["Plugins:Key"];""");
+        Directory.CreateSymbolicLink(temp.Full("src/Api/Plugins"), temp.Full("plugins"));
+
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, scanner.FilesScanned);
+        Assert.True(scanner.Check("Plugins:Key").IsRead);
+    }
+
+    // On a file system that ignores case, ..\Shared and ..\shared are one folder, read once.
+    [Fact]
+    public void A_project_referenced_in_two_cases_is_read_once()
+    {
+        using var temp = new TempFolder();
+        temp.Write("src/Api/Api.csproj", """<Project><ItemGroup><ProjectReference Include="..\Shared\Shared.csproj" /><ProjectReference Include="..\Worker\Worker.csproj" /></ItemGroup></Project>""");
+        temp.Write("src/Api/Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write("src/Worker/Worker.csproj", """<Project><ItemGroup><ProjectReference Include="..\shared\Shared.csproj" /></ItemGroup></Project>""");
+        temp.Write("src/Worker/Worker.cs", """var w = configuration["Worker:Key"];""");
+        temp.Write("src/Shared/Shared.csproj", "<Project />");
+        temp.Write("src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
+        Assert.SkipWhen(!Directory.Exists(temp.Full("src/shared")), "This file system tells names apart by case, so the two names are two folders.");
+
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, scanner.FilesScanned);
+        Assert.True(scanner.Check("Shared:Key").IsRead);
+        Assert.Empty(scanner.SkippedFiles);
+    }
+
+    [Fact]
+    public void Skipped_files_are_listed_for_the_first_thousand_and_all_counted()
+    {
+        using var temp = new TempFolder();
+        for (var i = 0; i < 1200; i++)
+        {
+            File.WriteAllText(temp.Full($"F{i:D4}.cs"), "var x = 1;");
+        }
+
+        var scanner = CodeReadScanner.Scan(temp.Path, 0, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1200, scanner.SkippedFileCount);
+        Assert.Equal(1000, scanner.SkippedFiles.Count);
+        Assert.Equal("F0999.cs", scanner.SkippedFiles[^1]);
+    }
+
+    [Fact]
+    public void A_project_file_too_big_or_with_a_document_type_is_listed_and_not_followed()
+    {
+        using var temp = new TempFolder();
+        temp.Write("App/Big.csproj", """<Project><ItemGroup><ProjectReference Include="..\Lib\Lib.csproj" /></ItemGroup></Project>""" + new string(' ', 1024 * 1024));
+        temp.Write("App/Typed.csproj", """<!DOCTYPE Project [<!ENTITY e "x">]><Project><ItemGroup><ProjectReference Include="..\Lib\Lib.csproj" /></ItemGroup></Project>""");
+        temp.Write("App/Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write("Lib/Lib.csproj", "<Project />");
+        temp.Write("Lib/Lib.cs", """var b = configuration["B:Key"];""");
+
+        var scanner = CodeReadScanner.Scan(temp.Full("App"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, scanner.FilesScanned);
+        Assert.False(scanner.Check("B:Key").IsRead);
+        Assert.Equal(
+            [
+                "\"Big.csproj\" (a project file the scan can't read, so its references aren't followed)",
+                "\"Typed.csproj\" (a project file the scan can't read, so its references aren't followed)",
+            ],
+            scanner.SkippedReferences);
     }
 
     [Fact]
@@ -1045,6 +1228,7 @@ public class CodeReadScannerTests
         Assert.Equal(2, scanner.FilesScanned);
         Assert.True(scanner.Check("A:Key").IsRead);
         Assert.True(scanner.Check("B:Key").IsRead);
+        Assert.Equal(["\"Broken.csproj\" (a project file the scan can't read, so its references aren't followed)"], scanner.SkippedReferences);
     }
 
     [Fact]
@@ -1410,6 +1594,54 @@ public class CodeReadScannerHostileFileTests
 
         Assert.True(finished, $"Checking a key of {key.Length} characters under 2000 bound sections took longer than {watch.Elapsed.TotalSeconds:0}s.");
         Assert.True((await check).IsRead);
+    }
+
+    // Each file past the first 5000 was opened and searched for type names with a fresh buffer of 2 MB, so 100,000 small
+    // files took 190 GB. Now the scan allocates far less than one such buffer per file past the limit.
+    [Fact]
+    public void Files_past_the_first_five_thousand_are_listed_without_being_opened()
+    {
+        using var temp = new TempFolder();
+        for (var i = 0; i < 6000; i++)
+        {
+            File.WriteAllText(temp.Full($"F{i}.cs"), "var x = 1;");
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(5000, scanner.FilesScanned);
+        Assert.Equal(1000, scanner.SkippedFiles.Count);
+        Assert.True(scanner.AllClassesOpen);
+        Assert.True(allocated < 250L * 1024 * 1024, $"The scan allocated {allocated / (1024 * 1024)} MB.");
+    }
+
+    // Each project folder of a chain nested in one another listed every file below it again, so a chain of 1000 above
+    // 90,000 files took hours. Now the chain stops at 50 projects and the files are listed once.
+    [Fact]
+    public void A_chain_of_nested_project_folders_lists_each_file_once()
+    {
+        using var temp = new TempFolder();
+        var folder = temp.Path;
+        for (var i = 0; i < 60; i++)
+        {
+            File.WriteAllText(Path.Join(folder, "a.csproj"), """<Project><ItemGroup><ProjectReference Include="a\a.csproj" /></ItemGroup></Project>""");
+            folder = Directory.CreateDirectory(Path.Join(folder, "a")).FullName;
+        }
+
+        for (var i = 0; i < 2000; i++)
+        {
+            File.WriteAllText(Path.Join(folder, $"F{i}.cs"), "var x = 1;");
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(2000, scanner.FilesScanned);
+        Assert.Equal(["\"a\\a.csproj\" (past the first 50 projects, so its references aren't followed)"], scanner.SkippedReferences);
+        Assert.True(allocated < 100L * 1024 * 1024, $"The scan allocated {allocated / (1024 * 1024)} MB.");
     }
 
     private static string HostileSource(string shape) => shape switch
