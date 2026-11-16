@@ -317,6 +317,69 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void Refuses_an_env_file_whose_link_runs_through_a_second_link()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        // link -> sub/secrets and sub -> outside: the target names a folder inside, but sub leads out.
+        Write("outside/secrets/prod.env", "TOKEN=hunter2\n");
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                envs: [link/prod.env]
+            """);
+        Directory.CreateSymbolicLink(Path.Join(_root, "app", "sub"), Path.Join(_root, "outside"));
+        Directory.CreateSymbolicLink(Path.Join(_root, "app", "link"), Path.Join("sub", "secrets"));
+
+        Assert.Throws<InvalidOperationException>(() => Load());
+    }
+
+    [Fact]
+    public void Reads_an_env_file_through_links_that_stay_in_the_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        Write("app/real/prod.env", "A=1\n");
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                envs: [link/prod.env]
+            """);
+        Directory.CreateSymbolicLink(Path.Join(_root, "app", "sub"), "real");
+        Directory.CreateSymbolicLink(Path.Join(_root, "app", "link"), Path.Join("sub", "..", "sub"));
+
+        Assert.Equal("1", Load().ConfigMaps["cfg"].Keys["A"][0].Value);
+    }
+
+    [Fact]
+    public void Refuses_an_env_file_link_that_steps_up_out_of_a_linked_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        // In a link's target, sub/.. is the folder above where sub leads, not app.
+        Write("outside/prod.env", "TOKEN=hunter2\n");
+        Directory.CreateDirectory(Path.Join(_root, "outside", "deep"));
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                envs: [linked.env]
+            """);
+        Directory.CreateSymbolicLink(Path.Join(_root, "app", "sub"), Path.Join(_root, "outside", "deep"));
+        File.CreateSymbolicLink(Path.Join(_root, "app", "linked.env"), Path.Join("sub", "..", "prod.env"));
+
+        Assert.Throws<InvalidOperationException>(() => Load());
+    }
+
+    [Fact]
     public void Env_file_entries_point_at_the_envs_line_in_the_kustomization()
     {
         Write("app/kustomization.yaml", """

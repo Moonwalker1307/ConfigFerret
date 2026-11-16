@@ -262,23 +262,66 @@ public sealed class Kustomization
     internal static bool IsInFolder(string path, string folder)
     {
         var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var resolvedFolder = Path.TrimEndingDirectorySeparator(RealPath(folder)) + Path.DirectorySeparatorChar;
-        return RealPath(path).StartsWith(resolvedFolder, comparison);
+        if (RealPath(folder) is not { } realFolder || RealPath(path) is not { } realPath)
+        {
+            return false;
+        }
+
+        return realPath.StartsWith(Path.TrimEndingDirectorySeparator(realFolder) + Path.DirectorySeparatorChar, comparison);
     }
 
-    /// <summary>The full path with every symbolic link along it followed.</summary>
-    private static string RealPath(string path)
+    // As many links as Linux follows in one path before it gives up.
+    private const int MaxLinks = 40;
+
+    /// <summary>
+    /// The full path with every symbolic link along it followed, the way the file system does: a link's target is
+    /// resolved again, links in its folders too. Null after <see cref="MaxLinks"/> links, or at a link whose target
+    /// is rooted but not fully qualified.
+    /// </summary>
+    private static string? RealPath(string path)
     {
-        var full = Path.GetFullPath(path);
+        // .NET removes ".." from the path it is given as text before it opens it, so that is the path to check.
+        var links = 0;
+        return RealPath(Path.GetFullPath(path), ref links);
+    }
+
+    private static string? RealPath(string full, ref int links)
+    {
         var root = Path.GetPathRoot(full) ?? "";
         var current = root;
-        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var part in full[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
+            if (part == ".")
+            {
+                continue;
+            }
+
+            if (part == "..")
+            {
+                current = Path.GetDirectoryName(current) ?? current;
+                continue;
+            }
+
             current = Path.Join(current, part);
             FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
-            if (info.LinkTarget is not null && info.ResolveLinkTarget(returnFinalTarget: true) is { } target)
+            if (info.LinkTarget is { } target)
             {
-                current = Path.GetFullPath(target.FullName);
+                // On Windows a target such as \secrets\file or C:file is rooted but not fully qualified: it starts from
+                // the root or the current folder of a drive, not from the link's folder. Such a link is refused.
+                if (++links > MaxLinks || (Path.IsPathRooted(target) && !Path.IsPathFullyQualified(target)))
+                {
+                    return null;
+                }
+
+                // The file system resolves a link's target itself: a relative one starts from the link's folder,
+                // which is already resolved, and ".." steps up from wherever a link in it led.
+                var resolved = RealPath(Path.IsPathFullyQualified(target) ? target : Path.Join(Path.GetDirectoryName(current), target), ref links);
+                if (resolved is null)
+                {
+                    return null;
+                }
+
+                current = resolved;
             }
         }
 
