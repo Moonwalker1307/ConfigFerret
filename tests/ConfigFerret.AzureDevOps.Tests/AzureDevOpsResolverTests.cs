@@ -678,6 +678,45 @@ public class AzureDevOpsResolverTests
         Assert.InRange(resolver.Examined, stages, 30L * stages);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task Does_not_look_at_self_references_it_leaves_out()
+    {
+        // Each stage sets X from Y and its job links MAIL_AUTH to X; the pipeline sets Y: $(Y) many times. Following
+        // each stage's X to Y leaves every one of them out, so looking at them is wasted.
+        const int stages = 999;
+        const int items = 999;
+        var pipeline = new StringBuilder("variables:\n");
+        for (var i = 0; i < items; i++)
+        {
+            pipeline.Append("- name: Y\n  value: $(Y)\n");
+        }
+
+        pipeline.Append("stages:\n");
+        for (var i = 0; i < stages; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- stage: s{i}\n  variables:\n    X: $(Y)\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n      env:\n        MAIL_AUTH: $(X)\n");
+        }
+
+        var resolver = Resolver(o => o.AddPipelineText(pipeline.ToString(), "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = await Task.Run(
+            () =>
+            {
+                var found = resolver.Resolve(EnvStep("MAIL_AUTH", "v"), diagnostics);
+                foreach (var step in found)
+                {
+                    resolver.Resolve(step, diagnostics);
+                }
+
+                return found;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(stages, steps.Count);
+        Assert.InRange(resolver.Examined, stages, 20L * (stages + items));
+    }
+
     [Fact]
     public void Keeps_the_job_own_variable_when_jobs_outside_stages_set_it_more_often_than_the_bound()
     {

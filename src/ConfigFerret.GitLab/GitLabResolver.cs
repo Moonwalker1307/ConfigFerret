@@ -24,10 +24,8 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     private readonly HashSet<string> _secretVariables = variables.Entries.Where(IsSensitive).Select(v => v.Key).ToHashSet(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<GitLabVariable>> _effective = new(StringComparer.Ordinal);
     private readonly ConditionalWeakTable<ProvenanceStep, string> _seen = new();
-    private ILookup<string, GitLabCiVariable> _byName = Array.Empty<GitLabCiVariable>().ToLookup(v => v.Name);
-    private ILookup<string, GitLabCiVariable> _common = Array.Empty<GitLabCiVariable>().ToLookup(v => v.Name);
-    private ILookup<string, GitLabCiVariable> _jobs = Array.Empty<GitLabCiVariable>().ToLookup(v => v.Name);
-    private ILookup<(string Name, string? Job), GitLabCiVariable> _byJob = Array.Empty<GitLabCiVariable>().ToLookup(v => (v.Name, v.Job));
+    private Lookups _all = Lookups.Of([], _ => true);
+    private Lookups _notSelf = Lookups.Of([], _ => true);
     private Dictionary<(string File, int Line, string Name), GitLabCiVariable> _defined = [];
     private ILookup<string, (GitLabMapping Mapping, string? Job)> _links = Array.Empty<(GitLabMapping Mapping, string? Job)>().ToLookup(l => l.Mapping.Name);
     private HashSet<string> _leftOut = [];
@@ -200,7 +198,7 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         }
 
         var linked = units.Select(u => u.Job).ToHashSet();
-        foreach (var variable in _byName[name])
+        foreach (var variable in _all.ByName[name])
         {
             Examined++;
             if (Counts(variable.Job) && linked.Add(variable.Job))
@@ -222,7 +220,7 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         }
 
         var own = new List<Candidate>();
-        foreach (var variable in Backward(_byJob[(name, unit.Job)]))
+        foreach (var variable in Backward(_all.ByJob[(name, unit.Job)]))
         {
             Examined++;
             if (--_room < 0)
@@ -349,10 +347,14 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     {
         // Looked at in the order they win, from the end: the jobs' own, then the hidden jobs', then the global ones, so
         // that the bound keeps the ones that win, as the tracer's own bound keeps the end of a chain.
-        IEnumerable<GitLabCiVariable> jobs = view is null ? Backward(_jobs[key]) : GitLabTraceOptions.IsHidden(view) ? [] : Backward(_byJob[(key, view)]);
+        // A definition that refers back to key, left out below when except is set, is not even looked at.
+        var lookups = except is null ? _all : _notSelf;
+        IEnumerable<GitLabCiVariable> jobs = view is null ? Backward(lookups.Jobs[key])
+            : GitLabTraceOptions.IsHidden(view) ? []
+            : Backward(lookups.ByJob[(key, view)]);
         var definitions = new List<GitLabCiVariable>();
         var looked = 0;
-        foreach (var variable in jobs.Concat(Backward(_common[key])))
+        foreach (var variable in jobs.Concat(Backward(lookups.Common[key])))
         {
             Examined++;
             if (++looked > limit)
@@ -475,14 +477,9 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         }
 
         var all = options.Variables;
-        _byName = all.ToLookup(v => v.Name, StringComparer.Ordinal);
-        _byJob = all.ToLookup(v => (v.Name, v.Job));
         _leftOut = options.JobsForOtherEnvironments(options.Environment).ToHashSet(StringComparer.Ordinal);
-
-        // The global and hidden definitions with the hidden ones last, and the jobs' that count, so that looking at each
-        // from the end looks at them in the order they win.
-        _common = all.Where(v => Rank(v.Job) < 2).OrderBy(v => Rank(v.Job)).ToLookup(v => v.Name, StringComparer.Ordinal);
-        _jobs = all.Where(v => Rank(v.Job) == 2 && Counts(v.Job)).ToLookup(v => v.Name, StringComparer.Ordinal);
+        _all = Lookups.Of(all, Counts);
+        _notSelf = Lookups.Of(all.Where(v => !string.Equals(GitLabTraceOptions.ReferenceTarget(v.Value), v.Name, StringComparison.Ordinal)), Counts);
         _defined = [];
         foreach (var variable in all)
         {
@@ -628,6 +625,26 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     private sealed record Candidate(GitLabVariable? Variable, GitLabCiVariable? File, bool Inferred = false, bool Alternative = false, bool Sensitive = false)
     {
         public string? Value => Variable is { } variable ? variable.Value : File!.Value;
+    }
+
+    // The CI file variables by name: all of them, the ones outside jobs and in hidden jobs, and by name and job.
+    private sealed record Lookups(
+        ILookup<string, GitLabCiVariable> ByName,
+        ILookup<string, GitLabCiVariable> Common,
+        ILookup<string, GitLabCiVariable> Jobs,
+        ILookup<(string Name, string? Job), GitLabCiVariable> ByJob)
+    {
+        // Common holds the global and hidden definitions with the hidden ones last, and Jobs the jobs' that count, so
+        // that looking at each from the end looks at them in the order they win.
+        public static Lookups Of(IEnumerable<GitLabCiVariable> variables, Func<string?, bool> counts)
+        {
+            var list = variables.ToList();
+            return new(
+                list.ToLookup(v => v.Name, StringComparer.Ordinal),
+                list.Where(v => Rank(v.Job) < 2).OrderBy(v => Rank(v.Job)).ToLookup(v => v.Name, StringComparer.Ordinal),
+                list.Where(v => Rank(v.Job) == 2 && counts(v.Job)).ToLookup(v => v.Name, StringComparer.Ordinal),
+                list.ToLookup(v => (v.Name, v.Job)));
+        }
     }
 
     // One of the jobs that may set a name: a CI file link in Job, or, when Mapping is null, Job's own definitions.
