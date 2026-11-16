@@ -81,7 +81,8 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
             return exact.Select(s => ToStep(s, layer, inferred: true, "matched by name")).ToList();
         }
 
-        return settings.FindByConfigurationKey(LayerNames.ToConfigurationKey(name))
+        // A JSON key-value is found by the keys it sets and by its own key, so a variable may hold the whole JSON.
+        return settings.FindByConfigurationKeyOrOwnKey(LayerNames.ToConfigurationKey(name))
             .Select(s => ToStep(s, layer, inferred: true, "matched by configuration key"))
             .ToList();
     }
