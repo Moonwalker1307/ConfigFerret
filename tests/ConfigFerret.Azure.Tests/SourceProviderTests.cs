@@ -110,7 +110,7 @@ public class SourceProviderTests
         Assert.Equal(AzureAppConfigurationSourceProvider.ProviderId, provider.Id);
         Assert.Equal("Azure App Configuration", provider.DisplayName);
         Assert.Equal(SourceCategory.ConfigurationService, provider.Category);
-        Assert.Equal(["Endpoint", "KeyFilter", "Labels", "TrimKeyPrefixes", "IncludeKeyVaultReferences", "IncludeFeatureFlags", "MatchByName", "TenantId", "ClientId", "ClientSecret", "ConnectionString"], provider.Settings.Select(s => s.Name));
+        Assert.Equal(["Endpoint", "KeyFilter", "Labels", "TrimKeyPrefixes", "IncludeKeyVaultReferences", "IncludeFeatureFlags", "FeatureFlagLabels", "MatchByName", "TenantId", "ClientId", "ClientSecret", "ConnectionString"], provider.Settings.Select(s => s.Name));
         Assert.DoesNotContain(provider.Settings, s => s.Required);
         var secrets = provider.Settings.Where(s => s.Kind == SourceSettingKind.Secret).ToList();
         Assert.Equal(["ClientSecret", "ConnectionString"], secrets.Select(s => s.Name));
@@ -130,6 +130,7 @@ public class SourceProviderTests
             ("TrimKeyPrefixes", "Orders:"),
             ("IncludeKeyVaultReferences", "false"),
             ("IncludeFeatureFlags", "false"),
+            ("FeatureFlagLabels", "flags\nprod"),
             ("MatchByName", "false"),
             ("TenantId", "t"),
             ("ClientId", "c"),
@@ -141,6 +142,7 @@ public class SourceProviderTests
         Assert.Equal(["Orders:"], source.Options.TrimKeyPrefixes);
         Assert.False(source.Options.IncludeKeyVaultReferences);
         Assert.False(source.Options.IncludeFeatureFlags);
+        Assert.Equal(["flags", "prod"], source.Options.FeatureFlagLabels);
         Assert.False(source.TraceOptions.MatchByName);
         Assert.Equal("s", source.Options.ClientSecret);
         Assert.Equal("t", source.Options.TenantId);
@@ -151,6 +153,7 @@ public class SourceProviderTests
         Assert.Null(fromConnection.Options.Endpoint);
         Assert.True(fromConnection.Options.IncludeKeyVaultReferences);
         Assert.True(fromConnection.Options.IncludeFeatureFlags);
+        Assert.Empty(fromConnection.Options.FeatureFlagLabels);
         Assert.True(fromConnection.TraceOptions.MatchByName);
     }
 

@@ -341,6 +341,37 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Reads_feature_flags_with_no_label_whatever_the_labels_of_the_keys()
+    {
+        var handler = Handler()
+            .Respond(KeysPath("production"), Page(null, Kv("A", "1", "production")))
+            .Respond(FlagsPath(), Page(null, Kv(".appconfig.featureflag/Beta", """{"id":"Beta","enabled":true}""", contentType: FeatureFlagType)));
+
+        var settings = await Load(handler, o => o.Labels.Add("production"));
+
+        Assert.Equal([KeysPath("production"), FlagsPath()], handler.Paths);
+        Assert.Equal("True", Assert.Single(settings.FindByConfigurationKey("FeatureManagement:Beta")).Value);
+    }
+
+    [Fact]
+    public async Task Reads_feature_flags_with_the_labels_given_for_them()
+    {
+        var handler = Handler()
+            .Respond(KeysPath(), Page(null))
+            .Respond(FlagsPath("base"), Page(null, Kv(".appconfig.featureflag/Beta", """{"id":"Beta","enabled":false}""", "base", FeatureFlagType)))
+            .Respond(FlagsPath("production"), Page(null, Kv(".appconfig.featureflag/Beta", """{"id":"Beta","enabled":true}""", "production", FeatureFlagType)));
+
+        var settings = await Load(handler, o =>
+        {
+            o.FeatureFlagLabels.Add("base");
+            o.FeatureFlagLabels.Add("production");
+        });
+
+        Assert.Equal([KeysPath(), FlagsPath("base"), FlagsPath("production")], handler.Paths);
+        Assert.Equal(["False", "True"], settings.FindByConfigurationKey("FeatureManagement:Beta").Select(s => s.Value));
+    }
+
+    [Fact]
     public async Task Reads_feature_flags_as_FeatureManagement_keys()
     {
         var handler = Handler()
