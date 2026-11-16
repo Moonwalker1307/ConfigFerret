@@ -109,7 +109,13 @@ public sealed class EnvironmentFallbackCredentialStore : ICredentialStore
     public string DisplayName => _inner.DisplayName;
 
     /// <inheritdoc />
-    public string? Read(string account)
+    public string? Read(string account) => Read(account, out _);
+
+    /// <summary>
+    /// Reads like <see cref="Read(string)"/>, and says whether the secret came from an environment variable, because the
+    /// other store holds none for <paramref name="account"/>.
+    /// </summary>
+    internal string? Read(string account, out bool fromEnvironment)
     {
         string? stored;
         try
@@ -122,7 +128,15 @@ public sealed class EnvironmentFallbackCredentialStore : ICredentialStore
             stored = null;
         }
 
-        return string.IsNullOrEmpty(stored) ? FromEnvironment(account) : stored;
+        if (!string.IsNullOrEmpty(stored))
+        {
+            fromEnvironment = false;
+            return stored;
+        }
+
+        var variable = FromEnvironment(account);
+        fromEnvironment = variable is not null;
+        return variable;
     }
 
     private string? FromEnvironment(string account)

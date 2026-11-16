@@ -111,6 +111,21 @@ public class CredentialStoreTests
     }
 
     [Fact]
+    public void Says_whether_the_secret_came_from_the_environment()
+    {
+        var inner = new InMemoryCredentialStore();
+        var store = Fallback(inner, new() { ["GITHUB_TOKEN"] = "from-env" }, "GITHUB_TOKEN");
+
+        Assert.Equal("from-env", store.Read(Account, out var fromEnvironment));
+        Assert.True(fromEnvironment);
+        inner.Write(Account, "saved");
+        Assert.Equal("saved", store.Read(Account, out fromEnvironment));
+        Assert.False(fromEnvironment);
+        Assert.Null(Fallback(new InMemoryCredentialStore(), [], "GITHUB_TOKEN").Read(Account, out fromEnvironment));
+        Assert.False(fromEnvironment);
+    }
+
+    [Fact]
     public void Nothing_saved_and_nothing_in_the_environment_gives_null()
     {
         var store = Fallback(new InMemoryCredentialStore(), [], "GITHUB_TOKEN");

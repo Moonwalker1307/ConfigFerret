@@ -7,8 +7,8 @@ public sealed class WebAppOptions
     public const string Section = "ConfigFerret";
 
     /// <summary>
-    /// Where the workspace file (connection addresses, theme and the choices made per repository) is saved. It never
-    /// holds a credential. Empty for <c>ConfigFerret</c> in the user's application data folder. The image uses /data.
+    /// Where the workspace file (theme and the choices made per repository) is saved. It never holds a credential or
+    /// a connection address. Empty for <c>ConfigFerret</c> in the user's application data folder. The image uses /data.
     /// </summary>
     public string DataFolder { get; set; } = string.Empty;
 

@@ -41,6 +41,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly TraceRunner _runner;
     private readonly RepositoryAnalyzer _analyzer;
     private readonly Workspace _workspace;
+    private readonly Func<HttpClient>? _traceHttp;
+    private readonly bool _isSharedServer;
+    private readonly string? _octopusServerFallback;
+
+    // Where the addresses the last Connect checked are kept: the workspace, or on a shared server this view model only.
+    private readonly Workspace _addresses;
     private readonly bool _ownsDownloadRoot;
     private string? _downloadRoot;
     private List<RepositoryRow> _allRepositories = [];
@@ -71,9 +77,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _ownsHttp = true;
         _http = httpHandler is null ? new HttpClient(CreateHttpHandler(), disposeHandler: true) : new HttpClient(httpHandler, disposeHandler: false);
         _http.Timeout = TimeSpan.FromMinutes(5);
-        _runner = new TraceRunner(
-            credentials,
-            httpClientFactory: httpHandler is null ? null : () => new HttpClient(httpHandler, disposeHandler: false));
+        _traceHttp = httpHandler is null ? null : () => new HttpClient(httpHandler, disposeHandler: false);
+        _runner = new TraceRunner(credentials, httpClientFactory: _traceHttp);
         _analyzer = analyzer ?? new RepositoryAnalyzer();
         _downloadRoot = downloadRoot;
         _ownsDownloadRoot = downloadRoot is null;
@@ -88,6 +93,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             StatusText = $"Could not read {store.Path}: {ex.Message}. Started fresh; the file is replaced when settings change.";
         }
 
+        _addresses = _workspace;
         GitHubApiUrl = _workspace.GitHubApiUrl;
         OctopusServer = _workspace.OctopusServer;
         OctopusSpace = _workspace.OctopusSpace;
@@ -107,11 +113,41 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         get => null;
         init
         {
-            if (OctopusServer.Length == 0 && !string.IsNullOrWhiteSpace(value))
+            _octopusServerFallback = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            if (_octopusServerFallback is not null && (OctopusServer.Length == 0 || _isSharedServer))
             {
-                OctopusServer = value.Trim();
-                _workspace.OctopusServer = OctopusServer;
+                OctopusServer = _octopusServerFallback;
+                _addresses.OctopusServer = OctopusServer;
                 IsOctopusConnected = HasCredential(OctopusAccountName);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the app runs on a server for other people, as the web app does. The credentials an
+    /// <see cref="EnvironmentFallbackCredentialStore"/> reads from the environment (GITHUB_TOKEN, OCTOPUS_API_KEY) then
+    /// belong to whoever runs the server, not to the person using the page: the GitHub token is sent only to
+    /// api.github.com and the Octopus key only to <see cref="OctopusServerFallback"/>, and a person who names another
+    /// address has to connect with their own. The connection addresses stay in this view model instead of the
+    /// workspace file, which everyone using the server shares. False in the desktop app, where the environment and the
+    /// workspace file are the user's own.
+    /// </summary>
+    internal bool IsSharedServer
+    {
+        get => _isSharedServer;
+        init
+        {
+            _isSharedServer = value;
+            if (value)
+            {
+                _addresses = new Workspace { OctopusServer = _octopusServerFallback ?? string.Empty };
+
+                // A workspace file saved before addresses stayed in the tab may still hold some; the next save drops them.
+                _workspace.GitHubApiUrl = _workspace.OctopusServer = _workspace.OctopusSpace = string.Empty;
+                GitHubApiUrl = string.Empty;
+                OctopusServer = _addresses.OctopusServer;
+                OctopusSpace = string.Empty;
+                IsOctopusConnected = OctopusServer.Length > 0 && HasCredential(OctopusAccountName);
             }
         }
     }
@@ -565,7 +601,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             var account = CreateGitHub(token);
             GitHubLogin = await account.GetLoginAsync().ConfigureAwait(true);
             _credentials.Write(GitHubAccountName, token);
-            _workspace.GitHubApiUrl = GitHubApiUrl.Trim();
+            _addresses.GitHubApiUrl = GitHubApiUrl.Trim();
             Save();
             ShowConnections = false;
             await LoadRepositoriesAsync().ConfigureAwait(true);
@@ -605,8 +641,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             var octopus = new OctopusAccount(_http, ParseUrl(OctopusServer.Trim()), key, OctopusSpace);
             var projects = await octopus.ListProjectsAsync().ConfigureAwait(true);
             _credentials.Write(OctopusAccountName, key);
-            _workspace.OctopusServer = OctopusServer.Trim();
-            _workspace.OctopusSpace = OctopusSpace.Trim();
+            _addresses.OctopusServer = OctopusServer.Trim();
+            _addresses.OctopusSpace = OctopusSpace.Trim();
             Save();
             IsOctopusConnected = true;
             StatusText = $"Connected to Octopus: {projects.Count} projects.";
@@ -716,9 +752,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     internal async Task LoadRepositoriesAsync()
     {
         string? token;
+        bool serverToken;
         try
         {
-            token = _credentials.Read(GitHubAccountName);
+            token = ReadCredential(GitHubAccountName, out serverToken);
         }
         catch (CredentialStoreException ex)
         {
@@ -735,7 +772,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         IsLoadingRepositories = true;
         try
         {
-            var account = CreateGitHub(token);
+            var account = CreateGitHub(token, serverToken);
             GitHubLogin ??= await account.GetLoginAsync().ConfigureAwait(true);
             var repositories = await account.ListRepositoriesAsync().ConfigureAwait(true);
             _allRepositories = repositories.Select(r => new RepositoryRow(r)).ToList();
@@ -758,7 +795,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         var token = await RunAsync($"Downloading {repository.FullName}…", async cancellationToken =>
         {
-            var github = CreateGitHub(_credentials.Read(GitHubAccountName) ?? throw new HttpRequestException("Connect GitHub first."));
+            var github = CreateGitHub(ReadCredential(GitHubAccountName, out var serverToken) ?? throw new HttpRequestException("Connect GitHub first."), serverToken);
             var environments = await github.ListEnvironmentsAsync(repository.FullName, cancellationToken).ConfigureAwait(true);
             var folder = await github.DownloadAsync(repository.FullName, repository.Info.DefaultBranch, DownloadRoot(), cancellationToken).ConfigureAwait(true);
             DeleteDownload();
@@ -847,14 +884,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         try
         {
-            var key = _credentials.Read(OctopusAccountName);
+            var key = ReadCredential(OctopusAccountName, out var serverKey);
             if (string.IsNullOrEmpty(key))
             {
                 IsOctopusConnected = false;
                 return;
             }
 
-            var octopus = new OctopusAccount(_http, ParseUrl(OctopusServer), key, OctopusSpace);
+            var octopus = new OctopusAccount(_http, OctopusAddress(OctopusServer, serverKey), key, OctopusSpace);
             var projects = await octopus.ListProjectsAsync().ConfigureAwait(true);
             var environments = await octopus.ListEnvironmentsAsync().ConfigureAwait(true);
 
@@ -908,13 +945,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         var connections = new AnalysisConnections(
             IsGitHubSubject ? _currentKey : null,
-            _workspace.GitHubApiUrl,
+            _addresses.GitHubApiUrl,
             GitHubAccountName,
-            IsOctopusConnected ? _workspace.OctopusServer : string.Empty,
-            _workspace.OctopusSpace,
+            IsOctopusConnected ? _addresses.OctopusServer : string.Empty,
+            _addresses.OctopusSpace,
             OctopusAccountName);
         var reveal = RevealSecrets;
         var notes = new List<string>();
+        var runner = _runner;
+        if (_isSharedServer)
+        {
+            (connections, runner) = PinConnections(connections, notes);
+        }
+
         Profile? profile = null;
         var result = await RunAsync("Tracing the configuration…", async cancellationToken =>
         {
@@ -924,7 +967,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 source.Enabled = false;
             }
 
-            return await _runner.RunAsync(profile, reveal, cancellationToken).ConfigureAwait(false);
+            return await runner.RunAsync(profile, reveal, cancellationToken).ConfigureAwait(false);
         }).ConfigureAwait(true);
 
         ShowDiscoveries(scan, profile);
@@ -932,6 +975,43 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             ShowResult(result, notes);
         }
+    }
+
+    // On a shared server, reads each credential once, before the trace starts, and fixes the address it goes to, so a
+    // credential of the server's can't reach an address a visitor named, even if the visitor disconnects meanwhile. A
+    // connection whose credential may not go to its address is left out, with a note.
+    private (AnalysisConnections Connections, TraceRunner Runner) PinConnections(AnalysisConnections connections, List<string> notes)
+    {
+        var credentials = new InMemoryCredentialStore();
+        try
+        {
+            if (connections.GitHubRepository is not null && ReadCredential(GitHubAccountName, out var serverToken) is { Length: > 0 } token)
+            {
+                connections = connections with { GitHubApiUrl = GitHubAddress(connections.GitHubApiUrl, serverToken).AbsoluteUri };
+                credentials.Write(GitHubAccountName, token);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or CredentialStoreException)
+        {
+            notes.Add(ex.Message);
+            connections = connections with { GitHubRepository = null };
+        }
+
+        try
+        {
+            if (connections.OctopusServer.Length > 0 && ReadCredential(OctopusAccountName, out var serverKey) is { Length: > 0 } key)
+            {
+                connections = connections with { OctopusServer = OctopusAddress(connections.OctopusServer, serverKey).AbsoluteUri };
+                credentials.Write(OctopusAccountName, key);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or CredentialStoreException)
+        {
+            notes.Add(ex.Message);
+            connections = connections with { OctopusServer = string.Empty };
+        }
+
+        return (connections, new TraceRunner(credentials, httpClientFactory: _traceHttp));
     }
 
     private async Task<T?> RunAsync<T>(string what, Func<CancellationToken, Task<T>> work)
@@ -1326,8 +1406,42 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private GitHubAccount CreateGitHub(string token) =>
-        new(_http, string.IsNullOrWhiteSpace(GitHubApiUrl) ? GitHubAccount.DefaultApiBase : ParseUrl(GitHubApiUrl.Trim()), token);
+    private GitHubAccount CreateGitHub(string token, bool serverToken = false) => new(_http, GitHubAddress(GitHubApiUrl, serverToken), token);
+
+    // Reads a credential, and says whether it is the server's rather than the user's own (see IsSharedServer).
+    private string? ReadCredential(string account, out bool serverOwned)
+    {
+        if (_isSharedServer && _credentials is EnvironmentFallbackCredentialStore fallback)
+        {
+            return fallback.Read(account, out serverOwned);
+        }
+
+        serverOwned = false;
+        return _credentials.Read(account);
+    }
+
+    // The user's own token goes to the address they typed; the server's only to api.github.com.
+    private static Uri GitHubAddress(string address, bool serverToken)
+    {
+        var uri = string.IsNullOrWhiteSpace(address) ? GitHubAccount.DefaultApiBase : ParseUrl(address.Trim());
+        return serverToken
+            ? Pinned(uri, GitHubAccount.DefaultApiBase, "The server's GitHub token is only sent to api.github.com. Connect with your own token to use another API address.")
+            : uri;
+    }
+
+    // The user's own API key goes to the server they typed; the server's only to its own Octopus server (OCTOPUS_URL).
+    private Uri OctopusAddress(string address, bool serverKey)
+    {
+        var uri = ParseUrl(address);
+        return serverKey
+            ? Pinned(uri, _octopusServerFallback is null ? null : ParseUrl(_octopusServerFallback), "The server's Octopus API key is only sent to the Octopus server it was set up with (OCTOPUS_URL). Connect with your own API key to use another server.")
+            : uri;
+    }
+
+    private static Uri Pinned(Uri requested, Uri? allowed, string refusal) =>
+        allowed is not null && Uri.Compare(requested, allowed, UriComponents.SchemeAndServer, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0
+            ? allowed
+            : throw new ArgumentException(refusal);
 
     private static Uri ParseUrl(string text) =>
         Uri.TryCreate(text.EndsWith('/') ? text : text + "/", UriKind.Absolute, out var uri)

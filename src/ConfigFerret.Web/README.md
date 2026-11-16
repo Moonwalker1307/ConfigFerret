@@ -29,7 +29,7 @@ docker run -d --name configferret -p 127.0.0.1:8080:8080 \
 
 | Path in the container | What it is |
 | --- | --- |
-| `/data` | The workspace file (connection addresses, theme and the choices made per repository) and the keys that protect the page's session state. Never a token. |
+| `/data` | The workspace file (theme and the choices made per repository) and the keys that protect the page's session state. Never a token. |
 | `/repos` | Folders you can open with "Open a folder on the server". Only folders under it can be opened, and links are not followed. Mount it read-only. Without it, the button is hidden. |
 
 Or with Docker Compose:
@@ -59,6 +59,10 @@ and other tabs and other people using the server can't see it. Reloading the pag
 To skip typing it, give the container a token instead: `-e GITHUB_TOKEN=...`, and for Octopus
 `-e OCTOPUS_URL=https://... -e OCTOPUS_API_KEY=...`. A typed-in token wins over these.
 
+The container's token is sent only to api.github.com, and its Octopus API key only to `OCTOPUS_URL`, whatever address
+someone types in the Connections dialog. To use GitHub Enterprise Server or another Octopus server, type in your own
+token or API key. Addresses typed in stay in that browser tab, like the tokens.
+
 **The app has no sign-in of its own.** A token in the container's environment is used by everyone who can open the
 page. Publish the port on `127.0.0.1` only, as above, or put the app behind a reverse proxy that signs people in (such
 as oauth2-proxy) before you open it to others.
@@ -86,8 +90,8 @@ Set these as environment variables on the container.
 | `ConfigFerret__Folders` | `/repos` | The folder whose subfolders can be opened. Empty turns it off. |
 | `ASPNETCORE_HTTP_PORTS` | `8080` | The port the app listens on. |
 | `AllowedHosts` | `localhost;127.0.0.1;[::1]` | The host names the app answers, separated by `;`. `*` allows any. |
-| `GITHUB_TOKEN`, `GH_TOKEN` | | A GitHub token used when none is typed in. |
-| `OCTOPUS_URL`, `OCTOPUS_API_KEY` | | An Octopus server and API key used when none is typed in. |
+| `GITHUB_TOKEN`, `GH_TOKEN` | | A GitHub token used when none is typed in. It is only sent to api.github.com. |
+| `OCTOPUS_URL`, `OCTOPUS_API_KEY` | | An Octopus server and API key used when none is typed in. The key is only sent to that server. |
 
 The workspace file is shared by everyone using the server, so the theme and the choices per repository are too.
 
