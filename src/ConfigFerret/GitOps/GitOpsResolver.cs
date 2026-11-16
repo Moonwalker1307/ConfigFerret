@@ -34,6 +34,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         _data = new[] { application.Data, options.Data, fileData }.OfType<KubernetesManifests>().ToList();
         _app = application;
         _warnings.AddRange(application.Notes.Select(n => $"{application.DisplayName}: {n}."));
+        _warnings.AddRange(_data.SelectMany(d => d.Warnings));
         if (HasChart(application, options, _warnings))
         {
             _chart = HelmChart.Build(application, options, _data);
@@ -189,8 +190,9 @@ internal sealed partial class GitOpsResolver : IOriginResolver
     {
         foreach (var from in _app.SubstituteFrom)
         {
+            // Flux reads substituteFrom from the Kustomization's own namespace.
             var data = _data
-                .Select(d => (from.IsSecret ? d.Secrets : d.ConfigMaps).GetValueOrDefault(from.Name))
+                .Select(d => d.FindLoaded(from.IsSecret, _app.Namespace, from.Name))
                 .FirstOrDefault(d => d is not null);
             if (data is null && !from.Optional)
             {

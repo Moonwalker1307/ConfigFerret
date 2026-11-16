@@ -185,6 +185,9 @@ public sealed class GitOpsApplication
 
     private static string NameOf(string? name) => string.IsNullOrWhiteSpace(name) ? "(unnamed)" : name;
 
+    // An empty namespace is no namespace, as in the manifests the object reads its ConfigMaps and Secrets from.
+    private static string? NamespaceOf(YamlNode obj) => obj.Get("metadata").Str("namespace") is { Length: > 0 } ns ? ns : null;
+
     private static GitOpsApplication ReadArgo(YamlNode obj, YamlNode? spec, GitOpsKind kind, string? name, string sourceName, KubernetesManifests data, List<string> notes)
     {
         var sources = spec.Get("sources").Items().ToList();
@@ -202,7 +205,7 @@ public sealed class GitOpsApplication
         var kustomize = kustomizeSource is null ? null : ReadArgoKustomize(kustomizeSource.Get("kustomize")!, notes);
         return new GitOpsApplication(kind, NameOf(name), sourceName, obj.Line(), data)
         {
-            Namespace = obj.Get("metadata").Str("namespace"),
+            Namespace = NamespaceOf(obj),
             HelmSources = helm,
             Kustomize = kustomize,
             Path = (kustomizeSource ?? pathSource)?.Str("path"),
@@ -427,7 +430,7 @@ public sealed class GitOpsApplication
 
         return new GitOpsApplication(GitOpsKind.FluxHelmRelease, NameOf(obj.Get("metadata").Str("name")), sourceName, obj.Line(), data)
         {
-            Namespace = obj.Get("metadata").Str("namespace"),
+            Namespace = NamespaceOf(obj),
             HelmSources = [helm],
             Path = helm.Path,
             Notes = notes,
@@ -470,7 +473,7 @@ public sealed class GitOpsApplication
 
         return new GitOpsApplication(GitOpsKind.FluxKustomization, NameOf(obj.Get("metadata").Str("name")), sourceName, obj.Line(), data)
         {
-            Namespace = obj.Get("metadata").Str("namespace"),
+            Namespace = NamespaceOf(obj),
             Path = spec.Str("path"),
             Substitutions = postBuild.Get("substitute").Pairs()
                 .Select(p => new GitOpsSubstitution(p.Key, p.Value.Scalar() ?? "", p.Value.Line()))

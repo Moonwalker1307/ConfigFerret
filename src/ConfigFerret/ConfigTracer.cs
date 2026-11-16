@@ -71,7 +71,10 @@ public sealed class ConfigTracer
     /// manifests, is listed with a null value.
     /// </remarks>
     /// <param name="manifests">The workload and the ConfigMaps and Secrets it uses. Variables from an <c>envFrom</c> source, and files from a volume source without <c>items</c>, that is not in them are not listed.</param>
-    /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
+    /// <param name="workload">
+    /// The workload name, or <c>namespace/name</c> when the name is in more than one namespace (<c>/name</c> for the
+    /// one without a namespace). Needed only when the manifests hold more than one workload.
+    /// </param>
     /// <param name="container">The container name. Needed only when the workload has more than one.</param>
     /// <example>
     /// <code>
@@ -124,7 +127,10 @@ public sealed class ConfigTracer
     /// Links environment variables and mounted files to the Kubernetes workload, ConfigMaps and Secrets in <paramref name="manifests"/>.
     /// </summary>
     /// <param name="manifests">Rendered manifests (<c>helm template</c>, <c>kustomize build</c>, <c>kubectl get -o yaml</c>) or the live pod.</param>
-    /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
+    /// <param name="workload">
+    /// The workload name, or <c>namespace/name</c> when the name is in more than one namespace (<c>/name</c> for the
+    /// one without a namespace). Needed only when the manifests hold more than one workload.
+    /// </param>
     /// <param name="container">The container name. Needed only when the workload has more than one.</param>
     /// <exception cref="InvalidOperationException">The trace was started with <see cref="ForContainer"/>, which already has its manifests.</exception>
     public ConfigTracer WithKubernetes(KubernetesManifests manifests, string? workload = null, string? container = null)

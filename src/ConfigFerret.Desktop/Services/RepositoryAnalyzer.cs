@@ -344,8 +344,12 @@ public sealed partial class RepositoryAnalyzer
             .First();
         if (workloads.Count > 1)
         {
-            source.Workload = workload.Name;
-            notes.Add($"The manifests hold {workloads.Count} workloads; traced {workload.DisplayName}.");
+            // A name that is in more than one namespace picks the workload only together with its namespace, and /name
+            // picks the one without a namespace.
+            var inOthers = manifests.Workloads.Any(w => w.Name == workload.Name && w.Namespace != workload.Namespace);
+            source.Workload = inOthers ? $"{workload.Namespace}/{workload.Name}" : workload.Name;
+            var where = !inOthers ? string.Empty : workload.Namespace is null ? ", which has no namespace" : $" in namespace {workload.Namespace}";
+            notes.Add($"The manifests hold {workloads.Count} workloads; traced {workload.DisplayName}{where}.");
         }
 
         if (containers.Count > 1)

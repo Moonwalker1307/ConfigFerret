@@ -24,7 +24,11 @@ public sealed record ExternalSecret(
     IReadOnlyList<ExternalSecretDataFrom> DataFrom,
     bool HasTemplate,
     string SourceName,
-    int Line);
+    int Line)
+{
+    /// <summary>The ExternalSecret's <c>metadata.namespace</c>, where it writes its Secret, or null when it has none.</summary>
+    public string? Namespace { get; init; }
+}
 
 /// <summary>A <c>secretStoreRef</c> or <c>sourceRef.storeRef</c>: a <c>SecretStore</c> or <c>ClusterSecretStore</c> by name.</summary>
 public sealed record SecretStoreReference(string Kind, string Name);
@@ -50,7 +54,11 @@ public sealed record ExternalSecretDataFrom(string? RemoteKey, string? Version, 
 /// <param name="Name">The store's name.</param>
 /// <param name="Provider">The key under <c>spec.provider</c>, for example <c>azurekv</c>, <c>aws</c>, <c>vault</c> or <c>gcpsm</c>.</param>
 /// <param name="SourceName">The file or text the store was read from.</param>
-public sealed record SecretStore(string Kind, string Name, string? Provider, string SourceName);
+public sealed record SecretStore(string Kind, string Name, string? Provider, string SourceName)
+{
+    /// <summary>A <c>SecretStore</c>'s <c>metadata.namespace</c>, or null when it has none and for a <c>ClusterSecretStore</c>.</summary>
+    public string? Namespace { get; init; }
+}
 
 /// <summary>A Secrets Store CSI driver <c>SecretProviderClass</c> (<c>secrets-store.csi.x-k8s.io</c>).</summary>
 /// <param name="Name">The SecretProviderClass name.</param>
@@ -68,7 +76,11 @@ public sealed record SecretProviderClass(
     IReadOnlyList<SecretProviderObject> Objects,
     IReadOnlyList<SyncedSecret> SecretObjects,
     string SourceName,
-    int Line);
+    int Line)
+{
+    /// <summary>The SecretProviderClass's <c>metadata.namespace</c>, or null when it has none.</summary>
+    public string? Namespace { get; init; }
+}
 
 /// <summary>An object a <see cref="SecretProviderClass"/> mounts.</summary>
 /// <param name="FileName">The file name in the volume: the alias, file name or object name.</param>

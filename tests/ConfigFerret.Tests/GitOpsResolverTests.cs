@@ -478,6 +478,57 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    public void Warns_about_a_config_map_whose_name_holds_a_slash()
+    {
+        var resolver = new GitOpsResolver(
+            GitOpsApplication.Parse("""
+                apiVersion: kustomize.toolkit.fluxcd.io/v1
+                kind: Kustomization
+                metadata: {name: apps, namespace: staging}
+                spec:
+                  postBuild:
+                    substituteFrom: [{kind: ConfigMap, name: vars, optional: true}]
+                ---
+                apiVersion: v1
+                kind: ConfigMap
+                metadata: {name: staging/vars}
+                data: {HOST: fake-host}
+                """, "apps.yaml"),
+            new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(["Skipped ConfigMap staging/vars in apps.yaml: a Kubernetes name cannot hold a slash."], resolver.Warnings);
+    }
+
+    [Fact]
+    public void Substitutes_from_the_config_map_in_the_kustomization_namespace()
+    {
+        var resolver = new GitOpsResolver(
+            GitOpsApplication.Parse("""
+                apiVersion: kustomize.toolkit.fluxcd.io/v1
+                kind: Kustomization
+                metadata: {name: apps, namespace: staging}
+                spec:
+                  postBuild:
+                    substituteFrom: [{kind: ConfigMap, name: vars}]
+                ---
+                apiVersion: v1
+                kind: ConfigMap
+                metadata: {name: vars, namespace: staging}
+                data: {HOST: staging-db.internal}
+                ---
+                apiVersion: v1
+                kind: ConfigMap
+                metadata: {name: vars, namespace: prod}
+                data: {HOST: prod-db.internal}
+                """, "apps.yaml"),
+            new GitOpsOptions { RepositoryRoot = _root });
+
+        var host = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.GitOps, Source = "t", Reference = new GitOpsVariableRef("apps", "HOST") }, new TraceDiagnostics());
+
+        Assert.Equal(["staging-db.internal"], host.Select(h => h.Value));
+    }
+
+    [Fact]
     public void A_key_that_is_secret_by_name_never_shows_its_placeholder_default_in_a_note()
     {
         // Neither key comes from a Secret: only their names say they are secret.

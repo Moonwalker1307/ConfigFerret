@@ -115,7 +115,7 @@ internal sealed class KubernetesOptions(bool required)
 
     public Option<string?> Workload { get; } = new("--workload", "-w")
     {
-        Description = "The workload or pod name. Needed when the manifests hold more than one.",
+        Description = "The workload or pod name, or namespace/name when the name is in more than one namespace (/name for the one without a namespace). Needed when the manifests hold more than one.",
         HelpName = "name",
     };
 

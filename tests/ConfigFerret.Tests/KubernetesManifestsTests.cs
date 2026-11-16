@@ -208,6 +208,120 @@ public sealed class KubernetesManifestsTests : IDisposable
     }
 
     [Fact]
+    public void Keeps_the_object_of_a_name_loaded_last_whatever_its_namespace()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: ConfigMap
+            metadata: { name: cfg, namespace: prod }
+            data: { a: prod }
+            ---
+            kind: ConfigMap
+            metadata: { name: cfg, namespace: staging }
+            data: { a: staging }
+            ---
+            kind: ConfigMap
+            metadata: { name: prod/cfg }
+            data: { a: posing }
+            ---
+            kind: Secret
+            metadata: { name: s, namespace: staging }
+            ---
+            kind: Secret
+            metadata: { name: s, namespace: prod }
+            ---
+            apiVersion: secrets-store.csi.x-k8s.io/v1
+            kind: SecretProviderClass
+            metadata: { name: spc, namespace: prod }
+            spec: { provider: aws }
+            ---
+            apiVersion: secrets-store.csi.x-k8s.io/v1
+            kind: SecretProviderClass
+            metadata: { name: spc, namespace: staging }
+            spec: { provider: vault }
+            """);
+
+        Assert.Equal(["cfg"], manifests.ConfigMaps.Keys);
+        Assert.Equal(("staging", "staging"), (manifests.ConfigMaps["cfg"].Namespace, manifests.ConfigMaps["cfg"].Data["a"].Value));
+        Assert.Equal(["s"], manifests.Secrets.Keys);
+        Assert.Equal("prod", manifests.Secrets["s"].Namespace);
+        Assert.Equal("vault", Assert.Single(manifests.SecretProviderClasses).Value.Provider);
+    }
+
+    [Fact]
+    public void Adds_and_finds_objects_of_one_name_in_many_namespaces_in_linear_work()
+    {
+        const int Count = 10_000;
+        var calls = 0L;
+        var objects = new KubernetesManifests.Namespaced<KubernetesData, string>(d => { calls++; return d.Namespace; }, d => { calls++; return d.Name; });
+
+        for (var i = 0; i < Count; i++)
+        {
+            objects.Add(new KubernetesData("cfg", new Dictionary<string, KubernetesValue>(), "m.yaml") { Namespace = $"n{i}" });
+        }
+
+        for (var i = 0; i < Count; i++)
+        {
+            Assert.Equal($"n{i}", objects.Find($"n{i}", "cfg")?.Namespace);
+        }
+
+        Assert.Equal($"n{Count - 1}", objects.Find(null, "cfg")?.Namespace);
+        Assert.InRange(calls, 0, 10L * Count);
+    }
+
+    [Fact]
+    public void Reads_the_namespace_of_workloads_and_operator_objects()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: p, namespace: prod }
+            spec: { containers: [{ name: c }] }
+            ---
+            kind: Pod
+            metadata: { name: q, namespace: "" }
+            spec: { containers: [{ name: c }] }
+            ---
+            apiVersion: external-secrets.io/v1
+            kind: ExternalSecret
+            metadata: { name: es, namespace: prod }
+            ---
+            apiVersion: external-secrets.io/v1
+            kind: SecretStore
+            metadata: { name: store, namespace: prod }
+            ---
+            apiVersion: external-secrets.io/v1
+            kind: ClusterSecretStore
+            metadata: { name: store, namespace: prod }
+            """);
+
+        Assert.Equal<string?>(["prod", null], manifests.Workloads.Select(w => w.Namespace));
+        Assert.Equal("prod", Assert.Single(manifests.ExternalSecrets).Namespace);
+        Assert.Equal<(string, string?)>([("SecretStore", "prod"), ("ClusterSecretStore", null)], manifests.SecretStores.Select(s => (s.Kind, s.Namespace)));
+    }
+
+    [Fact]
+    public void Keys_objects_by_name_alone_when_each_name_is_in_one_namespace()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: ConfigMap
+            metadata: { name: a, namespace: prod }
+            ---
+            kind: ConfigMap
+            metadata: { name: b }
+            ---
+            kind: Secret
+            metadata: { name: a, namespace: prod }
+            ---
+            kind: ConfigMap
+            metadata: { name: a, namespace: prod }
+            data: { later: x }
+            """);
+
+        Assert.Equal(["a", "b"], manifests.ConfigMaps.Keys);
+        Assert.Equal(["later"], manifests.ConfigMaps["a"].Data.Keys);
+        Assert.Equal(["a"], manifests.Secrets.Keys);
+    }
+
+    [Fact]
     public void Loads_yaml_yml_and_json_files_from_a_folder_in_name_order()
     {
         Directory.CreateDirectory(Path.Join(_dir, "sub"));
