@@ -236,6 +236,34 @@ public class GitLabResolverTests
     }
 
     [Fact]
+    public void Reads_job_names_with_colons_and_quotes_and_a_variables_block_with_an_anchor()
+    {
+        const string yaml = """
+            variables: &defaults
+              GLOBAL_A: g
+            "deploy production":
+              variables:
+                Q: q
+            deploy:production:
+              variables:
+                A: 1
+            deploy:staging:  # same stage, other environment
+              variables:
+                A: 2
+            'quoted two':
+              image: alpine:3.20
+              variables:
+                R: r
+            """;
+
+        var options = new GitLabTraceOptions().AddCiFileText(yaml, ".gitlab-ci.yml");
+
+        Assert.Equal(
+            ["GLOBAL_A=g@-", "Q=q@deploy production", "A=1@deploy:production", "A=2@deploy:staging", "R=r@quoted two"],
+            options.Variables.Select(v => $"{v.Name}={v.Value}@{v.Job ?? "-"}"));
+    }
+
+    [Fact]
     public void Ends_a_variables_block_and_reads_odd_lines_safely()
     {
         const string yaml = "variables:\r\n  A: 1\r\n  B:\r\n    description: no value\r\n  - item\r\n    value: ignored\r\n  C:\r\nnext:\r\n  X: $A\r\n  - 'Y=${B}'\r\n  - \"export Z=$C\"\r\n  - W=$C trailing\r\n  - \r\nbuild:\r\n  variables:\r\n      D: 4\r\n      E:\r\n        value: 5\r\n";

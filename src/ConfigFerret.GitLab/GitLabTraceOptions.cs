@@ -89,7 +89,7 @@ public sealed partial class GitLabTraceOptions
             var text = line[indent..].TrimEnd();
             if (indent == 0 && TopKey().Match(text) is { Success: true } topKey)
             {
-                top = topKey.Groups["key"].Value;
+                top = topKey.Groups["quoted"].Success ? YamlLine.Scalar(topKey.Groups["quoted"].Value) : topKey.Groups["key"].Value;
             }
 
             if (blockIndent >= 0 && indent <= blockIndent)
@@ -214,10 +214,13 @@ public sealed partial class GitLabTraceOptions
     internal static string? ReferenceTarget(string? value) =>
         value is not null && WholeReference().Match(value) is { Success: true } match ? match.Groups["var"].Value : null;
 
-    [GeneratedRegex("""^(?<key>[^\s:#'"-][^:#]*?)\s*:""", RegexOptions.CultureInvariant)]
+    // A top-level key ends at the first colon followed by white space or the end of the line, so deploy:staging: is one
+    // key; a quoted key is read as a quoted scalar.
+    [GeneratedRegex("""^(?:(?<quoted>"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')|(?<key>[^\s:#'"-].*?))\s*:(?=\s|$)""", RegexOptions.CultureInvariant)]
     private static partial Regex TopKey();
 
-    [GeneratedRegex("""^variables\s*:\s*(?:#.*)?$""", RegexOptions.CultureInvariant)]
+    // variables:, optionally with an anchor or a tag such as &defaults.
+    [GeneratedRegex("""^variables\s*:(?:\s+[&!]\S+)*\s*(?:#.*)?$""", RegexOptions.CultureInvariant)]
     private static partial Regex VariablesKey();
 
     [GeneratedRegex("""^(?<kq>['"]?)(?<key>[A-Za-z_][A-Za-z0-9_]*)\k<kq>\s*:(?:\s+(?<value>.*))?$""", RegexOptions.CultureInvariant)]
