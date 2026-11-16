@@ -61,6 +61,16 @@ To skip typing it, give the container a token instead: `-e GITHUB_TOKEN=...`, an
 page. Publish the port on `127.0.0.1` only, as above, or put the app behind a reverse proxy that signs people in (such
 as oauth2-proxy) before you open it to others.
 
+The app answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]`, on any port, and refuses other host
+names with 400 Bad Request. This stops a web page that re-points its own name at your machine (DNS rebinding) from
+using the app as if you had opened it. Earlier versions answered any name. **If you reach the app by another name,
+such as a reverse proxy's address, a machine name or an IP address, set `AllowedHosts` to that name**, for example
+`-e AllowedHosts=ferret.example.com`. It is the host name in the requests the app receives: the one people type in the
+browser, or the upstream name if your proxy rewrites the `Host` header. Separate several names with `;`;
+`*.example.com` allows its subdomains and `*` allows any name. The value replaces the default list, so add
+`localhost` to it (`-e "AllowedHosts=ferret.example.com;localhost"`) if you also open the app on this machine.
+`/healthz` answers any name and says only `ok`, so health probes that use the container's IP address keep working.
+
 The token scopes are the desktop app's: a classic token with `repo`, or a fine-grained token with Contents, Metadata,
 Variables, Secrets and Environments read.
 
@@ -73,6 +83,7 @@ Set these as environment variables on the container.
 | `ConfigFerret__DataFolder` | `/data` | Where the workspace file and keys are saved. |
 | `ConfigFerret__Folders` | `/repos` | The folder whose subfolders can be opened. Empty turns it off. |
 | `ASPNETCORE_HTTP_PORTS` | `8080` | The port the app listens on. |
+| `AllowedHosts` | `localhost;127.0.0.1;[::1]` | The host names the app answers, separated by `;`. `*` allows any. |
 | `GITHUB_TOKEN`, `GH_TOKEN` | | A GitHub token used when none is typed in. |
 | `OCTOPUS_URL`, `OCTOPUS_API_KEY` | | An Octopus server and API key used when none is typed in. |
 
