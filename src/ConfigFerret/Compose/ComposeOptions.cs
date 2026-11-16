@@ -30,6 +30,18 @@ public sealed class ComposeOptions
     /// </summary>
     public bool ReadSecretFiles { get; set; }
 
+    /// <summary>
+    /// True to read files that the compose files name (a config's or secret's <c>file</c>, an <c>env_file</c>, an
+    /// <c>extends</c> file, an <c>include</c> and its env files) from anywhere, as docker compose does. False (the
+    /// default) reads them, and the project directory's <c>.env</c>, only from in or below the project directory after
+    /// following symbolic links, so a compose file from someone else can't pull other files into a trace; the others
+    /// are listed in the warnings. An include's <c>project_directory</c> does not widen this. Either way a folder is
+    /// not read, and a file of size 0, as a FIFO or a device reports, is taken as empty without opening it, so reading
+    /// never waits. The compose files, <see cref="EnvFiles"/> and <see cref="ProjectDirectory"/> passed in are read as
+    /// they are.
+    /// </summary>
+    public bool AllowFilesOutsideProject { get; set; }
+
     internal ComposeOptions Copy(string? projectDirectory, IEnumerable<string> envFiles)
     {
         var copy = new ComposeOptions
@@ -37,6 +49,7 @@ public sealed class ComposeOptions
             ProjectDirectory = projectDirectory,
             UseProcessEnvironment = UseProcessEnvironment,
             ReadSecretFiles = ReadSecretFiles,
+            AllowFilesOutsideProject = AllowFilesOutsideProject,
         };
         foreach (var file in envFiles)
         {

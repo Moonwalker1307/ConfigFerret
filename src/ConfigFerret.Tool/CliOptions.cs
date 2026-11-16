@@ -154,11 +154,17 @@ internal sealed class ComposeCliOptions
         HelpName = "file",
     };
 
+    public Option<bool> AllowFilesOutsideProject { get; } = new("--compose-allow-files-outside-project")
+    {
+        Description = "Let the compose files name files outside the project directory (env_file, extends, include, config and secret files), as docker compose does.",
+    };
+
     public void AddTo(Command command)
     {
         command.Options.Add(Files);
         command.Options.Add(Service);
         command.Options.Add(EnvFiles);
+        command.Options.Add(AllowFilesOutsideProject);
     }
 
     /// <summary>A trace of the compose service, or null when no compose file was passed.</summary>
@@ -173,9 +179,9 @@ internal sealed class ComposeCliOptions
                 throw new UsageException("container needs --manifests or --compose-file.");
             }
 
-            if (result.GetValue(Service) is not null || result.GetValue(EnvFiles) is { Length: > 0 })
+            if (result.GetValue(Service) is not null || result.GetValue(EnvFiles) is { Length: > 0 } || result.GetValue(AllowFilesOutsideProject))
             {
-                throw new UsageException("--compose-service and --compose-env-file need --compose-file.");
+                throw new UsageException("--compose-service, --compose-env-file and --compose-allow-files-outside-project need --compose-file.");
             }
 
             return null;
@@ -187,7 +193,7 @@ internal sealed class ComposeCliOptions
         }
 
         // The tool's own environment is never read, so the shell's variables and tokens stay out of the trace.
-        var options = new ConfigFerret.Compose.ComposeOptions();
+        var options = new ConfigFerret.Compose.ComposeOptions { AllowFilesOutsideProject = result.GetValue(AllowFilesOutsideProject) };
         foreach (var envFile in result.GetValue(EnvFiles) ?? [])
         {
             options.EnvFiles.Add(InputReader.RequireFile(envFile));

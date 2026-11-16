@@ -363,7 +363,7 @@ public sealed class Kustomization
     /// resolved again, links in its folders too. Null after <see cref="MaxLinks"/> links, or at a link whose target
     /// is rooted but not fully qualified.
     /// </summary>
-    private static string? RealPath(string path)
+    internal static string? RealPath(string path)
     {
         // .NET removes ".." from the path it is given as text before it opens it, so that is the path to check.
         var links = 0;
