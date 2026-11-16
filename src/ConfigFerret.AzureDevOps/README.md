@@ -25,7 +25,8 @@ var report = ConfigTracer.For(builder.Configuration)
     .Trace();
 
 Console.WriteLine(report.Explain("Db:Timeout"));
-// set in environment variable DB_TIMEOUT from Azure DevOps variable group api-production variable Db.Timeout
+// set in environment variable Db__Timeout from Azure DevOps variable group api-production variable Db.Timeout
+// (when azure-pipelines.yml has `env: Db__Timeout: $(Db.Timeout)` on the step that starts the app)
 ```
 
 ## Configure from appsettings and dependency injection
