@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Text.RegularExpressions;
 
 namespace ConfigFerret.Desktop.Services;
@@ -70,23 +71,65 @@ public static partial class RepositoryScanner
         var yamlFiles = new List<string>();
         Walk(root, root, 0, apps, charts, kustomizations, yamlFiles);
 
-        var chartInfos = charts.Select(chart =>
+        // Each file is looked at once, and its folders up to the root are looked up among the chart folders, so the work
+        // grows with the files, not with charts times files. Every chart is offered every values file but the ones in its
+        // own folder that are part of it, so the charts share one list and each keeps only what it leaves out. The chart
+        // folders and each file's folders come from the same listing, so they are spelled alike and compared exactly.
+        var chartIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < charts.Count; i++)
         {
-            var relative = Relative(root, chart);
-            var values = yamlFiles
-                .Where(f => IsValuesFile(f) && !string.Equals(Path.GetFullPath(f), Path.Join(chart, "values.yaml"), StringComparison.Ordinal)
-                    && !IsUnder(f, Path.Join(chart, "templates")) && !IsUnder(f, Path.Join(chart, "charts")))
-                .Select(f => Relative(root, f))
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            return new HelmChartInfo(chart, relative, values);
-        }).ToList();
+            chartIndex.TryAdd(Path.TrimEndingDirectorySeparator(charts[i]), i);
+        }
 
-        var manifests = yamlFiles
-            .Where(f => !charts.Any(c => IsUnder(f, c)) && !IsValuesFile(f) && LooksLikeManifest(f))
-            .Select(f => Relative(root, f))
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var rootFolder = Path.TrimEndingDirectorySeparator(root);
+        var values = new List<string>();
+        var leftOut = new List<int>?[charts.Count];
+        var manifests = new List<string>();
+        foreach (var file in yamlFiles)
+        {
+            var isValues = IsValuesFile(file);
+            var inChart = false;
+            string? below = null;
+            for (var folder = Path.GetDirectoryName(file); folder is not null; below = folder, folder = Path.GetDirectoryName(folder))
+            {
+                if (chartIndex.TryGetValue(folder, out var chart))
+                {
+                    inChart = true;
+                    if (isValues && IsPartOfChart(file, below))
+                    {
+                        (leftOut[chart] ??= []).Add(values.Count);
+                    }
+                }
+
+                if (string.Equals(folder, rootFolder, StringComparison.Ordinal))
+                {
+                    break;
+                }
+            }
+
+            if (isValues)
+            {
+                values.Add(Relative(root, file));
+            }
+            else if (!inChart && LooksLikeManifest(file))
+            {
+                manifests.Add(Relative(root, file));
+            }
+        }
+
+        // A stable sort, so each chart's files keep the order they had when every chart sorted its own list.
+        var order = Enumerable.Range(0, values.Count).OrderBy(i => values[i], StringComparer.OrdinalIgnoreCase).ToArray();
+        var sorted = Array.ConvertAll(order, i => values[i]);
+        var position = new int[order.Length];
+        for (var i = 0; i < order.Length; i++)
+        {
+            position[order[i]] = i;
+        }
+
+        var chartInfos = charts.Select((chart, i) => new HelmChartInfo(
+            chart,
+            Relative(root, chart),
+            new SharedValuesFiles(sorted, leftOut[i] is { } left ? [.. left.Select(v => position[v]).Order()] : []))).ToList();
 
         var workflowsFolder = Path.Join(root, ".github", "workflows");
         var workflows = Directory.Exists(workflowsFolder)
@@ -102,7 +145,7 @@ public static partial class RepositoryScanner
             apps.OrderBy(a => a.RelativePath.Count(c => c == '/')).ThenBy(a => a.RelativePath, StringComparer.OrdinalIgnoreCase).ToList(),
             chartInfos.OrderBy(c => c.RelativePath, StringComparer.OrdinalIgnoreCase).ToList(),
             kustomizations.Select(k => Relative(root, k)).OrderBy(k => k.Contains("overlay", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(k => k, StringComparer.OrdinalIgnoreCase).ToList(),
-            manifests,
+            manifests.Order(StringComparer.OrdinalIgnoreCase).ToList(),
             workflows,
             Directory.Exists(Path.Join(root, ".octopus")));
     }
@@ -196,10 +239,15 @@ public static partial class RepositoryScanner
         }
     }
 
-    private static bool IsUnder(string path, string folder)
+    // A chart's own values.yaml, or a values file in its templates or charts folder (a subchart's). below is the folder
+    // inside the chart that holds the file, or null for a file in the chart's folder itself. On Windows and macOS the
+    // names match regardless of case, the way the chart loader, which opens them by path, finds them on those systems.
+    private static bool IsPartOfChart(string file, string? below)
     {
-        var full = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return Path.GetFullPath(path).StartsWith(full, StringComparison.Ordinal);
+        var comparer = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        return below is null
+            ? comparer.Equals(Path.GetFileName(file), "values.yaml")
+            : Path.GetFileName(below) is var name && (comparer.Equals(name, "templates") || comparer.Equals(name, "charts"));
     }
 
     // Paths from the root use "/" everywhere. Only the system's own separator is replaced: on Linux and macOS a "\" is
@@ -215,4 +263,60 @@ public static partial class RepositoryScanner
 
     [GeneratedRegex(@"^kind:\s*(Deployment|StatefulSet|DaemonSet|Pod|Job|CronJob|ReplicaSet|ConfigMap|Secret|List)\s*$", RegexOptions.Multiline | RegexOptions.CultureInvariant)]
     private static partial Regex ManifestKind();
+}
+
+/// <summary>
+/// The values files offered to one chart: the repository's sorted list, which every chart shares, less the positions of
+/// the files that are part of this chart.
+/// </summary>
+internal sealed class SharedValuesFiles(string[] all, int[] leftOut) : IReadOnlyList<string>
+{
+    /// <inheritdoc />
+    public int Count => all.Length - leftOut.Length;
+
+    /// <inheritdoc />
+    public string this[int index]
+    {
+        get
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(index);
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, Count);
+
+            // The item sits at index plus the number of left-out positions before it: the first k where leftOut[k] lies
+            // past index + k. leftOut is sorted and has no repeats, so that holds from k on once it holds for k.
+            int low = 0, high = leftOut.Length;
+            while (low < high)
+            {
+                var middle = (low + high) / 2;
+                if (leftOut[middle] <= index + middle)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+
+            return all[index + low];
+        }
+    }
+
+    /// <inheritdoc />
+    public IEnumerator<string> GetEnumerator()
+    {
+        var next = 0;
+        for (var i = 0; i < all.Length; i++)
+        {
+            if (next < leftOut.Length && leftOut[next] == i)
+            {
+                next++;
+                continue;
+            }
+
+            yield return all[i];
+        }
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }
