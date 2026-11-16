@@ -199,6 +199,44 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Matches_a_name_to_a_JSON_key_value_by_its_own_configuration_key()
+    {
+        const string retry = """{"Count":3}""";
+        var handler = Handler()
+            .Respond(KeysPath("base"), Page(
+                null,
+                Kv("App:Retry", retry, "base", "application/json"),
+                Kv("Orders:Retry", retry, "base", "application/json"),
+                Kv("Orders:Name", "\"abc\"", "base", "application/json"),
+                Kv("Orders:Mode", """{"A":1}""", "base", "application/json")))
+            .Respond(KeysPath("prod"), Page(null, Kv("Orders:Mode", "x", "prod")));
+        var settings = await Load(handler, o =>
+        {
+            o.Labels.Add("base");
+            o.Labels.Add("prod");
+            o.TrimKeyPrefixes.Add("App:");
+            o.IncludeFeatureFlags = false;
+        });
+        var resolver = new AzureAppConfigurationResolver(settings, new());
+        IReadOnlyList<ProvenanceStep> Resolve(string name, string value) => resolver.Resolve(TestLayers.Env(name, value), new TraceDiagnostics());
+
+        var trimmed = Assert.Single(Resolve("Retry", retry));
+        Assert.Equal("Azure App Configuration key App:Retry (contoso)", trimmed.Source);
+        Assert.Equal(retry, trimmed.Value);
+        Assert.Equal("matched by configuration key", trimmed.Note);
+        Assert.Equal(retry, Assert.Single(Resolve("Orders__Retry", retry)).Value);
+
+        // A JSON string sets its own key once; a key set by a JSON key-value in one label and a plain one in another
+        // lists both, lowest priority first.
+        Assert.Equal("abc", Assert.Single(Resolve("Orders__Name", "abc")).Value);
+        Assert.Equal(["""{"A":1}""", "x"], Resolve("Orders__Mode", "x").Select(s => s.Value));
+
+        // FindByConfigurationKey keeps giving only the keys the provider sets.
+        Assert.Empty(settings.FindByConfigurationKey("Retry"));
+        Assert.Single(settings.FindByConfigurationKey("Retry:Count"));
+    }
+
+    [Fact]
     public async Task Links_a_name_to_a_large_JSON_key_value_in_two_labels_without_cutting_the_trace()
     {
         var retry = "[" + string.Join(",", Enumerable.Repeat("1", 600)) + "]";

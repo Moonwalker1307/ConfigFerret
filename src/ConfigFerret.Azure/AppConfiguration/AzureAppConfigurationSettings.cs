@@ -39,6 +39,7 @@ public sealed class AzureAppConfigurationSettings
 
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byStoredKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byKeyOrOwnKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> _flattened;
 
     /// <summary>Creates a snapshot from settings you already have. Each setting sets its own configuration key.</summary>
@@ -66,9 +67,17 @@ public sealed class AzureAppConfigurationSettings
         {
             ArgumentNullException.ThrowIfNull(setting, nameof(settings));
             Add(_byStoredKey, setting.Key, setting);
-            foreach (var value in Flattened(setting) ?? [setting])
+            var values = Flattened(setting) ?? [setting];
+            foreach (var value in values)
             {
                 Add(_byKey, value.ConfigurationKey, value);
+                Add(_byKeyOrOwnKey, value.ConfigurationKey, value);
+            }
+
+            // A JSON key-value also answers to its own configuration key, once, unless a value it sets already does.
+            if (!values.Any(value => string.Equals(value.ConfigurationKey, setting.ConfigurationKey, StringComparison.OrdinalIgnoreCase)))
+            {
+                Add(_byKeyOrOwnKey, setting.ConfigurationKey, setting);
             }
 
             if (setting.Kind == AzureAppConfigurationSettingKind.FeatureFlag)
@@ -79,6 +88,14 @@ public sealed class AzureAppConfigurationSettings
 
         Warnings = [.. warnings ?? []];
     }
+
+    /// <summary>
+    /// <see cref="FindByConfigurationKey"/>, plus each stored JSON key-value whose own configuration key (its key with the
+    /// trimmed prefixes removed) is <paramref name="key"/>, holding its whole JSON, lowest priority first. For matching a
+    /// name to a key-value, as a variable that holds the JSON of <c>App:Retry</c> may be named <c>Retry</c>.
+    /// </summary>
+    internal IReadOnlyList<AzureAppConfigurationSetting> FindByConfigurationKeyOrOwnKey(string key) =>
+        _byKeyOrOwnKey.TryGetValue(key, out var list) ? list : [];
 
     /// <summary>The length of the longest configuration key a feature flag sets, or 0 when there is no flag.</summary>
     internal int LongestFlagKey { get; }

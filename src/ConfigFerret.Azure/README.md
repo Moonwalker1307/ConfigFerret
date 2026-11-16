@@ -119,7 +119,8 @@ Key Vault configuration provider still loads it.
 App Configuration (`LayerKind.AzureAppConfiguration`):
 
 - **Same key** (inferred, `MatchByName`): `Db__Timeout` and `Db:Timeout` match the key-value `Db:Timeout`. App
-  Configuration keys already use `:`.
+  Configuration keys already use `:`. A JSON key-value matches by its own key, as a whole, and by each key it is
+  flattened to, so `Db__Timeout` matches a JSON `Db:Timeout` and `Db__Timeout__Seconds` its value `Seconds`.
 - **App Configuration provider** (inferred, `MatchConfigurationProvider`): a value set by `AddAzureAppConfiguration`
   links to the key-values for its key.
 - **Explicit links** (certain): `Map("TIMEOUT", "Orders:Db:Timeout")` or `Links`.
