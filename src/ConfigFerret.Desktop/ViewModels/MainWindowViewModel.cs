@@ -554,7 +554,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _ = RetraceAsync();
     }
 
-    partial void OnSelectedEnvironmentChanged(string? value) => RetraceOnChoice();
+    partial void OnSelectedEnvironmentChanged(string? value)
+    {
+        // A pick of the user's own wins over the environment the container sets; one the view fills in does not.
+        if (!_populating && _currentKey is not null && _workspace.Repositories.TryGetValue(_currentKey, out var choices))
+        {
+            choices.EnvironmentChosen = true;
+        }
+
+        RetraceOnChoice();
+    }
 
     partial void OnSelectedValuesFileChanged(string? value) => RetraceOnChoice();
 
@@ -1105,7 +1114,28 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         if (result is not null)
         {
             ShowResult(result, notes, reveal);
+            ShowTracedEnvironment(choices, result.Environment);
         }
+    }
+
+    // Until the user picks an environment, the trace uses the one the container sets. The list shows that one, so that
+    // picking any other, the one shown before too, is a pick of the user's own.
+    private void ShowTracedEnvironment(AnalysisChoices choices, string? traced)
+    {
+        if (choices.EnvironmentChosen || traced is null || string.Equals(traced, SelectedEnvironment, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var populating = _populating;
+        _populating = true;
+        if (!Environments.Contains(traced, StringComparer.OrdinalIgnoreCase))
+        {
+            Environments.Add(traced);
+        }
+
+        SelectedEnvironment = Environments.First(e => string.Equals(e, traced, StringComparison.OrdinalIgnoreCase));
+        _populating = populating;
     }
 
     // On a shared server, reads each credential once, before the trace starts, and fixes the address it goes to, so a

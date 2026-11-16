@@ -85,6 +85,13 @@ public sealed partial class AppSettingsSource : SourceSettings
     [ObservableProperty]
     public partial string EnvironmentName { get; set; } = "Production";
 
+    /// <summary>
+    /// True when <see cref="EnvironmentName"/> is only a default: the environment the app's variables set, with
+    /// DOTNET_ENVIRONMENT or ASPNETCORE_ENVIRONMENT, is traced instead.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool EnvironmentNameIsDefault { get; set; }
+
     /// <summary>Load user secrets (UserSecretsId from the project file) when the environment is Development.</summary>
     [ObservableProperty]
     public partial bool UseUserSecrets { get; set; } = true;

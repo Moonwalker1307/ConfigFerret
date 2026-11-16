@@ -47,6 +47,9 @@ public sealed record TraceResult(
 
     /// <summary>GitHub variables that a workflow uses but no setting in the trace does, such as a deploy action's publish profile.</summary>
     public IReadOnlyList<WorkflowVariable> WorkflowVariables { get; init; } = [];
+
+    /// <summary>The environment the first app's settings were traced in, or null for a container trace.</summary>
+    public string? Environment { get; init; }
 }
 
 /// <summary>A configured setting that no code reads.</summary>
@@ -118,7 +121,7 @@ public sealed class TraceSetupException : Exception
 /// Builds a <see cref="ConfigTracer"/> from a <see cref="Profile"/> and runs it. A source that cannot be read (a missing
 /// values file, a GitHub token without access) is left out and reported; the trace goes on with the rest.
 /// </summary>
-public sealed class TraceRunner
+public sealed partial class TraceRunner
 {
     private readonly ICredentialStore _credentials;
     private readonly Func<string, string?> _getEnvironmentVariable;
@@ -176,6 +179,7 @@ public sealed class TraceRunner
         }
 
         ConfigTracer tracer;
+        string? environmentName = null;
         if (profile.Mode == TraceMode.Container)
         {
             if (manifests is null)
@@ -193,7 +197,7 @@ public sealed class TraceRunner
         }
         else
         {
-            tracer = BuildAppTracer(sources, manifests, kubernetes.FirstOrDefault(), github, results, notes);
+            tracer = BuildAppTracer(sources, manifests, kubernetes.FirstOrDefault(), github, results, notes, out environmentName);
         }
 
         tracer.WithOptions(o => o.RevealSensitiveValues = revealSecrets);
@@ -276,6 +280,7 @@ public sealed class TraceRunner
             DeadHelmValues = deadHelm,
             CodeFilesScanned = code?.FilesScanned,
             DynamicReads = code?.DynamicReads ?? [],
+            Environment = environmentName,
         };
 
         static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
@@ -443,7 +448,8 @@ public sealed class TraceRunner
         KubernetesSource? kubernetes,
         Dictionary<GitHubSource, GitHubVariables> github,
         Dictionary<SourceSettings, string?> results,
-        List<string> notes)
+        List<string> notes,
+        out string environmentName)
     {
         var apps = sources.OfType<AppSettingsSource>().ToList();
         if (apps.Count == 0)
@@ -452,7 +458,9 @@ public sealed class TraceRunner
         }
 
         // The app's environment: what the container gets from the manifests, then each environment variables source.
+        // The values are revealed, so the variables whose value is sensitive, such as one from a Secret, are kept apart.
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var sensitive = new HashSet<string>(StringComparer.Ordinal);
         if (manifests is not null)
         {
             var container = ConfigTracer.ForContainer(manifests, Blank(kubernetes!.Workload), Blank(kubernetes.Container))
@@ -461,6 +469,10 @@ public sealed class TraceRunner
             foreach (var setting in container.Settings.Where(s => !s.Key.StartsWith('/')))
             {
                 environment[setting.Key] = setting.Value;
+                if (setting.IsSensitive)
+                {
+                    sensitive.Add(setting.Key);
+                }
             }
         }
 
@@ -473,12 +485,14 @@ public sealed class TraceRunner
                     foreach (var (name, value) in DotEnv.Parse(File.ReadAllText(source.File), Path.GetFileName(source.File)))
                     {
                         environment[name] = value;
+                        sensitive.Remove(name);
                     }
                 }
 
                 foreach (var (name, value) in DotEnv.Parse(source.Variables, source.Name))
                 {
                     environment[name] = value;
+                    sensitive.Remove(name);
                 }
 
                 results[source] = null;
@@ -504,11 +518,14 @@ public sealed class TraceRunner
         }
 
         var builder = new ConfigurationBuilder();
+        var traced = new List<string>();
         foreach (var app in apps)
         {
-            AddAppSettings(builder, app);
+            traced.Add(AddAppSettings(builder, app, environment, sensitive, notes));
             results[app] = null;
         }
+
+        environmentName = traced[0];
 
         var prefixes = apps.SelectMany(a => a.EnvironmentPrefixes).Distinct(StringComparer.Ordinal).ToList();
         AddWorkflowEnvironment(environment, github, builder, prefixes, notes);
@@ -537,7 +554,8 @@ public sealed class TraceRunner
         return tracer;
     }
 
-    private void AddAppSettings(ConfigurationBuilder builder, AppSettingsSource app)
+    // Adds the app's settings files and returns the environment they are for.
+    private string AddAppSettings(ConfigurationBuilder builder, AppSettingsSource app, Dictionary<string, string?> environment, HashSet<string> sensitive, List<string> notes)
     {
         if (string.IsNullOrWhiteSpace(app.Folder) || !Directory.Exists(app.Folder))
         {
@@ -545,7 +563,7 @@ public sealed class TraceRunner
         }
 
         var directory = Path.GetFullPath(app.Folder);
-        var environmentName = string.IsNullOrWhiteSpace(app.EnvironmentName) ? "Production" : app.EnvironmentName.Trim();
+        var environmentName = PickEnvironment(app, environment, sensitive, directory, notes);
         var files = new[] { Path.Join(directory, "appsettings.json"), Path.Join(directory, $"appsettings.{environmentName}.json") }
             .Where(File.Exists)
             .ToList();
@@ -574,7 +592,78 @@ public sealed class TraceRunner
         {
             builder.AddJsonFile(secrets, optional: false);
         }
+
+        return environmentName;
     }
+
+    // The variables that set the environment, in the order WebApplication.CreateBuilder reads them on .NET 7 and later:
+    // the first one set wins. Other hosts read them in another order, or only DOTNET_ENVIRONMENT.
+    private static readonly string[] HostEnvironmentVariables = ["DOTNET_ENVIRONMENT", "ASPNETCORE_ENVIRONMENT"];
+
+    private const string HostOrder = "DOTNET_ENVIRONMENT before ASPNETCORE_ENVIRONMENT, as WebApplication.CreateBuilder reads them on .NET 7 and later";
+
+    // The environment the app runs in. A chosen one is traced as it is; a default gives way to the one the app's
+    // variables set. Either way a note says so when the two differ. A value that is a stand-in or sensitive (from a
+    // Secret) is neither used nor shown, and one that is not a plain name, or whose settings file is outside the app's
+    // folder, is not used; the note then names only the variable.
+    private static string PickEnvironment(AppSettingsSource app, Dictionary<string, string?> environment, HashSet<string> sensitive, string directory, List<string> notes)
+    {
+        var chosen = string.IsNullOrWhiteSpace(app.EnvironmentName) ? "Production" : app.EnvironmentName.Trim();
+        var variable = HostEnvironmentVariables.FirstOrDefault(v => !string.IsNullOrEmpty(environment.GetValueOrDefault(v)));
+        if (variable is null)
+        {
+            return chosen;
+        }
+
+        var value = environment[variable]!;
+        if (value is ManifestStandIn or SecretStandIn)
+        {
+            notes.Add($"{variable} in the app's environment has no value in the repository, so {app.Name} is traced in {chosen}, which may not be the environment the app runs in.");
+            return chosen;
+        }
+
+        if (sensitive.Contains(variable))
+        {
+            notes.Add($"{variable} in the app's environment comes from a Secret or is sensitive, so its value is not used or shown, and {app.Name} is traced in {chosen}.");
+            return chosen;
+        }
+
+        if (!EnvironmentNamePattern().IsMatch(value) || !Kustomization.IsInFolder(Path.Join(directory, $"appsettings.{value}.json"), directory))
+        {
+            notes.Add($"{variable} in the app's environment is not a name that picks a settings file in the app's folder, so {app.Name} is traced in {chosen}.");
+            return chosen;
+        }
+
+        if (string.Equals(value, chosen, StringComparison.Ordinal))
+        {
+            return chosen;
+        }
+
+        // A Linux container looks for the settings file with the name as written. That only matters when the trace reads
+        // a file under the chosen name and no file has the name as written.
+        if (string.Equals(value, chosen, StringComparison.OrdinalIgnoreCase))
+        {
+            if (File.Exists(Path.Join(directory, $"appsettings.{chosen}.json"))
+                && !Directory.EnumerateFiles(directory).Any(f => string.Equals(Path.GetFileName(f), $"appsettings.{value}.json", StringComparison.Ordinal)))
+            {
+                notes.Add($"{variable} is {value} in the app's environment, and {app.Name} is traced with appsettings.{chosen}.json. A Linux container looks for appsettings.{value}.json, with the name as written.");
+            }
+
+            return chosen;
+        }
+
+        if (app.EnvironmentNameIsDefault)
+        {
+            notes.Add($"{variable} is {value} in the app's environment ({HostOrder}), so {app.Name} is traced in {value}, not {chosen}. Pick an environment to trace another one.");
+            return value;
+        }
+
+        notes.Add($"{variable} is {value} in the app's environment ({HostOrder}), but {app.Name} is traced in {chosen}, the environment picked. The app reads appsettings.{value}.json.");
+        return chosen;
+    }
+
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant)]
+    private static partial Regex EnvironmentNamePattern();
 
     private static void AddHelm(ConfigTracer tracer, HelmSource helm)
     {

@@ -339,6 +339,18 @@ public class RepositoryAnalyzerChoicesTests
         }
     }
 
+    [Theory]
+    [InlineData("Staging", "Production", false)]
+    [InlineData("Development", "Development", true)]
+    public void A_picked_environment_the_app_has_no_file_for_is_replaced_and_no_longer_counts_as_picked(string picked, string expected, bool stillChosen)
+    {
+        var choices = new AnalysisChoices { App = "src/Api", Environment = picked, EnvironmentChosen = true };
+
+        RepositoryAnalyzer.SuggestChoices(Scan(apps: [App("src/Api", "Development", "Production")]), choices, []);
+
+        Assert.Equal((expected, stillChosen), (choices.Environment, choices.EnvironmentChosen));
+    }
+
     [Fact]
     public void A_github_environment_that_still_exists_is_kept_and_others_are_matched()
     {
