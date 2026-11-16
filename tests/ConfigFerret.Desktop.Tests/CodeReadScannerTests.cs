@@ -252,6 +252,36 @@ public class CodeReadScannerTests
     }
 
     [Fact]
+    public void Only_a_project_named_as_tests_is_left_out_and_it_is_listed()
+    {
+        using var temp = new TempFolder();
+        string[] names = ["Attestation", "Latest", "Contest", "Api.Tests", "Api.Test.Helpers", "ApiTests", "UnitTest"];
+        var references = string.Concat(names.Select(n => $"""<ProjectReference Include="../{n}/{n}.csproj" />"""));
+        temp.Write("src/Api/Api.csproj", $"<Project><ItemGroup>{references}</ItemGroup></Project>");
+        temp.Write("src/Api/Program.cs", "var x = 1;");
+        foreach (var name in names)
+        {
+            temp.Write($"src/{name}/{name}.csproj", "<Project />");
+            temp.Write($"src/{name}/Reader.cs", $"""var s = configuration["{name}:Url"];""");
+        }
+
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.True(scanner.Check("Attestation:Url").IsRead);
+        Assert.True(scanner.Check("Latest:Url").IsRead);
+        Assert.True(scanner.Check("Contest:Url").IsRead);
+        Assert.False(scanner.Check("Api.Tests:Url").IsRead);
+        Assert.Equal(
+            [
+                "\"../Api.Tests/Api.Tests.csproj\" (a test project)",
+                "\"../Api.Test.Helpers/Api.Test.Helpers.csproj\" (a test project)",
+                "\"../ApiTests/ApiTests.csproj\" (a test project)",
+                "\"../UnitTest/UnitTest.csproj\" (a test project)",
+            ],
+            scanner.SkippedReferences);
+    }
+
+    [Fact]
     public void Project_references_that_are_not_followed_are_listed_with_why()
     {
         using var outside = new TempFolder();

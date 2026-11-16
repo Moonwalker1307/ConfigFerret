@@ -58,19 +58,20 @@ or Ctrl+B (Cmd+B on macOS), to give the results the whole window.
 ### How dead settings are found
 
 The app reads the C# code in the app's folder and in the projects it references inside the repository (test projects,
-`bin` and `obj` are skipped, and a reference that leads out of the repository, by its path or a link, isn't followed)
-and collects the keys it reads: `config["A:B"]`, `GetValue<T>("A:B")`, `GetSection("A")`, `GetConnectionString("Db")`,
-`Environment.GetEnvironmentVariable("A__B")`, and sections, or the whole configuration, bound to an options class with
-`Configure<T>`, `Bind`, `Get<T>` or `BindConfiguration`. For a bound section only keys that match a property of the
-class count as read, so `Db:Timeout` is dead when `DbOptions` has no `Timeout`, unless a section below it is read or
-bound on its own, or the scan can't see every property the class has. That is the case when the class derives from a
-class that isn't in the code or is more than 16 levels up, from one with its own name (`Settings : Lib.Settings`), or
-from two different classes in classes of one name, and when the scan can't take its declaration apart. A base named like
-an interface, `I` then a capital and a lower-case letter as in `IDisposable`, adds no property, so `IISServerOptions`
-counts as a class. A `Bind` that names no class, such as `config.Bind("Smtp", smtp)` or `config.Bind(settings)`, reads
-its section or the whole configuration. A key more than 64 segments below a bound section, or under more than 64 bound
-sections, counts as read. Keys the host reads itself, such as `Logging`, `AllowedHosts` and variables that start with
-`ASPNETCORE_` or `DOTNET_`, always count as read, and commented-out code doesn't.
+such as `Api.Tests` or `ApiTests`, and `bin` and `obj` are skipped, and a reference that leads out of the repository, by
+its path or a link, isn't followed) and collects the keys it reads: `config["A:B"]`, `GetValue<T>("A:B")`,
+`GetSection("A")`, `GetConnectionString("Db")`, `Environment.GetEnvironmentVariable("A__B")`, and sections, or the whole
+configuration, bound to an options class with `Configure<T>`, `Bind`, `Get<T>` or `BindConfiguration`. For a bound
+section only keys that match a property of the class count as read, so `Db:Timeout` is dead when `DbOptions` has no
+`Timeout`, unless a section below it is read or bound on its own, or the scan can't see every property the class has.
+That is the case when the class derives from a class that isn't in the code or is more than 16 levels up, from one with
+its own name (`Settings : Lib.Settings`), or from two different classes in classes of one name, and when the scan can't
+take its declaration apart. A base named like an interface, `I` then a capital and a lower-case letter as in
+`IDisposable`, adds no property, so `IISServerOptions` counts as a class. A `Bind` that names no class, such as
+`config.Bind("Smtp", smtp)` or `config.Bind(settings)`, reads its section or the whole configuration. A key more than 64
+segments below a bound section, or under more than 64 bound sections, counts as read. Keys the host reads itself, such
+as `Logging`, `AllowedHosts` and variables that start with `ASPNETCORE_` or `DOTNET_`, always count as read, and
+commented-out code doesn't.
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are listed
 under the scan, and a dead setting may still be read there. So is a file the scan skipped because it is over 1 MB,
@@ -78,11 +79,11 @@ doesn't fit in the 64 MB of code the scan holds, comes past the first 5000 files
 long. So is a folder the scan may not open, since its files can't be listed. A file over 1 MB is still searched for the
 classes it declares, and those count as having any property; when a skipped file isn't searched, every class does. The
 scan follows at most 50 projects. A reference it doesn't follow, such as one outside the repository, one written with an
-MSBuild property or one past those 50, and a project file it can't read, is named in the notes with why. The repository
-is the folder or GitHub repository you opened, so open the root of a checkout, not the app's own folder, for its
-references to other projects in it to be followed. A class whose declaration or one of whose properties the scan can't
-take apart, or whose bases go more than 16 levels up, counts as having any property too. Check other environments and
-apps before deleting.
+MSBuild property, one to a test project or one past those 50, and a project file it can't read, is named in the notes
+with why. The repository is the folder or GitHub repository you opened, so open the root of a checkout, not the app's
+own folder, for its references to other projects in it to be followed. A class whose declaration or one of whose
+properties the scan can't take apart, or whose bases go more than 16 levels up, counts as having any property too. Check
+other environments and apps before deleting.
 
 ## Download
 

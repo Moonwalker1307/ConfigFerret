@@ -1389,11 +1389,17 @@ public sealed partial class CodeReadScanner
 
                 // An absolute path, enough "..", or a link can lead anywhere on the machine, so the project file must be in
                 // the repository: first as text, so a path on another root, such as a share, is never looked at, then
-                // with links followed. Test projects are left out on purpose.
+                // with links followed. Test projects are left out on purpose, and listed.
                 var path = ProjectPath(folder, include);
                 var directory = Path.GetDirectoryName(path);
-                if (directory is null || Path.GetFileName(directory).Contains("Test", StringComparison.OrdinalIgnoreCase))
+                if (directory is null)
                 {
+                    continue;
+                }
+
+                if (IsTestProject(Path.GetFileName(directory)))
+                {
+                    SkipReference(include, "a test project");
                     continue;
                 }
 
@@ -1431,6 +1437,12 @@ public sealed partial class CodeReadScanner
             return false;
         }
     }
+
+    // A test project is named Test or Tests, or ends in them, as in Api.Tests, Api.Test.Helpers or ApiTests. A name that
+    // only holds the letters, such as Attestation or Latest, is not one.
+    private static bool IsTestProject(string name) =>
+        name.Split('.').Any(part => part.Equals("Test", StringComparison.OrdinalIgnoreCase) || part.Equals("Tests", StringComparison.OrdinalIgnoreCase))
+        || name.EndsWith("Test", StringComparison.Ordinal) || name.EndsWith("Tests", StringComparison.Ordinal);
 
     // The full path a ProjectReference names, from the folder of its project file. Only text: nothing is looked at.
     internal static string ProjectPath(string folder, string include) =>
