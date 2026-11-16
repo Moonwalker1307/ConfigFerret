@@ -352,9 +352,9 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
         }
 
         long bytes = 0;
-        foreach (var file in files.Order(StringComparer.Ordinal))
+        // Sorted by the path with / as the separator, so the same files come first on every system.
+        foreach (var (file, relative) in files.Select(f => (f, Relative(root, f))).OrderBy(f => f.Item2, StringComparer.Ordinal))
         {
-            var relative = Relative(root, file);
             try
             {
                 // A pipe or a device has no size, and opening a pipe to read waits for a writer, so nothing of size 0 is
