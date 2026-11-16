@@ -215,6 +215,97 @@ public class TraceCommandTests
     }
 
     [Fact]
+    public async Task Loads_config_files_after_the_environment_variables_and_the_command_line()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Timeout": 30, "Port": 5432 } }""", ct);
+            var extra = Path.Join(app.FullName, "extra.json");
+            await File.WriteAllTextAsync(extra, """{ "Db": { "Timeout": 99, "Port": 6543 } }""", ct);
+
+            var result = await new ToolRunner().RunAsync(
+                "trace", "-a", app.FullName, "--no-user-secrets", "--config", extra, "--env", "Db__Timeout=5", "Db:Timeout", "Db:Port", "--", "--Db:Port=7000");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Db:Timeout = "99""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] environment variable Db__Timeout = "5""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""Db:Port = "6543""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] command-line argument --Db:Port = "7000""", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Loads_config_files_right_after_the_settings_files_with_config_before_env()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Timeout": 30, "Port": 5432, "Host": "localhost" } }""", ct);
+            var extra = Path.Join(app.FullName, "extra.json");
+            await File.WriteAllTextAsync(extra, """{ "Db": { "Timeout": 99, "Port": 6543, "Host": "db.extra" } }""", ct);
+
+            var result = await new ToolRunner().RunAsync(
+                "trace", "-a", app.FullName, "--no-user-secrets", "--config", extra, "--config-before-env", "--env", "Db__Timeout=5",
+                "Db:Timeout", "Db:Port", "Db:Host", "--", "--Db:Port=7000");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Db:Timeout = "5""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] extra.json (line 1) = "99""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""Db:Port = "7000""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] extra.json (line 1) = "6543""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[effective]  extra.json (line 1) = "db.extra""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] appsettings.json (line 1) = "localhost""", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Reads_a_settings_file_that_links_outside_the_app_folder_once_when_passed_with_config()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            var app = Directory.CreateDirectory(Path.Join(root.FullName, "app")).FullName;
+            await File.WriteAllTextAsync(Path.Join(app, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", ct);
+            var outside = Directory.CreateDirectory(Path.Join(root.FullName, "mounted")).FullName;
+            var target = Path.Join(outside, "production.json");
+            await File.WriteAllTextAsync(target, """{ "Db": { "Host": "db.prod" } }""", ct);
+            File.CreateSymbolicLink(Path.Join(app, "appsettings.Production.json"), target);
+
+            var refused = await new ToolRunner().RunAsync("trace", "-a", app, "--no-user-secrets", "Db:Host");
+            var passed = await new ToolRunner().RunAsync("trace", "-a", app, "--no-user-secrets", "--config", target, "Db:Host");
+
+            Assert.Equal(2, refused.ExitCode);
+            Assert.Contains("outside the app folder", refused.Error, StringComparison.Ordinal);
+
+            Assert.Equal(0, passed.ExitCode);
+            Assert.Contains("""Db:Host = "db.prod""", passed.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("appsettings.Production.json", passed.Output, StringComparison.Ordinal);
+            Assert.Single(passed.Output.Split('\n'), line => line.Contains("production.json", StringComparison.Ordinal) && line.Contains('['));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Traces_a_Kustomize_overlay()
     {
         var dir = ToolRunner.Golden("kustomize-overlay");

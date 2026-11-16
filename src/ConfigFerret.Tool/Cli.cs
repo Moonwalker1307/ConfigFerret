@@ -258,6 +258,7 @@ internal static class Cli
                 result.GetValue(app.App) ?? ".",
                 result.GetValue(app.Environment),
                 result.GetValue(app.Config) ?? [],
+                result.GetValue(app.ConfigBeforeEnv),
                 prefixes,
                 environment,
                 appArgs,
