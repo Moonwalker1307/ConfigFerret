@@ -21,7 +21,8 @@ metadata:
 data:
   api-base-url: "https://eu.api.example.test"
 ---
-# Created outside the chart by the platform team's secret sync.
+# Committed next to the chart with the database password in it, so the secrets audit rates that red. The maps key is
+# a placeholder the deploy fills in before it applies the file, so the audit rates that green.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -29,6 +30,8 @@ metadata:
 type: Opaque
 data:
   password: cHJvZC1zM2NyM3Q=
+stringData:
+  maps-api-key: "${MAPS_API_KEY}"
 ---
 # Source: orders/templates/deployment.yaml
 apiVersion: apps/v1
@@ -54,6 +57,11 @@ spec:
                 secretKeyRef:
                   name: orders-db
                   key: password
+            - name: ORDERS_Maps__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db
+                  key: maps-api-key
             - name: ORDERS_Api__BaseUrl
               valueFrom:
                 configMapKeyRef:

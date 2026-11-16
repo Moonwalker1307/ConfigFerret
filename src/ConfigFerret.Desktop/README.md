@@ -15,7 +15,9 @@ GitHub Actions variables and Octopus Deploy variables to what it finds, then sho
 - dead variables, marked in red: settings no code reads, Helm values no template reads, GitHub variables no
   setting or workflow uses, and Octopus variables no setting uses
 - a secrets audit: green means the value is kept in a secret store, orange means check it, red means a secret value
-  sits in plain configuration
+  sits in plain configuration. A Secret manifest, or a Kustomize `secretGenerator` when the overlay is built, that
+  holds the value in plain text or base64 is red, like a ConfigMap; a value encrypted with SOPS is not. A Secret value
+  that a rendered Helm chart sets without its values files is orange, because the template may write it or generate it
 
 ### Filters
 

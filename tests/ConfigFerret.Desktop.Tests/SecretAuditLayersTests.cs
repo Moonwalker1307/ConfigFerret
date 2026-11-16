@@ -91,7 +91,7 @@ public class SecretAuditLayersTests
     [Fact]
     public void A_layer_name_that_looks_secret_makes_the_setting_one()
     {
-        var finding = Rate("Connection", Env("CONNECTION", "x", true, Step(LayerKind.KubernetesSecret, "Secret db", "x", reference: new SecretKeyRef("db", "DB_PASSWORD"), sensitive: true)));
+        var finding = Rate("Connection", Env("CONNECTION", "x", true, Step(LayerKind.KubernetesSecret, "Secret db", null, reference: new SecretKeyRef("db", "DB_PASSWORD"), sensitive: true)));
 
         Assert.Equal(SecretRating.Protected, finding.Rating);
     }
@@ -217,7 +217,7 @@ public class SecretAuditLayersTests
     [Fact]
     public void A_plain_value_is_only_exposed_when_the_key_or_the_value_looks_secret()
     {
-        var plain = Rate("Db:Host", Json("appsettings.json", "db.example.test"), Step(LayerKind.KubernetesSecret, "Secret db", "x", sensitive: true));
+        var plain = Rate("Db:Host", Json("appsettings.json", "db.example.test"), Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true));
 
         Assert.NotEqual(SecretRating.Exposed, plain.Rating);
         Assert.Equal(SecretRating.Exposed, Rate("Db:Host", Json("appsettings.json", Token)).Rating);
@@ -266,9 +266,9 @@ public class SecretAuditLayersTests
     }
 
     [Fact]
-    public void A_secret_from_a_kubernetes_secret_is_protected()
+    public void A_secret_from_a_kubernetes_secret_whose_value_is_not_in_the_manifests_is_protected()
     {
-        var secret = Step(LayerKind.KubernetesSecret, "Secret db-credentials", "hunter2", sensitive: true, location: "key password");
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db-credentials", null, sensitive: true, location: "key password");
         var finding = Rate("Db:Password", Env("DB__PASSWORD", "hunter2", true, secret));
 
         Assert.Equal(SecretRating.Protected, finding.Rating);
@@ -277,10 +277,166 @@ public class SecretAuditLayersTests
     }
 
     [Fact]
+    public void A_value_in_a_secret_manifest_is_exposed_and_names_the_manifest()
+    {
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db-credentials", "hunter2", sensitive: true, location: "key password, secret.yaml:6");
+        var finding = Rate("Db:Password", Env("DB__PASSWORD", "hunter2", true, secret));
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("The value is kept in plain text or base64 in the manifest of Secret db-credentials, so anyone who can read that file can decode it. Fill the Secret from a secret store instead (an ExternalSecret or the Secrets Store CSI driver), or encrypt it (a SealedSecret or SOPS).", finding.Reason);
+        Assert.Equal("Secret db-credentials (key password, secret.yaml:6)", finding.Where);
+        Assert.DoesNotContain("hunter2", finding.Reason + finding.Where, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_value_in_a_secret_manifest_is_exposed_whatever_the_key_is_called()
+    {
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "db.example.test", sensitive: true);
+
+        Assert.Equal(SecretRating.Exposed, Rate("Db:Host", Env("DB__HOST", "db.example.test", true, secret)).Rating);
+    }
+
+    [Theory]
+    [InlineData("create (file password.txt)", "the file password.txt named by the secretGenerator of kustomization.yaml")]
+    [InlineData("merge (env file config/secrets.env:12)", "line 12 of the env file config/secrets.env named by the secretGenerator of kustomization.yaml")]
+    [InlineData("create (literal)", "the secretGenerator of kustomization.yaml")]
+    [InlineData(null, "the secretGenerator of kustomization.yaml")]
+    public void A_secret_generator_names_the_file_it_reads(string? note, string place)
+    {
+        var generator = Step(LayerKind.Kustomize, "kustomization.yaml", "hunter2", sensitive: true) with { Note = note };
+
+        var finding = Rate("Db:Password", Env("DB__PASSWORD", "hunter2", true, Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true, origins: generator)));
+
+        Assert.StartsWith($"The value is kept in plain text in {place}, so anyone who can read that file can decode it.", finding.Reason, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("ENC[AES256_GCM,data:RmFrZQ==,iv:RmFrZUl2,tag:RmFrZVRhZw==,type:str]", SecretRating.Protected)]
+    [InlineData("ENC[AES256_GCM,iv:RmFrZUl2,type:str]", SecretRating.Exposed)]
+    [InlineData("ENC[AES256_GCM,data:RmFrZQ==", SecretRating.Exposed)]
+    [InlineData("xENC[AES256_GCM,data:RmFrZQ==]", SecretRating.Exposed)]
+    public void A_value_sops_encrypted_is_not_exposed(string value, SecretRating rating)
+    {
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", value, sensitive: true);
+
+        Assert.Equal(rating, Rate("Db:Password", Env("DB__PASSWORD", value, true, secret)).Rating);
+    }
+
+    [Fact]
+    public void A_secret_value_a_rendered_chart_sets_without_its_values_is_to_be_checked()
+    {
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "hunter2", sensitive: true, location: "key password, helm-template.yaml:9", reference: new SecretKeyRef("db", "password"));
+
+        var finding = SecretAudit.Rate(new TracedSetting("Db:Password", "ignored", [Env("DB__PASSWORD", "hunter2", true, secret)], false), RenderedManifests.Helm);
+
+        Assert.Equal(SecretRating.Check, finding.Rating);
+        Assert.StartsWith("Comes from Secret db, which the chart renders without a values file that sets it.", finding.Reason, StringComparison.Ordinal);
+        Assert.Equal("Secret db (key password)", finding.Where);
+    }
+
+    [Fact]
+    public void A_secret_generator_of_a_rendered_chart_is_still_exposed()
+    {
+        var generator = Step(LayerKind.Kustomize, "kustomization.yaml", "hunter2", sensitive: true, location: "line 4, secretGenerator db");
+
+        var finding = SecretAudit.Rate(new TracedSetting("Db:Password", "ignored", [Env("DB__PASSWORD", "hunter2", true, generator)], false), RenderedManifests.Helm);
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("kustomization.yaml (line 4, secretGenerator db)", finding.Where);
+    }
+
+    [Fact]
+    public void A_secret_from_a_built_overlay_is_named_without_the_build_output()
+    {
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "hunter2", sensitive: true, location: "key password, kustomize-build.yaml:9", reference: new SecretKeyRef("db", "password"));
+
+        var finding = SecretAudit.Rate(new TracedSetting("Db:Password", "ignored", [Env("DB__PASSWORD", "hunter2", true, secret)], false), RenderedManifests.Kustomize);
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("Secret db (key password)", finding.Where);
+        Assert.StartsWith("The value is kept in plain text or base64 in Secret db from the overlay's resources, so anyone who can read the overlay's files can decode it.", finding.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_secret_without_a_key_reference_is_named_by_its_source()
+    {
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "hunter2", sensitive: true, location: "key password, kustomize-build.yaml:9");
+
+        var finding = SecretAudit.Rate(new TracedSetting("Db:Password", "ignored", [Env("DB__PASSWORD", "hunter2", true, secret)], false), RenderedManifests.Kustomize);
+
+        Assert.Equal("Secret db", finding.Where);
+    }
+
+    [Fact]
+    public void A_secret_generator_value_is_exposed_and_names_the_kustomization()
+    {
+        var generator = Step(LayerKind.Kustomize, "overlays/prod/kustomization.yaml", "hunter2", sensitive: true, location: "line 6, secretGenerator db");
+        var finding = Rate("Db:Password", Env("DB__PASSWORD", "hunter2", true, Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true, origins: generator)));
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("The value is kept in plain text in the secretGenerator of overlays/prod/kustomization.yaml, so anyone who can read that file can decode it. Fill the Secret from a secret store instead (an ExternalSecret or the Secrets Store CSI driver), or encrypt it (a SealedSecret or SOPS).", finding.Reason);
+        Assert.Equal("overlays/prod/kustomization.yaml (line 6, secretGenerator db)", finding.Where);
+    }
+
+    [Fact]
+    public void A_secret_built_from_a_generator_file_names_the_generator()
+    {
+        // A files entry carries no value, but the Secret the overlay built from it does.
+        var generator = Step(LayerKind.Kustomize, "kustomization.yaml", null, sensitive: true, location: "line 4, secretGenerator db");
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db-5f2k9m7c4t", "hunter2", sensitive: true, location: "key password, kustomize-build.yaml:5", origins: generator);
+
+        var finding = Rate("Db:Password", Env("DB__PASSWORD", "hunter2", true, secret));
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("kustomization.yaml (line 4, secretGenerator db)", finding.Where);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("***")]
+    [InlineData("${DB_PASSWORD}")]
+    [InlineData("#{Db.Password}")]
+    public void A_placeholder_in_a_secret_manifest_or_generator_is_not_exposed(string value)
+    {
+        var generator = Step(LayerKind.Kustomize, "kustomization.yaml", value, sensitive: true);
+
+        Assert.Equal(SecretRating.Protected, Rate("Db:Password", Env("DB__PASSWORD", value, true, Step(LayerKind.KubernetesSecret, "Secret db", value, sensitive: true))).Rating);
+        Assert.NotEqual(SecretRating.Exposed, Rate("Db:Password", Env("DB__PASSWORD", value, true, Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true, origins: generator))).Rating);
+    }
+
+    [Fact]
+    public void A_sensitive_layer_that_removes_a_secret_value_is_not_exposed()
+    {
+        var removed = Step(LayerKind.Kustomize, "kustomization.yaml", "hunter2", effective: false, sensitive: true, removal: true);
+
+        Assert.NotEqual(SecretRating.Exposed, Rate("Db:Password", Env("DB__PASSWORD", null, true, Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true, origins: removed))).Rating);
+    }
+
+    [Theory]
+    [InlineData(LayerKind.Other)]
+    [InlineData(LayerKind.AzureKeyVault)]
+    [InlineData(LayerKind.AwsSecretsManager)]
+    [InlineData(LayerKind.HashiCorpVault)]
+    [InlineData(LayerKind.GcpSecretManager)]
+    [InlineData(LayerKind.GitHubActions)]
+    [InlineData(LayerKind.OctopusDeploy)]
+    [InlineData(LayerKind.GitLabCi)]
+    [InlineData(LayerKind.AzureDevOps)]
+    [InlineData(LayerKind.Helm)]
+    public void A_secret_manifest_whose_value_another_secret_layer_fills_is_not_exposed(LayerKind kind)
+    {
+        // An ExternalSecret, a secret store, a deployment tool's secret, or Helm values that come from a Secret.
+        var origin = Step(kind, "store", "hunter2", sensitive: true, reference: kind == LayerKind.Other ? new ExternalSecretRef("vault", "vault", "orders/db") : null);
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "changeme", sensitive: true, origins: origin);
+
+        Assert.Equal(SecretRating.Protected, Rate("Db:Password", Env("DB__PASSWORD", "hunter2", true, secret)).Rating);
+    }
+
+    [Fact]
     public void The_last_secret_store_in_the_chain_is_named()
     {
-        var first = Step(LayerKind.KubernetesSecret, "Secret first", "x", sensitive: true);
-        var second = Step(LayerKind.KubernetesSecret, "Secret second", "x", sensitive: true);
+        var first = Step(LayerKind.KubernetesSecret, "Secret first", null, sensitive: true);
+        var second = Step(LayerKind.KubernetesSecret, "Secret second", null, sensitive: true);
         var other = Step(LayerKind.KubernetesConfigMap, "ConfigMap plain", null);
 
         var finding = Rate("Db:Password", Env("DB__PASSWORD", null, true, first, second, other));
@@ -340,7 +496,7 @@ public class SecretAuditLayersTests
     [Fact]
     public void A_link_matched_by_name_is_to_be_checked()
     {
-        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "x", sensitive: true, inferred: true);
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true, inferred: true);
 
         var finding = Rate("Db:Password", Env("DB__PASSWORD", "x", true, secret));
 
@@ -352,7 +508,7 @@ public class SecretAuditLayersTests
     [Fact]
     public void A_guess_that_does_not_win_does_not_matter()
     {
-        var secret = Step(LayerKind.KubernetesSecret, "Secret db", "x", sensitive: true);
+        var secret = Step(LayerKind.KubernetesSecret, "Secret db", null, sensitive: true);
         var guess = Step(LayerKind.Helm, "values.yaml", null, effective: false, inferred: true);
 
         Assert.Equal(SecretRating.Protected, Rate("Db:Password", Env("DB__PASSWORD", "x", true, secret, guess)).Rating);

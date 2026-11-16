@@ -36,7 +36,8 @@ public class TraceRunnerTests
         Assert.Equal("***", hidden.Report.Find("Payments:ApiKey")!.Value);
         Assert.Equal("Zx81kQp4LmT7vRw2Nc9YbH3s", revealed.Report.Find("Payments:ApiKey")!.Value);
         Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "Payments:ApiKey").Rating);
-        Assert.Equal(SecretRating.Protected, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
+        // The Secret manifest in deploy/rendered.yaml holds the password, so it is exposed; with hidden values it would be a placeholder.
+        Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
         Assert.All(hidden.Secrets, s => Assert.DoesNotContain("Zx81kQp4LmT7vRw2Nc9YbH3s", s.Reason + s.Where, StringComparison.Ordinal));
     }
 

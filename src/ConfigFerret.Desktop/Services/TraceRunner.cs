@@ -217,7 +217,7 @@ public sealed class TraceRunner
 
         // The audit looks at the values, so it runs on a revealed trace that is dropped right after. The findings hold no values.
         tracer.WithOptions(o => o.RevealSensitiveValues = true);
-        var secrets = SecretAudit.Audit(tracer.Trace());
+        var secrets = SecretAudit.Audit(tracer.Trace(), RenderedBy(kubernetes.FirstOrDefault()));
         tracer.WithOptions(o => o.RevealSensitiveValues = revealSecrets);
         var report = tracer.Trace();
 
@@ -730,6 +730,16 @@ public sealed class TraceRunner
             : throw new ArgumentException($"{what} must be an absolute URL, got '{text}'.");
 
     private static string? Blank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+
+    // Which tool rendered the manifests, so the audit doesn't point at its output. Only a source the analyzer made from
+    // what it rendered counts (it names those "Rendered manifests"), so a committed file named like the output stays a file.
+    private static RenderedManifests RenderedBy(KubernetesSource? source) =>
+        (source is { Name: "Rendered manifests", Paths: [var only] } ? Path.GetFileName(only) : null) switch
+        {
+            "helm-template.yaml" => RenderedManifests.Helm,
+            "kustomize-build.yaml" => RenderedManifests.Kustomize,
+            _ => RenderedManifests.None,
+        };
 
     private static bool IsInputError(Exception ex, CancellationToken cancellationToken) =>
         ex is IOException or UnauthorizedAccessException or FormatException or InvalidOperationException or ArgumentException

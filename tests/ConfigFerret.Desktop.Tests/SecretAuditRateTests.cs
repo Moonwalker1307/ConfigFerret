@@ -76,13 +76,85 @@ public class SecretAuditRateTests : IDisposable
     }
 
     [Fact]
-    public void Rates_a_value_from_a_kubernetes_secret_as_protected()
+    public void Rates_a_value_from_a_kubernetes_secret_that_is_not_in_the_manifests_as_protected()
     {
-        var finding = RateContainer("Payments__ApiKey", PodYaml(secret: true));
+        var finding = RateContainer("Payments__ApiKey", PodYaml(secret: true, withStore: false));
 
         Assert.Equal(SecretRating.Protected, finding.Rating);
         Assert.Contains("payments", finding.Reason, StringComparison.OrdinalIgnoreCase);
-        AssertNoValue(finding);
+    }
+
+    [Fact]
+    public void Rates_a_value_in_a_kubernetes_secret_manifest_as_exposed_like_a_config_map()
+    {
+        var finding = RateContainer("Payments__ApiKey", PodYaml(secret: true));
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Contains("Secret payments", finding.Reason, StringComparison.Ordinal);
+        AssertNoValue(finding, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ApiKey)));
+    }
+
+    [Theory]
+    [InlineData(false, "The value is kept in plain text or base64 in the manifest of Secret payments, so anyone")]
+    [InlineData(true, "A later layer overrides it, but the manifest of Secret payments still holds the value in plain text or base64.")]
+    public void Says_whether_a_value_in_a_kubernetes_secret_manifest_is_the_one_in_use(bool overridden, string reason)
+    {
+        // The app reads the container's environment, and a later layer may set the key again.
+        var manifests = KubernetesManifests.Parse(PodYaml(secret: true));
+        var environment = new Dictionary<string, string?> { ["Payments__ApiKey"] = ApiKey };
+        var builder = new ConfigurationBuilder().Add(new SimulatedEnvironmentVariablesSource(environment, string.Empty));
+        if (overridden)
+        {
+            builder.AddInMemoryCollection(new Dictionary<string, string?> { ["Payments:ApiKey"] = "#{PaymentsApiKey}" });
+        }
+
+        var report = ConfigTracer.For(builder.Build())
+            .WithOptions(o =>
+            {
+                o.RevealSensitiveValues = true;
+                o.Environment = environment;
+            })
+            .WithKubernetes(manifests)
+            .Trace();
+        var finding = SecretAudit.Rate(report.Find("Payments:ApiKey")!);
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.StartsWith(reason, finding.Reason, StringComparison.Ordinal);
+        AssertNoValue(finding, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ApiKey)));
+    }
+
+    [Fact]
+    public void A_value_in_a_kubernetes_secret_manifest_is_in_use_when_another_resolver_also_links_the_variable()
+    {
+        // Like the GitHub and Octopus resolvers, a second resolver adds its own effective origin to the variable, after the
+        // one from the manifests, without overriding it.
+        var manifests = KubernetesManifests.Parse(PodYaml(secret: true));
+        var environment = new Dictionary<string, string?> { ["Payments__ApiKey"] = ApiKey };
+        var report = ConfigTracer.For(new ConfigurationBuilder().Add(new SimulatedEnvironmentVariablesSource(environment, string.Empty)).Build())
+            .WithOptions(o =>
+            {
+                o.RevealSensitiveValues = true;
+                o.Environment = environment;
+            })
+            .WithKubernetes(manifests)
+            .WithResolver(new SameNameSecretResolver())
+            .Trace();
+        var setting = report.Find("Payments:ApiKey")!;
+        Assert.Equal(2, setting.EffectiveStep!.Origins.Count(o => o.IsEffective));
+
+        var finding = SecretAudit.Rate(setting);
+
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.StartsWith("The value is kept in plain text or base64 in the manifest of Secret payments, so anyone", finding.Reason, StringComparison.Ordinal);
+    }
+
+    // Links an environment variable to a deployment tool's secret of the same name, whose value is not loaded.
+    private sealed class SameNameSecretResolver : IOriginResolver
+    {
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) =>
+            layer.Reference is EnvironmentVariableRef env
+                ? [new ProvenanceStep { Kind = LayerKind.Other, Source = $"deployment secret {env.Name}", IsSensitive = true }]
+                : [];
     }
 
     [Fact]
@@ -108,7 +180,7 @@ public class SecretAuditRateTests : IDisposable
         Assert.All(findings, f => AssertNoValue(f));
     }
 
-    private static string PodYaml(bool secret)
+    private static string PodYaml(bool secret, bool withStore = true)
     {
         // The Secret holds the api key base64 encoded, the ConfigMap in plain text: the same real value either way.
         var encoded = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ApiKey));
@@ -140,7 +212,8 @@ public class SecretAuditRateTests : IDisposable
                       valueFrom:
                         @REF@: { name: payments, key: api-key }
             """;
-        return store.Replace("@VALUE@", secret ? encoded : ApiKey, StringComparison.Ordinal) + "\n---\n" + pod.Replace("@REF@", reference, StringComparison.Ordinal);
+        pod = pod.Replace("@REF@", reference, StringComparison.Ordinal);
+        return withStore ? store.Replace("@VALUE@", secret ? encoded : ApiKey, StringComparison.Ordinal) + "\n---\n" + pod : pod;
     }
 
     private static string Json(string json) => json.Replace("@KEY@", ApiKey, StringComparison.Ordinal);

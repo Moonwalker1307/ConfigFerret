@@ -21,6 +21,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-db
                   key: password
+            - name: ORDERS_Maps__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-db
+                  key: maps-api-key
             - name: ORDERS_Api__BaseUrl
               valueFrom:
                 configMapKeyRef:

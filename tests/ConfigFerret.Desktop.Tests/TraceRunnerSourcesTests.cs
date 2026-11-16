@@ -531,7 +531,217 @@ public class TraceRunnerSourcesTests : IDisposable
 
         Assert.Equal("***", hidden.Report.Find("Db:Password")!.Value);
         Assert.Equal("hunter2-prod", revealed.Report.Find("Db:Password")!.Value);
-        Assert.Equal(SecretRating.Protected, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
+        // Only the real value makes the committed Secret exposed; the hidden *** would count as a placeholder.
+        Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
+    }
+
+    // The secrets audit of a scanned repository
+
+    private const string CommittedPassword = "Fake-Committed-Passw0rd-42";
+
+    private static readonly AnalysisConnections NoConnections = new(null, string.Empty, "github", string.Empty, string.Empty, "octopus");
+
+    private static string Encoded(string value) => Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+
+    private static string DeploymentUsingSecret(string secretName) =>
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders\nspec:\n  template:\n    spec:\n      containers:\n        - name: orders\n          image: orders:1\n"
+        + $"          env:\n            - name: Db__Password\n              valueFrom:\n                secretKeyRef:\n                  name: {secretName}\n                  key: password\n";
+
+    // Traces the folder repo the way the app does: scan it, pick the choices, build the profile and run it.
+    private async Task<TraceResult> TraceRepository(Func<string, IReadOnlyList<string>, string?>? render = null, string? kustomization = null)
+    {
+        var scan = RepositoryScanner.Scan(Path.Join(_temp.FullName, "repo"));
+        var choices = new AnalysisChoices { Kustomization = kustomization };
+        RepositoryAnalyzer.SuggestChoices(scan, choices, []);
+        var profile = new RepositoryAnalyzer(render ?? ((_, _) => null)).BuildProfile(scan, choices, NoConnections, []);
+        return await Run(profile);
+    }
+
+    private static void AssertHoldsNoValue(SecretFinding finding)
+    {
+        foreach (var text in new[] { CommittedPassword, Encoded(CommittedPassword) })
+        {
+            Assert.DoesNotContain(text, finding.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(text, finding.Where, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("stringData", false)]
+    [InlineData("data", true)]
+    public async Task A_value_in_a_secret_manifest_in_the_repository_is_exposed(string field, bool encoded)
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/k8s/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        Write("repo/k8s/secret.yaml", $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\n{field}:\n  password: {(encoded ? Encoded(CommittedPassword) : CommittedPassword)}\n");
+
+        var result = await TraceRepository();
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("Secret db-secret (key password, secret.yaml:6)", finding.Where);
+        Assert.Equal("The value is kept in plain text or base64 in the manifest of Secret db-secret, so anyone who can read that file can decode it. Fill the Secret from a secret store instead (an ExternalSecret or the Secrets Store CSI driver), or encrypt it (a SealedSecret or SOPS).", finding.Reason);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Fact]
+    public async Task A_secret_generator_literal_is_exposed_and_named_when_kubectl_builds_the_overlay()
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/deploy/base/kustomization.yaml", "resources:\n  - deployment.yaml\n");
+        Write("repo/deploy/base/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        Write("repo/deploy/overlays/production/kustomization.yaml", $"resources:\n  - ../../base\nsecretGenerator:\n  - name: db-secret\n    literals:\n      - password={CommittedPassword}\n");
+        var built = $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret-5f2k9m7c4t\ndata:\n  password: {Encoded(CommittedPassword)}\ntype: Opaque\n---\n" + DeploymentUsingSecret("db-secret-5f2k9m7c4t");
+
+        var result = await TraceRepository((tool, _) => tool == "kubectl" ? built : null, "deploy/overlays/production");
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("production/kustomization.yaml (line 6, secretGenerator db-secret)", finding.Where);
+        Assert.Equal("The value is kept in plain text in the secretGenerator of production/kustomization.yaml, so anyone who can read that file can decode it. Fill the Secret from a secret store instead (an ExternalSecret or the Secrets Store CSI driver), or encrypt it (a SealedSecret or SOPS).", finding.Reason);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Fact]
+    public async Task A_secret_generator_literal_is_exposed_when_the_overlay_is_not_built()
+    {
+        // Without an app the container is traced, so the env entry keeps its link to the generated Secret.
+        Write("repo/deploy/base/kustomization.yaml", "resources:\n  - deployment.yaml\n");
+        Write("repo/deploy/base/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        Write("repo/deploy/overlays/production/kustomization.yaml", $"resources:\n  - ../../base\nsecretGenerator:\n  - name: db-secret\n    literals:\n      - password={CommittedPassword}\n");
+
+        var result = await TraceRepository(kustomization: "deploy/overlays/production");
+
+        var finding = result.Secrets.Single(s => s.Key == "Db__Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("production/kustomization.yaml (line 6, secretGenerator db-secret)", finding.Where);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Fact]
+    public async Task A_committed_manifest_named_like_rendered_output_is_rated_as_a_file_in_the_repository()
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/deploy/helm-template.yaml", $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: {CommittedPassword}\n---\n" + DeploymentUsingSecret("db-secret"));
+
+        var result = await TraceRepository();
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("Secret db-secret (key password, helm-template.yaml:6)", finding.Where);
+        Assert.StartsWith("The value is kept in plain text or base64 in the manifest of Secret db-secret, so anyone who can read that file can decode it.", finding.Reason, StringComparison.Ordinal);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Theory]
+    [InlineData("stringData")]
+    [InlineData("data")]
+    public async Task A_secret_encrypted_with_sops_is_not_exposed(string field)
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/k8s/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        Write("repo/k8s/secret.yaml", $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\n{field}:\n  password: ENC[AES256_GCM,data:RmFrZUNpcGhlcg==,iv:RmFrZUl2RmFrZUl2RmFrZQ==,tag:RmFrZVRhZw==,type:str]\n"
+            + "sops:\n  lastmodified: \"2026-01-01T00:00:00Z\"\n  mac: ENC[AES256_GCM,data:RmFrZU1hYw==,iv:RmFrZUl2RmFrZUl2RmFrZQ==,tag:RmFrZVRhZw==,type:str]\n  version: 3.9.0\n");
+
+        var result = await TraceRepository();
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.NotEqual(SecretRating.Exposed, finding.Rating);
+        Assert.DoesNotContain("decode", finding.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_secret_generator_env_file_is_named_in_the_reason()
+    {
+        // Without an app the container is traced, so the env entry keeps its link to the generated Secret.
+        Write("repo/deploy/base/kustomization.yaml", "resources:\n  - deployment.yaml\n");
+        Write("repo/deploy/base/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        Write("repo/deploy/overlays/production/secrets.env", $"# database\npassword={CommittedPassword}\n");
+        Write("repo/deploy/overlays/production/kustomization.yaml", "resources:\n  - ../../base\nsecretGenerator:\n  - name: db-secret\n    envs:\n      - secrets.env\n");
+
+        var result = await TraceRepository(kustomization: "deploy/overlays/production");
+
+        var finding = result.Secrets.Single(s => s.Key == "Db__Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("production/kustomization.yaml (line 6, secretGenerator db-secret)", finding.Where);
+        Assert.StartsWith("The value is kept in plain text in line 2 of the env file secrets.env named by the secretGenerator of production/kustomization.yaml, so anyone who can read that file can decode it.", finding.Reason, StringComparison.Ordinal);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Fact]
+    public async Task A_secret_from_the_resources_of_a_built_overlay_is_exposed_by_its_name_and_key()
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/deploy/base/kustomization.yaml", "resources:\n  - deployment.yaml\n  - secret.yaml\n");
+        Write("repo/deploy/base/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        Write("repo/deploy/base/secret.yaml", $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: {CommittedPassword}\n");
+        Write("repo/deploy/overlays/production/kustomization.yaml", "resources:\n  - ../../base\n");
+        var built = $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\ndata:\n  password: {Encoded(CommittedPassword)}\n---\n" + DeploymentUsingSecret("db-secret");
+
+        var result = await TraceRepository((tool, _) => tool == "kubectl" ? built : null, "deploy/overlays/production");
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("Secret db-secret (key password)", finding.Where);
+        Assert.StartsWith("The value is kept in plain text or base64 in Secret db-secret from the overlay's resources, so anyone who can read the overlay's files can decode it.", finding.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("kustomize-build.yaml", finding.Reason + finding.Where, StringComparison.Ordinal);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Fact]
+    public async Task A_secret_value_a_rendered_chart_sets_without_its_values_is_to_be_checked()
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/chart/Chart.yaml", "name: orders\nversion: 0.1.0\n");
+        Write("repo/chart/values.yaml", "replicas: 1\n");
+        Write("repo/chart/templates/secret.yaml", "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\ndata:\n  password: {{ randAlphaNum 16 | b64enc }}\n");
+        Write("repo/chart/templates/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        var rendered = $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\ndata:\n  password: {Encoded(CommittedPassword)}\n---\n" + DeploymentUsingSecret("db-secret");
+
+        var result = await TraceRepository((tool, _) => tool == "helm" ? rendered : null);
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Check, finding.Rating);
+        Assert.Equal("Comes from Secret db-secret, which the chart renders without a values file that sets it. Check the chart's template: a value written there is kept in the repository, one it generates as it renders (such as with randAlphaNum or lookup) is not.", finding.Reason);
+        Assert.Equal("Secret db-secret (key password)", finding.Where);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Fact]
+    public async Task A_secret_rendered_from_committed_helm_values_is_exposed_at_the_template()
+    {
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/chart/Chart.yaml", "name: orders\nversion: 0.1.0\n");
+        Write("repo/chart/values.yaml", $"db:\n  password: {CommittedPassword}\n");
+        Write("repo/chart/templates/secret.yaml", "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: {{ .Values.db.password | quote }}\n");
+        Write("repo/chart/templates/deployment.yaml", DeploymentUsingSecret("db-secret"));
+        var rendered = $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: \"{CommittedPassword}\"\n---\n" + DeploymentUsingSecret("db-secret");
+
+        var result = await TraceRepository((tool, _) => tool == "helm" ? rendered : null);
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.StartsWith("Helm template ", finding.Where, StringComparison.Ordinal);
+        AssertHoldsNoValue(finding);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: \"${DB_PASSWORD}\"\n")]
+    [InlineData("apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: \"\"\n")]
+    [InlineData("apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: db\nspec:\n  secretStoreRef:\n    name: vault\n    kind: ClusterSecretStore\n  target:\n    name: db-secret\n  data:\n    - secretKey: password\n      remoteRef:\n        key: orders/db\n        property: password\n")]
+    [InlineData("apiVersion: bitnami.com/v1alpha1\nkind: SealedSecret\nmetadata:\n  name: db-secret\nspec:\n  encryptedData:\n    password: AgBy3i4OJSWK+PiTySYZZA==\n")]
+    public async Task A_secret_whose_value_is_not_in_the_repository_stays_protected(string manifest)
+    {
+        // Without an app the container is traced, so the env entry keeps its link to the Secret even when its value is
+        // unknown. The scan picks files by the kinds of workloads, ConfigMaps and Secrets, so the other object shares a file.
+        Write("repo/k8s/deployment.yaml", DeploymentUsingSecret("db-secret") + "---\n" + manifest);
+
+        var result = await TraceRepository();
+
+        var finding = result.Secrets.Single(s => s.Key == "Db__Password");
+        Assert.Equal(SecretRating.Protected, finding.Rating);
+        Assert.Equal("Kept in Secret db-secret.", finding.Reason);
     }
 
     // Helm and Kustomize

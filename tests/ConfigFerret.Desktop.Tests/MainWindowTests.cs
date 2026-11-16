@@ -64,9 +64,10 @@ public sealed class MainWindowTests : IDisposable
         Assert.Equal("60", timeout.Setting.Value);
         Assert.Contains(timeout.Kinds, k => k.Kind == LayerKind.Helm);
 
-        // Secrets: the password from a Kubernetes Secret is green, the Octopus-style placeholder needs a check, and the
-        // API key committed in appsettings.Production.json is red.
-        Assert.Contains(viewModel.SecretRows, s => s.Key == "Db:Password" && s.Css == "good");
+        // Secrets: the maps key the deploy fills into the Secret is green, the Octopus-style placeholder needs a check, and
+        // the API key committed in appsettings.Production.json and the password in the Secret manifest in deploy/rendered.yaml are red.
+        Assert.Contains(viewModel.SecretRows, s => s.Key == "Maps:ApiKey" && s.Css == "good");
+        Assert.Contains(viewModel.SecretRows, s => s.Key == "Db:Password" && s.Css == "bad");
         Assert.Contains(viewModel.SecretRows, s => s.Key == "Smtp:Password" && s.Css == "check");
         Assert.Contains(viewModel.SecretRows, s => s.Key == "Payments:ApiKey" && s.Css == "bad");
         Assert.Equal("bad", viewModel.SecretRows[0].Css);
@@ -90,9 +91,10 @@ public sealed class MainWindowTests : IDisposable
         Assert.All(viewModel.Rows, r => Assert.True(r.IsDead));
         Assert.Equal(viewModel.DeadCount, viewModel.Rows.Count);
         viewModel.SelectTileCommand.Execute("Exposed");
-        Assert.Equal("Payments:ApiKey", Assert.Single(viewModel.Rows).Key);
+        Assert.Equal(["Db:Password", "Payments:ApiKey"], viewModel.Rows.Select(r => r.Key).Order(StringComparer.Ordinal));
         viewModel.SelectTileCommand.Execute("Protected");
-        Assert.Contains(viewModel.Rows, r => r.Key == "Db:Password");
+        Assert.True(viewModel.ProtectedCount > 0);
+        Assert.Equal("Maps:ApiKey", Assert.Single(viewModel.Rows).Key);
         Assert.Equal(viewModel.ProtectedCount, viewModel.Rows.Count);
         viewModel.SelectTileCommand.Execute("Overridden");
         Assert.All(viewModel.Rows, r => Assert.True(r.IsOverridden));
