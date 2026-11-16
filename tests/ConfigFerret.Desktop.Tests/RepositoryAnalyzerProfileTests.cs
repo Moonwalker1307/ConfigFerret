@@ -249,6 +249,104 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     }
 
     [Fact]
+    public void A_chart_helm_cannot_render_says_so_instead_of_asking_to_install_helm()
+    {
+        Write("chart/Chart.yaml", "name: demo\n");
+
+        var (_, notes) = Build(RepositoryAnalyzer.WithTools((_, _) => new ToolRun(null, "it exited with code 1", Failed: true)), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.Equal(
+            "helm could not render the chart chart: it exited with code 1. Run helm template on the chart to see why. Without the rendered chart its values are listed only where a ConfigMap or env entry in the repository uses them.",
+            Assert.Single(notes));
+    }
+
+    [Fact]
+    public void A_tools_error_output_never_reaches_the_notes()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses sh as the tool.");
+        Write("chart/Chart.yaml", "name: demo\n");
+
+        // helm quotes what a template's fail message is built from, such as a values file's password.
+        var analyzer = RepositoryAnalyzer.WithTools((_, _) => RepositoryAnalyzer.RunTool("sh", ["-c", "echo 'Error: execution error at (demo/templates/secret.yaml:3:4): db.password \"fake-hunter2\" is too short' >&2; exit 1"]));
+        var (_, notes) = Build(analyzer, new AnalysisChoices { HelmChart = "chart" });
+
+        var note = Assert.Single(notes);
+        Assert.DoesNotContain("fake-hunter2", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret.yaml", note, StringComparison.Ordinal);
+        Assert.StartsWith("helm could not render the chart chart: it exited with code 1.", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Kustomize_is_tried_when_kubectl_fails()
+    {
+        // kubectl bundles its own kustomize, often an older one, so the overlay may build with kustomize itself.
+        Write("k8s/overlay/kustomization.yaml", "resources: []\n");
+        var tools = new List<string>();
+        var analyzer = RepositoryAnalyzer.WithTools((tool, _) =>
+        {
+            tools.Add(tool);
+            return tool == "kubectl" ? new ToolRun(null, "it exited with code 1", Failed: true) : new ToolRun(Deployment("api", Container("api")));
+        });
+
+        var (profile, notes) = Build(analyzer, new AnalysisChoices { Kustomization = "k8s/overlay" });
+
+        Assert.Equal(["kubectl", "kustomize"], tools);
+        Assert.Equal("kustomize-build.yaml", profile.Sources.OfType<KubernetesSource>().Single().Rendered?.Name);
+        Assert.DoesNotContain(notes, n => n.Contains("could not", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("it took over a minute, so it was stopped")]
+    [InlineData("it wrote more than 32 MB")]
+    public void Kustomize_is_not_tried_when_kubectl_was_stopped(string problem)
+    {
+        Write("k8s/overlay/kustomization.yaml", "resources: []\n");
+        var tools = new List<string>();
+        var analyzer = RepositoryAnalyzer.WithTools((tool, _) =>
+        {
+            tools.Add(tool);
+            return new ToolRun(null, problem);
+        });
+
+        var (_, notes) = Build(analyzer, new AnalysisChoices { Kustomization = "k8s/overlay" });
+
+        Assert.Equal(["kubectl"], tools);
+        Assert.Equal(
+            $"kubectl could not build the overlay k8s/overlay: {problem}. Run kubectl kustomize on the folder to see why. Remote bases (git or http URLs) are not fetched, so an overlay that needs one cannot be built.",
+            Assert.Single(notes));
+    }
+
+    [Fact]
+    public void Kubectls_failure_is_noted_when_kustomize_is_missing()
+    {
+        Write("k8s/overlay/kustomization.yaml", "resources: []\n");
+
+        var (_, notes) = Build(RepositoryAnalyzer.WithTools((tool, _) => tool == "kubectl" ? new ToolRun(null, "it exited with code 1", Failed: true) : ToolRun.Missing), new AnalysisChoices { Kustomization = "k8s/overlay" });
+
+        Assert.StartsWith("kubectl could not build the overlay k8s/overlay: it exited with code 1. Run kubectl kustomize on the folder", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Both_failures_are_noted_when_kubectl_and_kustomize_fail()
+    {
+        Write("k8s/overlay/kustomization.yaml", "resources: []\n");
+
+        var (_, notes) = Build(RepositoryAnalyzer.WithTools((tool, _) => new ToolRun(null, tool == "kubectl" ? "it exited with code 1" : "it exited with code 2", Failed: true)), new AnalysisChoices { Kustomization = "k8s/overlay" });
+
+        Assert.StartsWith("kubectl could not build the overlay k8s/overlay: it exited with code 1. kustomize could not build it either: it exited with code 2. Run kubectl kustomize", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_overlay_kustomize_cannot_build_names_kustomize()
+    {
+        Write("k8s/overlay/kustomization.yaml", "resources: []\n");
+
+        var (_, notes) = Build(RepositoryAnalyzer.WithTools((tool, _) => tool == "kubectl" ? ToolRun.Missing : new ToolRun(null, "it exited with code 1", Failed: true)), new AnalysisChoices { Kustomization = "k8s/overlay" });
+
+        Assert.StartsWith("kustomize could not build the overlay k8s/overlay: it exited with code 1. Run kustomize build on the folder", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_rendered_chart_means_the_overlay_is_not_built()
     {
         Write("chart/Chart.yaml", "name: demo\n");
@@ -546,19 +644,63 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             return;
         }
 
-        Assert.Equal("a b|c", RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s|%s' \"$0\" \"$1\"", "a b", "c"]));
+        Assert.Equal(new ToolRun("a b|c"), RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s|%s' \"$0\" \"$1\"", "a b", "c"]));
     }
 
     [Fact]
-    public void A_tool_that_fails_or_is_missing_gives_nothing()
+    public void A_tool_that_fails_or_is_missing_gives_no_output_and_says_which()
     {
         if (OperatingSystem.IsWindows())
         {
             return;
         }
 
-        Assert.Null(RepositoryAnalyzer.RunTool("sh", ["-c", "echo output; exit 3"]));
-        Assert.Null(RepositoryAnalyzer.RunTool("configferret-no-such-tool", []));
+        Assert.Equal(new ToolRun(null, "it exited with code 3", Failed: true), RepositoryAnalyzer.RunTool("sh", ["-c", "echo output; exit 3"]));
+        Assert.Equal(ToolRun.Missing, RepositoryAnalyzer.RunTool("configferret-no-such-tool", []));
+    }
+
+    [Fact]
+    public void A_tools_error_output_is_never_quoted()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // The repository decides what the tool says: an env file line, a template's fail message or a values file path.
+        var run = RepositoryAnalyzer.RunTool("sh", ["-c", "printf 'Error: \\033[2J \"DB_PASSWORD: fake-hunter2\" is not a valid key name\\n' >&2; exit 1"]);
+
+        Assert.Equal(new ToolRun(null, "it exited with code 1", Failed: true), run);
+    }
+
+    [Theory]
+    [InlineData("Error: An error occurred while checking for chart dependencies. You may need to run `helm dependency build` to fetch missing dependencies: found in Chart.yaml, but missing in charts/ directory: db", ", because the chart's dependencies are not in its charts folder (helm dependency build fetches them)")]
+    [InlineData("Error: accumulating resources: Get \"https://example.test/base\": proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused", ", because it needs a remote base, which is not fetched")]
+    [InlineData("fatal: transport 'https' not allowed", ", because it needs a remote base, which is not fetched")]
+    public void A_tool_that_fails_for_a_known_reason_says_it_in_fixed_words(string error, string reason)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var run = RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s\\n' \"$0\" >&2; exit 1", error]);
+
+        Assert.Equal(new ToolRun(null, "it exited with code 1" + reason, Failed: true), run);
+    }
+
+    [Fact]
+    public void A_tool_that_writes_too_much_gives_no_output()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var limit = 1024 * 1024;
+
+        Assert.Equal(new ToolRun(null, "it wrote more than 1 MB"), RepositoryAnalyzer.RunTool("sh", ["-c", "head -c 1100000 /dev/zero | tr '\\0' x"], limit));
+        Assert.Equal(limit, RepositoryAnalyzer.RunTool("sh", ["-c", $"head -c {limit} /dev/zero | tr '\\0' x"], limit).Output?.Length);
     }
 
     [Fact]
@@ -569,6 +711,6 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             return;
         }
 
-        Assert.Equal("out\n", RepositoryAnalyzer.RunTool("sh", ["-c", "echo err >&2; echo out"]));
+        Assert.Equal(new ToolRun("out\n"), RepositoryAnalyzer.RunTool("sh", ["-c", "echo err >&2; echo out"]));
     }
 }
