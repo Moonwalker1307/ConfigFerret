@@ -23,7 +23,8 @@ public sealed class TraceOptions
 
     /// <summary>
     /// When false (the default), values that come from Secrets, user secrets or key-per-file mounts,
-    /// or whose key matches <see cref="SensitiveKeyPattern"/>, are replaced with <c>***</c> in the report.
+    /// or whose key matches <see cref="SensitiveKeyPattern"/>, are replaced with <c>***</c> in the report. So are the
+    /// values of a setting whose trace was cut off (see <see cref="MaxDepth"/>).
     /// </summary>
     public bool RevealSensitiveValues { get; set; }
 
@@ -37,6 +38,13 @@ public sealed class TraceOptions
     public IReadOnlyDictionary<string, string?>? Environment { get; set; }
 
     /// <summary>How many layers upstream to follow from each .NET configuration step. Default 8.</summary>
+    /// <remarks>
+    /// The trace also stops asking resolvers once they have added 1,000 upstream steps to one setting, or 250,000 to
+    /// the whole trace, so a resolver that links each step to several others cannot make a trace grow without end.
+    /// A setting cut off this way gets a warning, and its values are hidden like a secret's unless
+    /// <see cref="RevealSensitiveValues"/> is on, since the part not traced may hold a secret. Once the trace-wide
+    /// limit is reached, every setting after it is cut off.
+    /// </remarks>
     public int MaxDepth { get; set; } = 8;
 
     /// <summary>The text used in place of a redacted value.</summary>

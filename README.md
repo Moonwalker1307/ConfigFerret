@@ -555,7 +555,8 @@ Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and
 ## Secrets
 
 Values are redacted as `***` when they come from a Secret, user secrets, key-per-file or a `*CONNSTR_` environment
-variable, or when the key looks secret. A key looks secret when:
+variable, when the key looks secret, or when the setting's trace was cut off (see [Limits](#limits)). A key looks
+secret when:
 
 - it contains, in any letter case, `password`, `passwd`, `pwd`, `passphrase`, `secret`, `token`, `credential`,
   `bearer`, `apikey`, `connectionstring`, `connstr`, `privatekey`, `accesskey` or `sharedaccess`, also with `_` or `-`
@@ -613,6 +614,11 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
   args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret
   is rejected, since paths and names are never redacted.
+- A trace follows each .NET configuration layer at most `MaxDepth` levels upstream (default 8). It also stops asking
+  resolvers once they have added 1,000 upstream steps to one setting or 250,000 to the whole trace, so a resolver
+  that links each step to several others cannot make a trace grow without end. A setting cut off this way gets a
+  warning, and its values are hidden as `***` unless `RevealSensitiveValues` is on, since the part not traced may
+  hold a secret. Once the trace-wide limit is reached, every setting after it is cut off.
 - Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
   further upstream from them.
