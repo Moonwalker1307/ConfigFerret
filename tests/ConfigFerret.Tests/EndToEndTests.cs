@@ -236,6 +236,50 @@ public class EndToEndTests
         Assert.True(Assert.Single(template.Origins).IsSensitive);
     }
 
+    [Fact]
+    public void Redacts_an_env_value_that_refers_to_a_kubernetes_secret()
+    {
+        // In the pod, Kubernetes has already put the Secret's value into the variable.
+        var environment = new Dictionary<string, string?> { ["CFR_Database__Url"] = "postgres://app:not-a-real-password@db.internal/orders" };
+        foreach (var (k, v) in environment)
+        {
+            Environment.SetEnvironmentVariable(k, v);
+        }
+
+        var config = new ConfigurationBuilder().AddEnvironmentVariables("CFR_").Build();
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: Secret
+            metadata: { name: db }
+            stringData:
+              password: not-a-real-password
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: { name: api }
+            spec:
+              containers:
+                - name: api
+                  env:
+                    - name: POSTGRES_PASSWORD
+                      valueFrom: { secretKeyRef: { name: db, key: password } }
+                    - name: CFR_Database__Url
+                      value: "postgres://app:$(POSTGRES_PASSWORD)@db.internal/orders"
+            """);
+
+        var report = ConfigTracer.For(config)
+            .WithOptions(o => o.Environment = environment)
+            .WithKubernetes(manifests)
+            .Trace();
+
+        Assert.DoesNotContain("not-a-real-password", report.ToText() + report.ToJson(), StringComparison.Ordinal);
+        var setting = report.Find("Database:Url")!;
+        var literal = Assert.Single(setting.EffectiveStep!.Origins);
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("Pod/api env CFR_Database__Url", literal.Source);
+        Assert.Equal("Secret db", Assert.Single(literal.Origins).Source);
+    }
+
     private sealed class FixedResolver(ProvenanceStep step) : IOriginResolver
     {
         public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) =>

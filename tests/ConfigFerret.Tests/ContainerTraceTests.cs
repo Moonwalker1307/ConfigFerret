@@ -333,6 +333,175 @@ public class ContainerTraceTests
         Assert.Contains("TOKEN = (unknown)", text, StringComparison.Ordinal);
     }
 
+    // Env values that refer to other variables as $(VAR): a Secret, a ConfigMap key, envFrom, a literal, an entry set
+    // later in the list, a name that is not set, the $$ escape and a chain of references.
+    private const string PodWithReferences = """
+        apiVersion: v1
+        kind: ConfigMap
+        metadata: { name: db-config }
+        data:
+          DB_HOST: db.internal
+          DB_NAME: orders
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata: { name: db }
+        stringData:
+          password: not-a-real-password
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata: { name: api }
+        spec:
+          containers:
+            - name: api
+              envFrom:
+                - configMapRef: { name: db-config }
+                  prefix: CFG_
+              env:
+                - name: DB_PASSWORD
+                  valueFrom: { secretKeyRef: { name: db, key: password } }
+                - name: DB_HOST
+                  valueFrom: { configMapKeyRef: { name: db-config, key: DB_HOST } }
+                - name: DB_USER
+                  value: app
+                - name: Database__Url
+                  value: "postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST)/$(CFG_DB_NAME)"
+                - name: Database__Host
+                  value: "$(DB_HOST):5432"
+                - name: Database__Port
+                  value: "$(DB_PORT)"
+                - name: DB_PORT
+                  value: "5432"
+                - name: Database__Schema
+                  value: "$(DB_SCHEMA)"
+                - name: Escaped
+                  value: "$$(DB_HOST) costs $$$(DB_USER)"
+                - name: Database__Replica
+                  value: "$(Database__Url)?target_session_attrs=read-only"
+                - name: CFG_DB_NAME
+                  value: "$(CFG_DB_NAME)_test"
+        """;
+
+    // Every value, note and warning in a report, upstream steps included, with the text and JSON reports.
+    private static string Everything(ProvenanceReport report)
+    {
+        static IEnumerable<ProvenanceStep> All(ProvenanceStep step) => step.Origins.SelectMany(All).Prepend(step);
+
+        var steps = report.Settings.SelectMany(s => s.Steps).SelectMany(All).ToList();
+        return string.Join(
+            "\n",
+            report.Settings.Select(s => s.Value)
+                .Concat(steps.Select(s => s.Value))
+                .Concat(steps.Select(s => s.Note))
+                .Concat(report.Warnings)
+                .Append(report.ToText())
+                .Append(report.ToJson()));
+    }
+
+    [Fact]
+    public void A_value_that_refers_to_a_secret_is_redacted()
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(PodWithReferences, "pod.yaml")).Trace();
+
+        var url = report.Find("Database__Url")!;
+        var origins = Assert.Single(url.Steps).Origins;
+
+        Assert.True(url.IsSensitive);
+        Assert.Equal("***", url.Value);
+        Assert.Equal(["Pod/api env DB_USER", "Secret db", "ConfigMap db-config", "ConfigMap db-config"], origins.Select(o => o.Source));
+        Assert.All(origins, o => Assert.True(o.IsEffective));
+        Assert.Matches(@"^secretKeyRef on Pod/api, container api; referenced as \$\(DB_PASSWORD\) in pod\.yaml:\d+$", origins[1].Note);
+        Assert.Matches(@"^envFrom on Pod/api, container api with prefix 'CFG_'; referenced as \$\(CFG_DB_NAME\) in pod\.yaml:\d+$", origins[3].Note);
+        Assert.True(report.Find("Database__Replica")!.IsSensitive);
+        Assert.Equal("Pod/api env Database__Url", Assert.Single(Assert.Single(report.Find("Database__Replica")!.Steps).Origins).Source);
+        Assert.False(report.Find("Database__Host")!.IsSensitive);
+        Assert.DoesNotContain("not-a-real-password", Everything(report), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_value_that_refers_to_a_secret_that_was_not_loaded_is_redacted()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: p }
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - secretRef: { name: unread-env }
+                  env:
+                    - name: TOKEN
+                      valueFrom: { secretKeyRef: { name: unread, key: token } }
+                    - name: Api__Url
+                      value: "https://api.example.test/?t=$(TOKEN)"
+                    - name: Api__Other
+                      value: "$(FROM_UNREAD)"
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        Assert.True(report.Find("Api__Url")!.IsSensitive);
+        Assert.Equal("Secret unread", Assert.Single(Assert.Single(report.Find("Api__Url")!.Steps).Origins).Source);
+        Assert.True(report.Find("Api__Other")!.IsSensitive);
+        var guess = Assert.Single(Assert.Single(report.Find("Api__Other")!.Steps).Origins);
+        Assert.Equal("Secret unread-env", guess.Source);
+        Assert.True(guess.IsInferred);
+        Assert.Null(guess.Location);
+
+        // Only the unloaded Secret may set FROM_UNREAD, so the name may be part of a secret value: it is not repeated.
+        Assert.DoesNotContain("FROM_UNREAD", Everything(report), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_value_that_refers_to_a_variable_with_a_secret_name_is_redacted()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: p }
+            spec:
+              containers:
+                - name: c
+                  env:
+                    - name: DB_PASSWORD
+                      value: not-a-real-password
+                    - name: Database__Url
+                      value: "postgres://app:$(DB_PASSWORD)@db"
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        Assert.True(report.Find("Database__Url")!.IsSensitive);
+        Assert.DoesNotContain("not-a-real-password", Everything(report), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_value_that_refers_to_a_secret_name_only_an_unloaded_configmap_may_set_is_redacted()
+    {
+        // In the pod DB_PASSWORD may hold a real password, so the value is treated as secret, without naming the reference.
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: p }
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - configMapRef: { name: unread }
+                  env:
+                    - name: CONN
+                      value: "pw=$(DB_PASSWORD)"
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        var conn = report.Find("CONN")!;
+        var guess = Assert.Single(Assert.Single(conn.Steps).Origins);
+        Assert.True(conn.IsSensitive);
+        Assert.Equal("ConfigMap unread", guess.Source);
+        Assert.True(guess.IsSensitive);
+        Assert.DoesNotContain("DB_PASSWORD", Everything(report), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void WithKubernetes_is_rejected_on_a_container_trace()
     {
