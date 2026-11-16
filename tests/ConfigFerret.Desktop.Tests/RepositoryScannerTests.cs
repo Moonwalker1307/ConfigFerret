@@ -349,6 +349,29 @@ public class RepositoryScannerTests : IDisposable
     }
 
     [Fact]
+    public void Keeps_a_backslash_in_a_name_as_part_of_the_name()
+    {
+        // On Windows a backslash is the separator, so no name can hold one.
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Write(@"a\..\..\other-repo\overlay/kustomization.yaml", "resources: []\n");
+        Write(@"k8s/..\..\..\other-repo\pod.yaml", Pod);
+        Write(@".github/workflows/..\..\..\other-repo\deploy.yml", "on: push\n");
+        Write("deploy/chart/Chart.yaml", "apiVersion: v2\nname: x\nversion: 1.0.0\n");
+        Write(@"deploy/values\..\..\..\other-repo\values.yaml", "a: 1\n");
+
+        var scan = RepositoryScanner.Scan(_temp.FullName);
+
+        var found = scan.Kustomizations.Concat(scan.Manifests).Concat(scan.Workflows).Concat(scan.HelmCharts.SelectMany(c => c.ValuesFiles)).ToList();
+        Assert.Equal(4, found.Count);
+        Assert.All(found, f => Assert.StartsWith(_temp.FullName + Path.DirectorySeparatorChar, scan.Full(f), StringComparison.Ordinal));
+        Assert.Equal([@"a\..\..\other-repo\overlay"], scan.Kustomizations);
+    }
+
+    [Fact]
     public void Reads_manifests_up_to_two_megabytes()
     {
         const int limit = 2 * 1024 * 1024;
