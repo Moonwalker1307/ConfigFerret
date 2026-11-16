@@ -230,6 +230,21 @@ public class ResolverTests
     }
 
     [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    public void Reads_a_JSON_boolean_property_as_the_JSON_text(string json)
+    {
+        var secrets = new GcpSecrets("p", [new GcpSecret { Id = "cfg", Project = "p", Versions = [new("1", GcpSecretVersionState.Enabled)], ValueVersion = "1", Value = $$"""{"enabled":{{json}}}""" }]);
+
+        var read = Assert.Single(Resolve(secrets, External("gcpsm", "cfg", "enabled", store: null)));
+        var linked = Assert.Single(Resolve(secrets, EnvStep("Feature__On", json), o => o.Map("Feature__On", "cfg", "enabled")));
+
+        Assert.DoesNotContain("differs", linked.Note, StringComparison.Ordinal);
+        Assert.Equal(json, linked.Value);
+        Assert.Equal(json, read.Value);
+    }
+
+    [Theory]
     [InlineData("orders-db", "missing")]
     [InlineData("orders-db", "nested.missing")]
     [InlineData("orders-db", "password.x")]

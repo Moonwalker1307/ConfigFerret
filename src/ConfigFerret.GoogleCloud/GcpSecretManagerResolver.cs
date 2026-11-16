@@ -313,7 +313,8 @@ internal sealed class GcpSecretManagerResolver : IOriginResolver
                 return false;
             }
 
-            text = JsonRead.Text(element);
+            // A boolean reaches the Kubernetes Secret as its JSON text (true), not as the .NET text (True).
+            text = element.ValueKind is JsonValueKind.True or JsonValueKind.False ? element.GetRawText() : JsonRead.Text(element);
             return true;
         }
         catch (JsonException)
