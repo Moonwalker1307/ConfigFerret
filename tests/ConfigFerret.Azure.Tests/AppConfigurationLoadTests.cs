@@ -372,6 +372,51 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Trims_the_configuration_keys_of_feature_flags_like_those_of_key_values()
+    {
+        var handler = Handler()
+            .Respond(KeysPath(), Page(null))
+            .Respond(FlagsPath(), Page(
+                null,
+                Kv(".appconfig.featureflag/Beta", """{"id":"Beta","enabled":true}""", contentType: FeatureFlagType),
+                Kv(".appconfig.featureflag/Gamma", """{"id":"Gamma","enabled":true,"conditions":{"client_filters":[{"name":"Microsoft.Percentage"}]}}""", contentType: FeatureFlagType)));
+
+        var settings = await Load(handler, o => o.TrimKeyPrefixes.Add("FeatureManagement:"));
+        var resolver = new AzureAppConfigurationResolver(settings, new());
+        IReadOnlyList<ProvenanceStep> Resolve(string key, string value) =>
+            resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", key, value), new TraceDiagnostics());
+
+        var beta = Assert.Single(settings.FindByConfigurationKey("Beta"));
+        Assert.Equal(AzureAppConfigurationSettingKind.FeatureFlag, beta.Kind);
+        Assert.Empty(settings.FindByConfigurationKey("FeatureManagement:Beta"));
+        Assert.Equal("Azure App Configuration feature flag Beta (contoso)", Assert.Single(Resolve("Beta", "True")).Source);
+
+        // A flag with filters sets keys under its own, and they still lead to the flag; other keys under a flag's key do not.
+        Assert.Equal("Azure App Configuration feature flag Gamma (contoso)", Assert.Single(Resolve("Gamma:EnabledFor:0:Name", "Microsoft.Percentage")).Source);
+        Assert.Equal("Azure App Configuration feature flag Gamma (contoso)", Assert.Single(Resolve("gamma:enabledfor:0:Parameters:Value", "50")).Source);
+        Assert.Equal("Azure App Configuration feature flag Gamma (contoso)", Assert.Single(Resolve("Gamma:RequirementType", "All")).Source);
+        Assert.Empty(Resolve("Delta:EnabledFor:0:Name", "Microsoft.Percentage"));
+        Assert.Empty(Resolve("Beta:Timeout", "30"));
+        Assert.Empty(Resolve("Beta:Timeout:EnabledFor", "30"));
+        Assert.Empty(Resolve("Beta:EnabledForever", "30"));
+    }
+
+    [Fact]
+    public async Task Names_a_feature_flag_by_its_stored_key_whatever_prefix_is_trimmed()
+    {
+        var handler = Handler()
+            .Respond(KeysPath(), Page(null, Kv("Plain", "1")))
+            .Respond(FlagsPath(), Page(null, Kv(".appconfig.featureflag/Beta", """{"id":"Beta","enabled":true}""", contentType: FeatureFlagType)));
+
+        var settings = await Load(handler, o => o.TrimKeyPrefixes.Add("Feature"));
+
+        var step = Assert.Single(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "Management:Beta", "True"), new TraceDiagnostics()));
+        Assert.Equal("Azure App Configuration feature flag Beta (contoso)", step.Source);
+        Assert.Equal("Management:Beta".Length, settings.LongestFlagKey);
+        Assert.Equal(0, new AzureAppConfigurationSettings("s", [new("Plain", null, "s")]).LongestFlagKey);
+    }
+
+    [Fact]
     public async Task Reads_feature_flags_as_FeatureManagement_keys()
     {
         var handler = Handler()

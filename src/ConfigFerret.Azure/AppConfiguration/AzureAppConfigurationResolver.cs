@@ -44,10 +44,9 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
         }
 
         var found = settings.FindByConfigurationKey(key);
-        if (found.Count == 0 && FeatureFlagKey(key) is { } flag)
+        if (found.Count == 0)
         {
-            // A feature flag with filters sets FeatureManagement:<name>:EnabledFor:0:Name and so on.
-            found = settings.FindByConfigurationKey(flag).Where(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag).ToList();
+            found = FlagAbove(key);
         }
 
         return found.Select(s => ToStep(s, layer, inferred: true, "read by the App Configuration provider (matched by key)")).ToList();
@@ -87,15 +86,37 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
             .ToList();
     }
 
-    private static string? FeatureFlagKey(string key)
+    // A feature flag with filters sets FeatureManagement:<name>:EnabledFor:<i>:Name, :EnabledFor:<i>:Parameters:... and
+    // FeatureManagement:<name>:RequirementType, without FeatureManagement: when a prefix trims it. Only those keys lead
+    // to the flag: the shortest key above key that a flag sets and that is followed by one of them. A key that ends in
+    // ':' names no flag, and no key longer than every flag's key is looked up.
+    private List<AzureAppConfigurationSetting> FlagAbove(string key)
     {
-        if (!key.StartsWith(FeatureManagement, StringComparison.OrdinalIgnoreCase))
+        var longest = settings.LongestFlagKey;
+        for (var colon = key.IndexOf(':', StringComparison.Ordinal); colon > 0 && colon <= longest; colon = key.IndexOf(':', colon + 1))
         {
-            return null;
+            if (key[colon - 1] == ':' || !IsFlagSubkey(key.AsSpan(colon + 1)))
+            {
+                continue;
+            }
+
+            var flags = settings.FindByConfigurationKey(key[..colon]).Where(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag).ToList();
+            if (flags.Count > 0)
+            {
+                return flags;
+            }
         }
 
-        var colon = key.IndexOf(':', FeatureManagement.Length);
-        return colon > FeatureManagement.Length ? key[..colon] : null;
+        return [];
+    }
+
+    // rest is what follows the flag's key and its ':'.
+    private static bool IsFlagSubkey(ReadOnlySpan<char> rest)
+    {
+        var colon = rest.IndexOf(':');
+        return colon < 0
+            ? rest.Equals("RequirementType", StringComparison.OrdinalIgnoreCase)
+            : rest[..colon].Equals("EnabledFor", StringComparison.OrdinalIgnoreCase);
     }
 
     private static ProvenanceStep ToStep(AzureAppConfigurationSetting setting, ProvenanceStep layer, bool inferred, string? how)
@@ -117,10 +138,14 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
                     : $"Key Vault reference to {setting.SecretId}; the secret is not read here");
                 break;
             case AzureAppConfigurationSettingKind.FeatureFlag:
-                // A snapshot built by hand may give a flag any configuration key, not only FeatureManagement:<name>.
-                var name = setting.ConfigurationKey.StartsWith(FeatureManagement, StringComparison.OrdinalIgnoreCase)
-                    ? setting.ConfigurationKey[FeatureManagement.Length..]
-                    : setting.ConfigurationKey;
+                // The name comes from the stored key, which no trimmed prefix changes. A snapshot built by hand may give a
+                // flag any key and configuration key.
+                var prefix = AzureAppConfigurationSettings.FeatureFlagPrefix;
+                var name = setting.Key.StartsWith(prefix, StringComparison.Ordinal) && setting.Key.Length > prefix.Length
+                    ? setting.Key[prefix.Length..]
+                    : setting.ConfigurationKey.StartsWith(FeatureManagement, StringComparison.OrdinalIgnoreCase)
+                        ? setting.ConfigurationKey[FeatureManagement.Length..]
+                        : setting.ConfigurationKey;
                 source = $"Azure App Configuration feature flag {name}";
                 notes.Add(DescribeFlag(setting.Enabled, setting.Filters));
                 break;
