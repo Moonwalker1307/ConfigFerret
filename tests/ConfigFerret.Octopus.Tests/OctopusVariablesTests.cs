@@ -270,7 +270,38 @@ public class OctopusVariablesTests
             """);
 
         var scope = Assert.Single(octopus.Entries).Scope;
-        Assert.Equal(["Env", "Machine", "Role", "Action", "Channel", "Tag", "Process"], scope.Values.Select(v => Assert.Single(v)));
+        Assert.Equal(["Env", "Machine", "Role", "Action", "Channel", "t", "Process"], scope.Values.Select(v => Assert.Single(v)));
+    }
+
+    [Theory]
+    [InlineData("Region/West", "default,west")]
+    [InlineData("region/west", "default,west")]
+    [InlineData("West", "default,west,office")]
+    [InlineData("Office/West", "default,office")]
+    [InlineData("Region/East", "default")]
+    public async Task Keeps_tenant_tags_by_canonical_name_so_a_tag_or_its_tag_set_and_tag_matches(string tenantTag, string expected)
+    {
+        // Octopus scopes a variable to a tenant tag by its canonical name, tag set/tag, and gives only the tag as its name.
+        var octopus = await LoadSet("""
+            {
+              "ScopeValues": {
+                "TenantTags": [{"Id":"Region/West","Name":"West"},{"Id":"Region/East","Name":"East"},{"Id":"Office/West","Name":"West"}]
+              },
+              "Variables": [
+                {"Name":"Api:Region","Value":"default","Scope":{}},
+                {"Name":"Api:Region","Value":"west","Scope":{"TenantTag":["Region/West"]}},
+                {"Name":"Api:Region","Value":"office","Scope":{"TenantTag":["Office/West"]}}
+              ]
+            }
+            """);
+        var options = new OctopusTraceOptions();
+        options.TenantTags.Add(tenantTag);
+        var layer = new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "environment variable Api:Region", Reference = new EnvironmentVariableRef("Api:Region") };
+
+        var chain = new OctopusResolver(octopus, options).Resolve(layer, new TraceDiagnostics());
+
+        Assert.Equal(expected, string.Join(",", chain.Select(s => s.Value)));
+        Assert.Equal(["Region/West"], octopus.Entries[1].Scope["TenantTag"]);
     }
 
     [Fact]
