@@ -628,7 +628,7 @@ public sealed class KubernetesManifests
         var data = new Dictionary<string, KubernetesValue>(StringComparer.Ordinal);
         foreach (var (key, value) in obj.Get("data").Pairs())
         {
-            data[key] = new KubernetesValue(value.Scalar(), value.Line());
+            data[key] = new KubernetesValue(value.Scalar(), value.Line()) { IsLiteralBlock = IsLiteralBlock(value) };
         }
 
         if (!decode)
@@ -665,11 +665,13 @@ public sealed class KubernetesManifests
 
         foreach (var (key, value) in obj.Get("stringData").Pairs())
         {
-            data[key] = new KubernetesValue(value.Scalar(), value.Line());
+            data[key] = new KubernetesValue(value.Scalar(), value.Line()) { IsLiteralBlock = IsLiteralBlock(value) };
         }
 
         return data;
     }
+
+    private static bool IsLiteralBlock(YamlNode value) => value is YamlScalarNode { Style: ScalarStyle.Literal };
 }
 
 /// <summary>A workload with a pod spec.</summary>
@@ -761,4 +763,8 @@ public sealed record KubernetesData(string Name, IReadOnlyDictionary<string, Kub
 }
 
 /// <summary>A value in a ConfigMap or Secret, with the line it is on when known.</summary>
-public sealed record KubernetesValue(string? Value, int Line);
+public sealed record KubernetesValue(string? Value, int Line)
+{
+    /// <summary>True when the value is a literal block (<c>|</c>), so its lines are the lines below <see cref="Line"/>.</summary>
+    internal bool IsLiteralBlock { get; init; }
+}

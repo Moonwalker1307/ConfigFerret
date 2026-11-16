@@ -9,8 +9,13 @@ namespace ConfigFerret.Internal;
 internal static class Yaml
 {
     /// <summary>Parses every YAML document in <paramref name="text"/>.</summary>
+    /// <param name="text">The YAML text.</param>
+    /// <param name="fileLine">
+    /// For text taken from a value in another file: the line of that file a line of the text is on. Errors then give
+    /// that line and no column, which would count from the start of the value.
+    /// </param>
     /// <exception cref="YamlException">The text is not valid YAML.</exception>
-    public static List<YamlNode> LoadDocuments(string text)
+    public static List<YamlNode> LoadDocuments(string text, Func<int, int>? fileLine = null)
     {
         // Found by fuzzing: YamlDotNet 18.1.0 reads input through a 1024-character look-ahead buffer, and some
         // text whose length is an exact multiple of 1024 makes its scanner spin for seconds. A trailing line break
@@ -23,7 +28,7 @@ internal static class Yaml
         var stream = new YamlStream();
         try
         {
-            RejectUnsafeAliasesAndNesting(text);
+            RejectUnsafeAliasesAndNesting(text, fileLine);
             using var reader = new StringReader(text);
             stream.Load(reader);
         }
@@ -111,7 +116,7 @@ internal static class Yaml
     /// overflows on a forward alias used as a mapping key and on deep nesting, and walking a node that contains
     /// itself never ends.
     /// </summary>
-    private static void RejectUnsafeAliasesAndNesting(string text)
+    private static void RejectUnsafeAliasesAndNesting(string text, Func<int, int>? fileLine)
     {
         using var reader = new StringReader(text);
         var parser = new Parser(reader);
@@ -128,14 +133,14 @@ internal static class Yaml
                     current.Clear();
                     break;
                 case AnchorAlias alias when !current.ContainsKey(alias.Value):
-                    throw new YamlException(alias.Start, alias.End, $"The alias at {Position(alias)} is used before its anchor is defined.");
+                    throw new YamlException(alias.Start, alias.End, $"The alias at {Position(alias, fileLine)} is used before its anchor is defined.");
                 case AnchorAlias alias when open.Contains(current[alias.Value]):
-                    throw new YamlException(alias.Start, alias.End, $"The alias at {Position(alias)} is inside the node its anchor is on, so the node would contain itself.");
+                    throw new YamlException(alias.Start, alias.End, $"The alias at {Position(alias, fileLine)} is inside the node its anchor is on, so the node would contain itself.");
                 case AnchorAlias alias when deepest.Count > 0:
                     var level = open.Count + heights.GetValueOrDefault(current[alias.Value]);
                     if (level > MaxNestingDepth)
                     {
-                        throw new YamlException(alias.Start, alias.End, string.Create(CultureInfo.InvariantCulture, $"The alias at {Position(alias)} makes the collections in this YAML nest more than {MaxNestingDepth} levels deep."));
+                        throw new YamlException(alias.Start, alias.End, string.Create(CultureInfo.InvariantCulture, $"The alias at {Position(alias, fileLine)} makes the collections in this YAML nest more than {MaxNestingDepth} levels deep."));
                     }
 
                     deepest.Push(Math.Max(deepest.Pop(), level));
@@ -180,8 +185,10 @@ internal static class Yaml
 
     // An unquoted value that starts with * is read as an alias, so the alias name may be a secret value. Messages
     // reach warnings that are not redacted, so they say where the alias is instead of naming it.
-    private static string Position(AnchorAlias alias) =>
-        string.Create(CultureInfo.InvariantCulture, $"line {alias.Start.Line}, column {alias.Start.Column}");
+    private static string Position(AnchorAlias alias, Func<int, int>? fileLine) =>
+        fileLine is null
+            ? string.Create(CultureInfo.InvariantCulture, $"line {alias.Start.Line}, column {alias.Start.Column}")
+            : string.Create(CultureInfo.InvariantCulture, $"line {fileLine((int)alias.Start.Line)}");
 
     public static YamlNode? Get(this YamlNode? node, string key) =>
         node is YamlMappingNode map && map.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value : null;

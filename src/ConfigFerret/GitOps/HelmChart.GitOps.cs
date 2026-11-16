@@ -265,7 +265,10 @@ public sealed partial class HelmChart
 
     private void AddGitOpsLayer(GitOpsApplication application, GitOpsValuesLayer layer, List<KubernetesManifests> data)
     {
-        var name = $"{application.DisplayName} ({layer.Name})";
+        // A valuesFrom object read from another file names it, so its lines are not taken for lines of the manifest.
+        var found = layer.Kind is GitOpsValuesKind.ConfigMap or GitOpsValuesKind.Secret ? FindValuesFrom(application, layer, data) : null;
+        var file = found is not null && found.SourceName != application.SourceName ? $" in {found.SourceName}" : "";
+        var name = $"{application.DisplayName} ({layer.Name}{file})";
         var sensitive = layer.Kind == GitOpsValuesKind.Secret;
         _layerInfo[name] = (LayerKind.GitOps, sensitive);
         switch (layer.Kind)
@@ -274,25 +277,26 @@ public sealed partial class HelmChart
                 Walk(layer.Node, prefix: null, name);
                 break;
             case GitOpsValuesKind.Inline:
-                AddGitOpsValues(name, layer.Text ?? "", layer.LineOffset);
+                AddGitOpsValues(name, layer.Text ?? "", line => line + layer.LineOffset);
                 break;
             case GitOpsValuesKind.Parameter:
                 SetValue(layer.TargetPath!, layer.ForceString ? layer.Value ?? "" : SetList(layer.Value ?? ""), name, layer.Line, canRemove: !layer.ForceString);
                 break;
             default:
-                AddValuesFrom(application, layer, name, data);
+                AddValuesFrom(application, layer, found, name);
                 break;
         }
     }
 
-    private void AddValuesFrom(GitOpsApplication application, GitOpsValuesLayer layer, string name, List<KubernetesManifests> data)
+    // Flux reads valuesFrom from the HelmRelease's own namespace.
+    private static KubernetesData? FindValuesFrom(GitOpsApplication application, GitOpsValuesLayer layer, List<KubernetesManifests> data) => data
+        .Select(d => d.FindLoaded(layer.Kind == GitOpsValuesKind.Secret, application.Namespace, layer.ObjectName!))
+        .FirstOrDefault(d => d is not null);
+
+    private void AddValuesFrom(GitOpsApplication application, GitOpsValuesLayer layer, KubernetesData? found, string name)
     {
         var isSecret = layer.Kind == GitOpsValuesKind.Secret;
         var what = $"{(isSecret ? "Secret" : "ConfigMap")} {layer.ObjectName}";
-        // Flux reads valuesFrom from the HelmRelease's own namespace.
-        var found = data
-            .Select(d => d.FindLoaded(isSecret, application.Namespace, layer.ObjectName!))
-            .FirstOrDefault(d => d is not null);
         if (found is null)
         {
             if (!layer.Optional)
@@ -319,15 +323,17 @@ public sealed partial class HelmChart
         }
         else
         {
-            AddGitOpsValues(name, value.Value, value.Line);
+            // A literal block keeps its lines, the first one below the key. Other text, such as base64 Secret data or a
+            // quoted string, has no lines in the file, so every value in it is on the key's line.
+            AddGitOpsValues(name, value.Value, value.IsLiteralBlock ? line => line + value.Line : _ => value.Line);
         }
     }
 
-    private void AddGitOpsValues(string name, string yaml, int lineOffset)
+    private void AddGitOpsValues(string name, string yaml, Func<int, int> fileLine)
     {
         try
         {
-            AddValues(name, yaml, lineOffset);
+            AddValues(name, yaml, fileLine);
         }
         catch (FormatException ex)
         {
