@@ -66,11 +66,15 @@ public sealed class ComposeProject
     // file included many times, or by many files, is loaded once.
     private Dictionary<string, ComposeProject> _loaded = new(StringComparer.Ordinal);
 
+    // The root the project directory really lies on, after its own links, such as a checkout behind a junction.
+    private readonly Lazy<string?> _realRoot;
+
     private ComposeProject(ComposeOptions options, string? projectDirectory, string? displayRoot)
     {
         _options = options;
         ProjectDirectory = projectDirectory;
         _displayRoot = displayRoot ?? projectDirectory;
+        _realRoot = new(() => _displayRoot is not null && Kustomization.RealPath(_displayRoot, anyRoot: true) is { } real ? Path.GetPathRoot(real) : null);
         if (options.UseProcessEnvironment)
         {
             foreach (System.Collections.DictionaryEntry entry in System.Environment.GetEnvironmentVariables())
@@ -204,12 +208,13 @@ public sealed class ComposeProject
     {
         // The env files the caller passes are read as they are; an include's env files and the project directory's
         // .env are named by a compose file, or stand in for one. An include's project directory may be on another root,
-        // so its .env is passed over before anything looks at it on disk, as a missing one is.
+        // so its .env is passed over before anything looks at it on disk, as a missing one is. A .env that is there but
+        // is refused, such as a folder or a link to another drive, is kept so that the warning below names it.
         var named = !fromCaller || _options.EnvFiles.Count == 0;
         var paths = (_options.EnvFiles.Count > 0
             ? _options.EnvFiles.Select(Path.GetFullPath).ToList()
             : ProjectDirectory is null ? [] : [.. new[] { Path.Join(ProjectDirectory, ".env") }
-                .Where(p => (_options.AllowFilesOutsideProject || (_displayRoot is not null && SharesRoot(p, _displayRoot))) && Existing(p) is not null)])
+                .Where(p => (_options.AllowFilesOutsideProject || (_displayRoot is not null && SharesRoot(p, _displayRoot))) && (Existing(p) is not null || (HasEntry(p) && Refusal(p) is not null)))])
             .Where(p => !named || !Refuses(p, $"The env file {Display(p)}", _warnings)).ToList();
         Environment = DotEnvLayers.Build(
             paths.Select(p => new DotEnvSourceText(Display(p), p, () => (named ? ReadNamed(p) : ReadCapped(p)) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
@@ -878,14 +883,23 @@ public sealed class ComposeProject
         : $"{what} {refusal}, so it is not read.";
 
     // The file that a path leads to with every link followed, the way the file system resolves it, or null when there
-    // is none, as for a link whose target is missing.
-    private static FileInfo? Existing(string fullPath) =>
-        Kustomization.RealPath(fullPath) is { } real && new FileInfo(real) is { Exists: true } file ? file : null;
+    // is none, as for a link whose target is missing. A link to a root other than the path's and the one the project
+    // directory really lies on is followed only when files outside the project may be read.
+    private FileInfo? Existing(string fullPath) =>
+        Kustomization.RealPath(fullPath, anyRoot: _options.AllowFilesOutsideProject, alsoRoot: _options.AllowFilesOutsideProject ? null : _realRoot.Value) is { } real
+        && new FileInfo(real) is { Exists: true } file ? file : null;
+
+    // True when the folder of a path resolves, by the rule Existing uses, and holds an entry of that name: a file, a
+    // folder or a link, whose own link is not followed. A folder that does not resolve has nothing in it to look at.
+    private bool HasEntry(string fullPath) =>
+        Path.GetDirectoryName(fullPath) is { } folder
+        && Kustomization.RealPath(folder, anyRoot: _options.AllowFilesOutsideProject, alsoRoot: _options.AllowFilesOutsideProject ? null : _realRoot.Value) is { } real
+        && (int)new FileInfo(Path.Join(real, Path.GetFileName(fullPath))).Attributes != -1;
 
     // Reads a file that a compose file names, once Refusal allows it, from the path its links lead to. A file of size 0
     // is taken as empty without opening it: a FIFO, a socket and a device report size 0 too, .NET can't tell them from
     // an empty file without opening them, and opening a FIFO waits for a writer.
-    private static string? ReadNamed(string fullPath) => Existing(fullPath) switch
+    private string? ReadNamed(string fullPath) => Existing(fullPath) switch
     {
         null => null,
         { Length: 0 } => string.Empty,

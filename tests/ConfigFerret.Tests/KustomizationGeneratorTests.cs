@@ -616,6 +616,133 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void Does_not_follow_a_link_to_another_root()
+    {
+        var root = Path.GetPathRoot(_root)!;
+        Assert.True(Kustomization.IsOnRoot(Path.Join(_root, "app.env"), root));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.True(Kustomization.IsOnRoot(@"c:\repo\app.env", @"C:\"));
+            Assert.False(Kustomization.IsOnRoot(@"\\attacker\share\app.env", @"C:\"));
+            Assert.False(Kustomization.IsOnRoot(@"\\?\UNC\attacker\share\app.env", @"C:\"));
+            Assert.False(Kustomization.IsOnRoot(@"D:\repo\app.env", @"C:\"));
+            return; // Creating a symbolic link needs extra rights on Windows; the junction tests below cover Windows.
+        }
+
+        // On Linux and macOS every path starts from /, so no link can lead to another root, and this part can't show
+        // that such a link is refused. It shows only that a fully qualified link on the same root is still followed.
+        var target = Write("app/config/app.env", "A=1\n");
+        var link = Path.Join(_root, "app", "linked.env");
+        File.CreateSymbolicLink(link, target);
+
+        // The temp folder itself can lie behind a link, as /var does on macOS, so both sides are resolved.
+        Assert.Equal(Kustomization.RealPath(target), Kustomization.RealPath(link));
+        Assert.True(Kustomization.IsInFolder(link, Path.Join(_root, "app")));
+    }
+
+    // A new folder on a second drive, or null: GitHub's Windows runners keep the temp folder on C: and the build output
+    // on D:. Linux and macOS have one root, so there is none.
+    internal static string? FolderOnSecondDrive()
+    {
+        var temp = Path.GetPathRoot(Path.GetFullPath(Path.GetTempPath()));
+        if (!OperatingSystem.IsWindows() || string.Equals(temp, Path.GetPathRoot(AppContext.BaseDirectory), StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var folder = Path.Join(AppContext.BaseDirectory, "cf-other-drive-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        return folder;
+    }
+
+    // Makes a directory junction, which needs no extra rights on Windows. False when it can't be made.
+    internal static bool TryCreateJunction(string link, string target)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var argument in new[] { "/c", "mklink", "/J", link, target })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0 && Directory.Exists(link);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    [Fact]
+    public void Does_not_follow_a_junction_to_another_drive_out_of_the_folder()
+    {
+        if (FolderOnSecondDrive() is not { } other)
+        {
+            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
+        }
+
+        try
+        {
+            var outside = Path.Join(other, "outside");
+            Directory.CreateDirectory(outside);
+            File.WriteAllText(Path.Join(outside, "app.env"), "A=1\n");
+            Write("app/kustomization.yaml", "configMapGenerator:\n  - name: cfg\n    envs: [ext/app.env]\n");
+            var junction = Path.Join(_root, "app", "ext");
+            if (!TryCreateJunction(junction, outside))
+            {
+                return; // The junction could not be made here.
+            }
+
+            var file = Path.Join(junction, "app.env");
+            Assert.Null(Kustomization.RealPath(file));
+            Assert.Equal(Path.Join(outside, "app.env"), Kustomization.RealPath(file, anyRoot: true), ignoreCase: true);
+            Assert.False(Kustomization.IsInFolder(file, Path.Join(_root, "app")));
+            Assert.Throws<InvalidOperationException>(() => Load());
+            Directory.Delete(junction);
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Finds_the_files_of_a_folder_behind_a_junction_to_another_drive()
+    {
+        if (FolderOnSecondDrive() is not { } other)
+        {
+            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
+        }
+
+        try
+        {
+            var src = Path.Join(other, "src");
+            Directory.CreateDirectory(Path.Join(src, "app"));
+            File.WriteAllText(Path.Join(src, "app", "app.env"), "A=1\n");
+            File.WriteAllText(Path.Join(src, "app", "kustomization.yaml"), "configMapGenerator:\n  - name: cfg\n    envs: [app.env]\n");
+            var junction = Path.Join(_root, "src");
+            if (!TryCreateJunction(junction, src))
+            {
+                return; // The junction could not be made here.
+            }
+
+            var app = Path.Join(junction, "app");
+            Assert.True(Kustomization.IsInFolder(Path.Join(app, "app.env"), app));
+            Assert.Equal("1", Kustomization.Load(app).ConfigMaps["cfg"].Keys["A"][0].Value);
+            Directory.Delete(junction);
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Reads_an_env_file_below_the_kustomization_folder()
     {
         Write("app/config/app.env", "A=1\n");

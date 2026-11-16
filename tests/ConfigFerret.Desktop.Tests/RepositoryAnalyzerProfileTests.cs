@@ -391,6 +391,62 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         Assert.DoesNotContain(notes, n => n.StartsWith("helm", StringComparison.Ordinal));
     }
 
+    // Makes a directory junction, which needs no extra rights on Windows. False when it can't be made.
+    private static bool TryCreateJunction(string link, string target)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var argument in new[] { "/c", "mklink", "/J", link, target })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0 && Directory.Exists(link);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    [Fact]
+    public void A_chart_in_a_checkout_behind_a_junction_to_another_drive_is_still_checked()
+    {
+        // GitHub's Windows runners keep the temp folder on C: and the build output on D:. Linux and macOS have one root.
+        var temp = Path.GetPathRoot(_temp.FullName);
+        Assert.SkipWhen(!OperatingSystem.IsWindows() || string.Equals(temp, Path.GetPathRoot(AppContext.BaseDirectory), StringComparison.OrdinalIgnoreCase), "Needs Windows and a second drive.");
+        var other = Directory.CreateDirectory(Path.Join(AppContext.BaseDirectory, "cf-other-drive-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            // The checkout is reached as <temp>/src/repo, where src is a junction to a folder on the other drive.
+            var chart = Path.Join(other, "src", "repo", "chart");
+            Directory.CreateDirectory(Path.Join(chart, "files"));
+            File.WriteAllText(Path.Join(chart, "Chart.yaml"), "name: demo\n");
+            Directory.CreateDirectory(Path.Join(other, "outside"));
+            var junction = Path.Join(_temp.FullName, "src");
+            Assert.SkipUnless(TryCreateJunction(junction, Path.Join(other, "src")), "The junction could not be made here.");
+            var root = Path.Join(junction, "repo");
+
+            Assert.Null(RepositoryAnalyzer.ChartLinkProblem(root, Path.Join(root, "chart")));
+
+            Assert.True(TryCreateJunction(Path.Join(chart, "files", "leak"), Path.Join(other, "outside")));
+            Assert.Equal(
+                "chart/files/leak is a symbolic link that leads out of the repository, and helm would read what it leads to",
+                RepositoryAnalyzer.ChartLinkProblem(root, Path.Join(root, "chart")));
+            Directory.Delete(Path.Join(chart, "files", "leak"));
+            Directory.Delete(junction);
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
+    }
+
     [Fact]
     public void A_chart_with_more_files_than_can_be_checked_is_not_rendered()
     {
