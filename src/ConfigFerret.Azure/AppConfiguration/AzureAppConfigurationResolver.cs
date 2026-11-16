@@ -87,21 +87,24 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
             .ToList();
     }
 
-    // A feature flag with filters sets FeatureManagement:<name>:EnabledFor:<i>:Name, :EnabledFor:<i>:Parameters:... and
-    // FeatureManagement:<name>:RequirementType, without FeatureManagement: when a prefix trims it. Only those keys lead
-    // to the flag: the shortest key above key that a flag sets and that is followed by one of them. A key that ends in
-    // ':' names no flag, and no key longer than every flag's key is looked up.
+    // A feature flag that is on and has client filters sets FeatureManagement:<name>:EnabledFor:<i>:Name,
+    // :EnabledFor:<i>:Parameters:... and :RequirementType, without FeatureManagement: when a prefix trims it. Only those
+    // keys lead to such a flag: the shortest key above key that one sets and that is followed by one of them. The search
+    // starts after the first character, so a flag key that starts with ':' is found. A key that ends in ':' names no flag,
+    // and no key longer than every flag's key is looked up.
     private List<AzureAppConfigurationSetting> FlagAbove(string key)
     {
         var longest = settings.LongestFlagKey;
-        for (var colon = key.IndexOf(':', StringComparison.Ordinal); colon > 0 && colon <= longest; colon = key.IndexOf(':', colon + 1))
+        for (var colon = key.Length > 1 ? key.IndexOf(':', 1) : -1; colon > 0 && colon <= longest; colon = key.IndexOf(':', colon + 1))
         {
             if (key[colon - 1] == ':' || !IsFlagSubkey(key.AsSpan(colon + 1)))
             {
                 continue;
             }
 
-            var flags = settings.FindByConfigurationKey(key[..colon]).Where(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag).ToList();
+            var flags = settings.FindByConfigurationKey(key[..colon])
+                .Where(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag && s.Enabled == true && s.Filters.Count > 0)
+                .ToList();
             if (flags.Count > 0)
             {
                 return flags;
@@ -111,13 +114,30 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
         return [];
     }
 
-    // rest is what follows the flag's key and its ':'.
+    // rest is what follows the flag's key and its ':': EnabledFor:<digits>:Name, EnabledFor:<digits>:Parameters:..., or
+    // RequirementType, case ignored.
     private static bool IsFlagSubkey(ReadOnlySpan<char> rest)
     {
-        var colon = rest.IndexOf(':');
-        return colon < 0
-            ? rest.Equals("RequirementType", StringComparison.OrdinalIgnoreCase)
-            : rest[..colon].Equals("EnabledFor", StringComparison.OrdinalIgnoreCase);
+        if (rest.Equals("RequirementType", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        const string EnabledFor = "EnabledFor:";
+        if (!rest.StartsWith(EnabledFor, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var index = rest[EnabledFor.Length..];
+        var digits = index.IndexOfAnyExceptInRange('0', '9');
+        if (digits <= 0 || index[digits] != ':')
+        {
+            return false;
+        }
+
+        var name = index[(digits + 1)..];
+        return name.Equals("Name", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Parameters:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static ProvenanceStep ToStep(AzureAppConfigurationSetting setting, ProvenanceStep layer, bool inferred, string? how)
