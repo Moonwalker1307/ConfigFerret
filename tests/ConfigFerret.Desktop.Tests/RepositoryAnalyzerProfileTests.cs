@@ -182,6 +182,18 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     }
 
     [Fact]
+    public void Says_which_chart_was_traced_when_the_repository_holds_several()
+    {
+        Write("charts/api/Chart.yaml", "name: api\n");
+        Write("charts/worker/Chart.yaml", "name: worker\n");
+
+        var (profile, notes) = Build(NoTools(), new AnalysisChoices { HelmChart = "charts/worker" });
+
+        Assert.Equal("Helm chart charts/worker", profile.Sources.OfType<HelmSource>().Single().Name);
+        Assert.Contains("The repository holds 2 Helm charts; traced charts/worker.", notes);
+    }
+
+    [Fact]
     public void A_chart_that_was_not_chosen_is_not_rendered()
     {
         Write("chart/Chart.yaml", "name: demo\n");

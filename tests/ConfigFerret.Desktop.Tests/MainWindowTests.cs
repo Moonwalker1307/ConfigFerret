@@ -233,6 +233,77 @@ public sealed class MainWindowTests : IDisposable
         Assert.Contains("refused", viewModel.ConnectionError, StringComparison.Ordinal);
         Assert.DoesNotContain("ghp_wrong", viewModel.ConnectionError, StringComparison.Ordinal);
     }
+
+    [AvaloniaFact]
+    public async Task Picking_another_app_renders_its_own_chart_with_its_own_values()
+    {
+        var repo = Path.Join(_temp.FullName, "shop");
+        foreach (var file in new[] { "src/Api/appsettings.json", "src/Worker/appsettings.json" })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(repo, file))!);
+            File.WriteAllText(Path.Join(repo, file), "{}");
+        }
+
+        foreach (var file in new[] { "charts/api/Chart.yaml", "charts/api/values-prod.yaml", "charts/worker/Chart.yaml", "charts/worker/values-prod.yaml" })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(repo, file))!);
+            File.WriteAllText(Path.Join(repo, file), "name: x\n");
+        }
+
+        var rendered = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, arguments) =>
+            {
+                rendered.Enqueue(string.Join(' ', arguments));
+                return null;
+            }),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal("charts/api/values-prod.yaml", viewModel.SelectedValuesFile);
+
+        viewModel.SelectedApp = "src/Worker";
+        await WaitForTraceAsync(viewModel);
+
+        Assert.Equal("charts/worker/values-prod.yaml", viewModel.SelectedValuesFile);
+        var worker = Path.GetFullPath(Path.Join(repo, "charts", "worker"));
+        Assert.Equal($"template release {worker} -f {Path.Join(worker, "values-prod.yaml")}", rendered.Last());
+    }
+
+    [AvaloniaFact]
+    public async Task The_new_apps_values_file_is_matched_to_the_environment_shown()
+    {
+        var repo = Path.Join(_temp.FullName, "shop");
+        foreach (var file in new[] { "src/Api/appsettings.json", "src/Api/appsettings.Qa.json", "src/Worker/appsettings.json", "src/Worker/appsettings.Production.json" })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(repo, file))!);
+            File.WriteAllText(Path.Join(repo, file), "{}");
+        }
+
+        foreach (var file in new[] { "charts/api/Chart.yaml", "charts/worker/Chart.yaml", "charts/worker/values-qa.yaml", "charts/worker/values-prod.yaml" })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(repo, file))!);
+            File.WriteAllText(Path.Join(repo, file), "name: x\n");
+        }
+
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal("Qa", viewModel.SelectedEnvironment);
+
+        // The Worker has no Qa settings, so the environment moves to Production, and the values file with it.
+        viewModel.SelectedApp = "src/Worker";
+        await WaitForTraceAsync(viewModel);
+
+        Assert.Equal("Production", viewModel.SelectedEnvironment);
+        Assert.Equal("charts/worker/values-prod.yaml", viewModel.SelectedValuesFile);
+    }
 }
 
 /// <summary>Saves window screenshots to the folder in CONFIGFERRET_SCREENSHOTS, when it is set.</summary>

@@ -35,7 +35,10 @@ values to show (sections for KEY, sources for COMES FROM, layer kinds for LAYERS
 The **Sources** drop-down next to the search lists what the scan found in the repository (Helm chart, Kustomize,
 Kubernetes manifests, GitHub Actions, Octopus Deploy). Untick one to trace again without it; the choice is kept per
 repository. App settings are the starting point of a trace and stay on. The notes button lists warnings, source
-problems and what the dead-variable scan read.
+problems and what the dead-variable scan read. When the repository holds a Helm chart or overlay for each of several
+apps, the one named most like the app picked is traced, with a values file from the chart's own folder first, and the
+notes name the chart. An overlay named for the environment comes first, even when only the bases are named like the
+apps.
 
 A workflow `env:` entry such as `Db__Host: ${{ vars.DB_HOST }}` counts as an environment variable of the app, so
 `Db:Host` gets the variable's value and links back to it. Only entries that look like app settings are used: names with

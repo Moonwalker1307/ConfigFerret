@@ -536,6 +536,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         RefreshEnvironmentChoices();
+        RefreshChartChoices();
         _ = RetraceAsync();
     }
 
@@ -1466,6 +1467,33 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         RepositoryCountText = _allRepositories.Count == 0
             ? null
             : Repositories.Count == _allRepositories.Count ? $"{Repositories.Count} repositories" : $"{Repositories.Count} of {_allRepositories.Count} repositories";
+    }
+
+    // Each app of a repository can have its own chart and overlay, so they are suggested again for the app picked, and the
+    // values files are the new chart's.
+    private void RefreshChartChoices()
+    {
+        if (_scan is not { } scan || _currentKey is null || !_workspace.Repositories.TryGetValue(_currentKey, out var choices))
+        {
+            return;
+        }
+
+        var before = choices.HelmChart;
+        choices.App = SelectedApp;
+        choices.Environment = string.IsNullOrWhiteSpace(SelectedEnvironment) ? choices.Environment : SelectedEnvironment;
+        RepositoryAnalyzer.SuggestDeployment(scan, choices);
+        if (choices.HelmChart == before)
+        {
+            return;
+        }
+
+        var chart = scan.HelmCharts.FirstOrDefault(c => c.RelativePath == choices.HelmChart);
+        var populating = _populating;
+        _populating = true;
+        HasHelm = chart is not null;
+        Fill(ValuesFiles, [None, .. chart?.ValuesFiles ?? []]);
+        SelectedValuesFile = choices.HelmValues ?? None;
+        _populating = populating;
     }
 
     private void RefreshEnvironmentChoices()
