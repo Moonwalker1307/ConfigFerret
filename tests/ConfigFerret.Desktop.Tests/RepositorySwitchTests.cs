@@ -184,7 +184,7 @@ public sealed class RepositorySwitchTests : IDisposable
     }
 
     [Fact]
-    public void A_failed_open_after_a_stopped_one_shows_neither_repository()
+    public void A_failed_open_after_a_stopped_one_keeps_the_repository_on_show()
     {
         var billing = Path.Join(_temp.FullName, "billing");
         Directory.CreateDirectory(Path.Join(billing, "src", "Billing"));
@@ -214,15 +214,113 @@ public sealed class RepositorySwitchTests : IDisposable
             var failing = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "ferret-fan/dotfiles"));
             Assert.True(context.RunUntil(() => failing.IsCompleted && !viewModel.IsBusy));
 
-            Assert.Null(viewModel.SubjectTitle);
-            Assert.Null(viewModel.SubjectDetail);
-            Assert.False(viewModel.HasResult);
-            Assert.Empty(viewModel.Rows);
-            Assert.NotNull(viewModel.StatusText);
+            Assert.Equal("contoso/orders", viewModel.SelectedRepository?.FullName);
+            Assert.Equal("contoso/orders", viewModel.SubjectTitle);
+            Assert.True(viewModel.HasResult);
+            Assert.DoesNotContain(viewModel.Problems, p => p.Severity == "error");
+            Assert.DoesNotContain("Traced", viewModel.StatusText, StringComparison.Ordinal);
             var retrace = viewModel.RetraceAsync();
             Assert.True(context.RunUntil(() => retrace.IsCompleted));
-            Assert.DoesNotContain("does not exist", viewModel.StatusText, StringComparison.Ordinal);
+            Assert.True(viewModel.HasResult, string.Join(Environment.NewLine, viewModel.Problems.Select(p => p.Text)));
+            Assert.Contains(viewModel.Rows, r => r.Key == "Db:Timeout");
+            Assert.DoesNotContain(viewModel.Problems, p => p.Severity == "error");
         });
+    }
+
+    [Fact]
+    public void Stopped_opens_leave_the_files_of_the_repository_on_show()
+    {
+        var billing = Path.Join(_temp.FullName, "billing");
+        Directory.CreateDirectory(Path.Join(billing, "src", "Billing"));
+        File.WriteAllText(Path.Join(billing, "src", "Billing", "appsettings.json"), """{ "From": "BILLING" }""");
+        using var handler = new SlowDotfiles(billing);
+        var credentials = new InMemoryCredentialStore();
+        credentials.Write(MainWindowViewModel.GitHubAccountName, FakeGitHub.Token);
+        var downloads = Path.Join(_temp.FullName, "downloads");
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                credentials,
+                handler,
+                new RepositoryAnalyzer(render: (_, _) => null),
+                downloads);
+            var loading = viewModel.LoadRepositoriesAsync();
+            Assert.True(context.RunUntil(() => loading.IsCompleted), viewModel.StatusText);
+            viewModel.SelectedRepository = viewModel.Repositories.Single(r => r.FullName == "contoso/orders");
+            Assert.True(context.RunUntil(() => viewModel.HasResult && !viewModel.IsBusy));
+
+            // Pick contoso/billing and, once it is downloaded and scanned, ferret-fan/dotfiles, whose download waits;
+            // then change a choice of contoso/orders, which stops that download and traces contoso/orders again.
+            viewModel.SelectedRepository = viewModel.Repositories.Single(r => r.FullName == "contoso/billing");
+            Assert.True(context.RunUntil(() => viewModel.BusyText?.StartsWith("Looking", StringComparison.Ordinal) == true), viewModel.StatusText);
+            context.WaitForWork();
+            viewModel.SelectedRepository = viewModel.Repositories.Single(r => r.FullName == "ferret-fan/dotfiles");
+            context.RunQueued();
+            viewModel.SelectedEnvironment = "Staging";
+            var retrace = viewModel.RetraceAsync();
+            Assert.True(context.RunUntil(() => retrace.IsCompleted && !viewModel.IsBusy && viewModel.SelectedRepository?.FullName == "contoso/orders"));
+
+            Assert.Equal("contoso/orders", viewModel.SubjectTitle);
+            Assert.DoesNotContain(viewModel.Problems, p => p.Text.Contains("does not exist", StringComparison.Ordinal));
+            Assert.True(viewModel.HasResult, string.Join(Environment.NewLine, viewModel.Problems.Select(p => p.Text)));
+            Assert.Contains(viewModel.Rows, r => r.Key == "Db:Timeout");
+            Assert.Single(Directory.GetDirectories(downloads));
+        });
+    }
+
+    // Guards the download kept back until an open takes over: before that, the open replaced the download on show at
+    // once, so closing deleted it with the window and this passed too.
+    [Fact]
+    public void Closing_while_a_repository_opens_deletes_its_download()
+    {
+        var billing = Path.Join(_temp.FullName, "billing");
+        Directory.CreateDirectory(Path.Join(billing, "src", "Billing"));
+        File.WriteAllText(Path.Join(billing, "src", "Billing", "appsettings.json"), """{ "From": "BILLING" }""");
+        using var handler = new SlowDotfiles(billing);
+        var credentials = new InMemoryCredentialStore();
+        credentials.Write(MainWindowViewModel.GitHubAccountName, FakeGitHub.Token);
+        var downloads = Path.Join(_temp.FullName, "downloads");
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                credentials,
+                handler,
+                new RepositoryAnalyzer(render: (_, _) => null),
+                downloads);
+            var loading = viewModel.LoadRepositoriesAsync();
+            Assert.True(context.RunUntil(() => loading.IsCompleted), viewModel.StatusText);
+            var shown = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "contoso/orders"));
+            Assert.True(context.RunUntil(() => shown.IsCompleted));
+
+            // Close the window once contoso/billing is downloaded and scanned, before its open takes over.
+            var opening = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "contoso/billing"));
+            Assert.True(context.RunUntil(() => viewModel.BusyText?.StartsWith("Looking", StringComparison.Ordinal) == true), viewModel.StatusText);
+            context.WaitForWork();
+            viewModel.Dispose();
+            Assert.True(context.RunUntil(() => opening.IsCompleted));
+
+            Assert.Empty(Directory.GetDirectories(downloads));
+        });
+    }
+
+    /// <summary>The fake GitHub, serving contoso/billing at once and ferret-fan/dotfiles only once the request is stopped.</summary>
+    private sealed class SlowDotfiles(string folder) : DelegatingHandler(new FakeGitHub())
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            switch (request.RequestUri!.AbsolutePath)
+            {
+                case "/repos/contoso/billing/tarball/main":
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(FakeGitHub.Tarball(folder, "contoso-billing-5e6f7a8/")) };
+                case "/repos/ferret-fan/dotfiles/tarball/trunk":
+                    await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, cancellationToken);
+                    return new HttpResponseMessage(HttpStatusCode.NotFound);
+                default:
+                    return await base.SendAsync(request, cancellationToken);
+            }
+        }
     }
 
     [Fact]
@@ -331,12 +429,50 @@ public sealed class RepositorySwitchTests : IDisposable
 
             viewModel.SelectedRepository = failing;
             Assert.True(context.RunUntil(() => Downloads() == 1 && !viewModel.IsBusy));
-            Assert.Null(viewModel.SelectedRepository);
+            Assert.Equal("contoso/orders", viewModel.SelectedRepository?.FullName);
 
             viewModel.SelectedRepository = failing;
             context.RunUntil(() => Downloads() == 2 && !viewModel.IsBusy);
             Assert.Equal(2, Downloads());
-            Assert.Null(viewModel.SelectedRepository);
+            Assert.Equal("contoso/orders", viewModel.SelectedRepository?.FullName);
+        });
+    }
+
+    [Fact]
+    public void Refresh_after_a_failed_open_downloads_the_repository_on_show_again()
+    {
+        var github = new FakeGitHub();
+        var credentials = new InMemoryCredentialStore();
+        credentials.Write(MainWindowViewModel.GitHubAccountName, FakeGitHub.Token);
+        int Downloads()
+        {
+            lock (github.Requests)
+            {
+                return github.Requests.Count(r => r.RequestUri!.AbsolutePath == "/repos/contoso/orders/tarball/main");
+            }
+        }
+
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                credentials,
+                github,
+                new RepositoryAnalyzer(render: (_, _) => null),
+                Path.Join(_temp.FullName, "downloads"));
+            var loading = viewModel.LoadRepositoriesAsync();
+            Assert.True(context.RunUntil(() => loading.IsCompleted), viewModel.StatusText);
+            var shown = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "contoso/orders"));
+            Assert.True(context.RunUntil(() => shown.IsCompleted));
+            var failing = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "ferret-fan/dotfiles"));
+            Assert.True(context.RunUntil(() => failing.IsCompleted));
+
+            var refresh = viewModel.RefreshCommand.ExecuteAsync(null);
+            Assert.True(context.RunUntil(() => refresh.IsCompleted));
+
+            Assert.Equal(2, Downloads());
+            Assert.Equal("contoso/orders", viewModel.SubjectTitle);
+            Assert.True(viewModel.HasResult, string.Join(Environment.NewLine, viewModel.Problems.Select(p => p.Text)));
         });
     }
 
@@ -366,9 +502,9 @@ public sealed class RepositorySwitchTests : IDisposable
             viewModel.SelectedRepository = viewModel.Repositories.Single(r => r.FullName == "contoso/billing");
             Assert.StartsWith("Downloading", viewModel.BusyText, StringComparison.Ordinal);
             viewModel.RevealSecrets = true;
-            context.RunUntil(() => !viewModel.IsBusy && viewModel.SelectedRepository is null);
+            context.RunUntil(() => !viewModel.IsBusy && viewModel.SelectedRepository?.FullName == "contoso/orders");
 
-            Assert.Null(viewModel.SelectedRepository);
+            Assert.Equal("contoso/orders", viewModel.SelectedRepository?.FullName);
             Assert.Equal("contoso/orders", viewModel.SubjectTitle);
             Assert.True(viewModel.HasResult, string.Join(Environment.NewLine, viewModel.Problems.Select(p => p.Text)));
         });
