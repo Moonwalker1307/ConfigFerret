@@ -172,5 +172,11 @@ is traced as it is stored or left out.
   cannot fix this: it is read for environment variables, env entries and ConfigMap/Secret keys, never for values set by
   a configuration provider. A value from the Key Vault provider is still hidden.
 - Feature flags with filters are linked by name only; their filter settings are not traced.
+- A feature flag with variants, an allocation or telemetry is written by the provider in the newer layout,
+  `feature_management:feature_flags:<i>:...`, numbered in load order, and not as `FeatureManagement:<name>`. Such flags
+  are listed (`Find`, links, unused entries) but set no key that is traced, and one trace warning gives their number.
+  An app can also switch every flag to that layout with the environment variable
+  `AZURE_APP_CONFIGURATION_FM_SCHEMA_COMPATIBILITY_DISABLED=true`, which the store does not show; the trace then still
+  shows `FeatureManagement:<name>` keys the app does not have.
 - App Configuration snapshots are not read.
 - Listing stops after 400 pages per vault or selector, with a warning.

@@ -181,9 +181,12 @@ internal static partial class Targets
         var flagKeys = ExpectedFlagKeys(responses, options.TrimKeyPrefixes);
         foreach (var setting in settings.Settings)
         {
-            // A stored key finds the stored key-value, and each configuration key it sets finds the value it sets there.
+            // A stored key finds the stored key-value, and each configuration key it sets finds the value it sets there. An
+            // empty configuration key is no key and finds nothing.
             if (string.IsNullOrEmpty(setting.Key) || !settings.Find(setting.Key).Contains(setting)
-                || (settings.Flattened(setting) ?? [setting]).Any(value => !settings.FindByConfigurationKey(value.ConfigurationKey).Contains(value)))
+                || (settings.Flattened(setting) ?? [setting]).Any(value => value.ConfigurationKey.Length == 0
+                    ? settings.FindByConfigurationKey(value.ConfigurationKey).Count > 0
+                    : !settings.FindByConfigurationKey(value.ConfigurationKey).Contains(value)))
             {
                 throw new InvariantException($"AzureAppConfigurationSettings cannot find key '{setting.Key}'.");
             }
@@ -266,9 +269,11 @@ internal static partial class Targets
                     }
 
                     var name = stored[AzureAppConfigurationSettings.FeatureFlagPrefix.Length..];
+                    var newerLayout = false;
                     if (item.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.String)
                     {
-                        name = FlagId(value.GetString()!) ?? name;
+                        (var id, newerLayout) = ReadFlag(value.GetString()!);
+                        name = id ?? name;
                     }
 
                     var full = "FeatureManagement:" + name;
@@ -278,7 +283,8 @@ internal static partial class Targets
                         expected[stored] = keys = new HashSet<string>(StringComparer.Ordinal);
                     }
 
-                    keys.Add(prefix is null ? full : full[prefix.Length..]);
+                    // A flag with a named variant, an allocation object or a telemetry object sets no traced key.
+                    keys.Add(newerLayout ? string.Empty : prefix is null ? full : full[prefix.Length..]);
                 }
             }
             catch (JsonException)
@@ -290,19 +296,27 @@ internal static partial class Targets
         return expected;
     }
 
-    private static string? FlagId(string raw)
+    private static (string? Id, bool NewerLayout) ReadFlag(string raw)
     {
         try
         {
             using var doc = JsonDocument.Parse(raw);
-            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("id", out var id)
-                && id.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(id.GetString())
-                ? id.GetString()
-                : null;
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return (null, false);
+            }
+
+            var id = root.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(i.GetString()) ? i.GetString() : null;
+            var newerLayout = (root.TryGetProperty("variants", out var variants) && variants.ValueKind == JsonValueKind.Array
+                    && variants.EnumerateArray().Any(v => v.ValueKind == JsonValueKind.Object && v.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String))
+                || (root.TryGetProperty("allocation", out var allocation) && allocation.ValueKind == JsonValueKind.Object)
+                || (root.TryGetProperty("telemetry", out var telemetry) && telemetry.ValueKind == JsonValueKind.Object);
+            return (id, newerLayout);
         }
         catch (JsonException)
         {
-            return null;
+            return (null, false);
         }
     }
 

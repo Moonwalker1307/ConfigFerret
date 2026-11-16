@@ -515,6 +515,45 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Leaves_flags_the_provider_writes_in_the_newer_layout_without_a_configuration_key()
+    {
+        static string Flag(string name, string extra) =>
+            Kv(".appconfig.featureflag/" + name, "{\"id\":\"" + name + "\",\"enabled\":true" + extra + "}", contentType: FeatureFlagType);
+        var handler = Handler()
+            .Respond(KeysPath(), Page(null, Kv("FeatureManagement:Variants", "x")))
+            .Respond(FlagsPath(), Page(
+                null,
+                Flag("Plain", string.Empty),
+                Flag("Variants", ""","variants":[{"name":"Big"}]"""),
+                Flag("Allocation", ""","allocation":{}"""),
+                Flag("Telemetry", ""","telemetry":{"enabled":false}"""),
+                Flag("NoVariants", ""","variants":[]"""),
+                Flag("UnnamedVariant", ""","variants":[{"configuration_value":1},null]"""),
+                Flag("NullAllocation", ""","allocation":null,"telemetry":null""")));
+
+        var settings = await Load(handler);
+
+        Assert.Equal(
+            ["FeatureManagement:Plain", "FeatureManagement:NoVariants", "FeatureManagement:UnnamedVariant", "FeatureManagement:NullAllocation"],
+            settings.Settings.Where(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag && s.ConfigurationKey.Length > 0).Select(s => s.ConfigurationKey));
+        var variants = Assert.Single(settings.Find(".appconfig.featureflag/Variants"));
+        Assert.Equal(string.Empty, variants.ConfigurationKey);
+        Assert.Null(variants.Value);
+        Assert.True(variants.Enabled);
+        Assert.Empty(settings.FindByConfigurationKey(string.Empty));
+        Assert.Equal(["x"], settings.FindByConfigurationKey("FeatureManagement:Variants").Select(s => s.Value));
+        Assert.Equal(
+            ["Azure App Configuration contoso has 3 feature flags with variants, an allocation or telemetry, which the provider writes under feature_management:feature_flags; they are not traced."],
+            settings.Warnings);
+
+        // The key-value is the only origin of the app's FeatureManagement:Variants, and a link still finds the flag.
+        var resolver = new AzureAppConfigurationResolver(settings, new AzureAppConfigurationTraceOptions().Map("FLAG", ".appconfig.featureflag/Variants"));
+        Assert.Equal("Azure App Configuration key FeatureManagement:Variants (contoso)", Assert.Single(resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "FeatureManagement:Variants", "x"), new TraceDiagnostics())).Source);
+        Assert.Equal("Azure App Configuration feature flag Variants (contoso)", Assert.Single(resolver.Resolve(TestLayers.Env("FLAG", "x"), new TraceDiagnostics())).Source);
+        Assert.Contains(settings.ToLoadedSource().Entries, e => e.Name == ".appconfig.featureflag/Variants" && e.Detail == "feature flag, on, in the newer layout, not traced");
+    }
+
+    [Fact]
     public async Task Names_a_feature_flag_stored_under_the_bare_prefix_by_that_key()
     {
         var handler = Handler()
