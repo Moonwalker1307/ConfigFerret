@@ -35,13 +35,16 @@ jobs:
             10.0.x
             11.0.x
 
-      - run: dotnet restore
+      # Restore without NuGet's audit: warnings are errors here, so a vulnerable package would fail the restore before
+      # the next step could report it. That step does its own check, and --no-restore keeps dotnet list from restoring
+      # again with the audit on.
+      - run: dotnet restore -p:NuGetAudit=false
 
       - name: Vulnerable packages (fails the job)
         shell: bash
         run: |
-          dotnet list package --vulnerable --include-transitive | tee vulnerable.txt
-          dotnet list package --vulnerable --include-transitive --format json > vulnerable.json
+          dotnet list package --vulnerable --include-transitive --no-restore | tee vulnerable.txt
+          dotnet list package --vulnerable --include-transitive --no-restore --format json > vulnerable.json
           count=$(jq '[.projects[].frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?)] | length' vulnerable.json)
           {
             echo "## Vulnerable NuGet packages"
@@ -58,8 +61,8 @@ jobs:
       - name: Deprecated packages (warns only)
         shell: bash
         run: |
-          dotnet list package --deprecated --include-transitive | tee deprecated.txt
-          dotnet list package --deprecated --include-transitive --format json > deprecated.json
+          dotnet list package --deprecated --include-transitive --no-restore | tee deprecated.txt
+          dotnet list package --deprecated --include-transitive --no-restore --format json > deprecated.json
           count=$(jq '[.projects[].frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?)] | length' deprecated.json)
           {
             echo "## Deprecated NuGet packages"
