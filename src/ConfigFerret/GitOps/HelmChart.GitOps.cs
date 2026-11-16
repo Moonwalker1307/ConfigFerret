@@ -55,15 +55,27 @@ public sealed partial class HelmChart
         var chart = new HelmChart(chartFolder);
         chart._warnings.AddRange(warnings);
 
+        // A chart in the checkout may hold links, and Argo CD and Flux read nothing outside the checkout through them.
+        // A chart folder that was passed is read as it is, like a chart for helm install. Each file is checked before
+        // it is looked at, so that the warnings never tell whether something outside the checkout exists.
+        var repositoryRoot = string.IsNullOrWhiteSpace(options.RepositoryRoot) ? null : options.RepositoryRoot;
+        var checkout = string.IsNullOrWhiteSpace(options.ChartFolder) ? repositoryRoot : null;
         var defaults = chartFolder is null ? null : Path.Join(chartFolder, "values.yaml");
-        if (defaults is not null && File.Exists(defaults) && !(source.ValuesFilesReplaceChartValues && source.ValuesFiles.Count > 0))
+        if (defaults is not null && !(source.ValuesFilesReplaceChartValues && source.ValuesFiles.Count > 0))
         {
-            chart.AddValuesFile(defaults, "values.yaml (chart default)");
+            if (checkout is not null && !Kustomization.IsInFolder(defaults, checkout))
+            {
+                chart._warnings.Add($"The chart's values.yaml for {application.DisplayName} is outside {checkout}, so it was not read.");
+            }
+            else if (File.Exists(defaults))
+            {
+                chart.AddValuesFile(defaults, "values.yaml (chart default)");
+            }
         }
 
         foreach (var file in source.ValuesFiles)
         {
-            chart.AddGitOpsValuesFile(application, source, file, chartFolder, options.RepositoryRoot);
+            chart.AddGitOpsValuesFile(application, source, file, chartFolder, repositoryRoot);
         }
 
         foreach (var layer in source.Layers)
@@ -73,7 +85,14 @@ public sealed partial class HelmChart
 
         if (chartFolder is not null)
         {
-            chart.AddTemplates(chartFolder);
+            if (checkout is not null && !Kustomization.IsInFolder(Path.Join(chartFolder, "templates"), checkout))
+            {
+                chart._warnings.Add($"The chart's templates folder for {application.DisplayName} is outside {checkout}, so it was not read.");
+            }
+            else
+            {
+                chart.AddTemplates(chartFolder);
+            }
         }
 
         return chart;
@@ -92,6 +111,30 @@ public sealed partial class HelmChart
     internal bool IsSensitivePath(string path) =>
         _history.TryGetValue(path, out var steps) && steps.Count > 0 && IsSensitiveSource(steps[^1].Source);
 
+    /// <summary>
+    /// True when <paramref name="path"/> is <paramref name="root"/> or in it, after following symbolic links. Paths
+    /// come from the manifest, and Argo CD and Flux read nothing outside the checkout.
+    /// </summary>
+    /// <remarks>
+    /// The text is checked first: a path that <c>..</c> takes out of the root is never looked at on disk, and text
+    /// that is no path, such as one with a NUL character, is outside.
+    /// </remarks>
+    internal static bool IsInRoot(string path, string root)
+    {
+        string relative;
+        try
+        {
+            relative = Path.GetRelativePath(root, path);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        var leaves = Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        return !leaves && Kustomization.IsInFolder(path, root, orFolder: true);
+    }
+
     private static string? ChartFolderFor(GitOpsApplication application, GitOpsHelmSource source, GitOpsOptions options, List<string> warnings)
     {
         string? folder;
@@ -106,7 +149,14 @@ public sealed partial class HelmChart
         }
         else if (!string.IsNullOrWhiteSpace(options.RepositoryRoot) && source.Path is not null)
         {
-            folder = Path.GetFullPath(Path.Join(options.RepositoryRoot, source.Path));
+            folder = Path.Join(options.RepositoryRoot, source.Path);
+            if (!IsInRoot(folder, options.RepositoryRoot))
+            {
+                warnings.Add($"The chart folder {source.Path} for {application.DisplayName} is outside the repository checkout, so it was not read.");
+                return null;
+            }
+
+            folder = Path.GetFullPath(folder);
         }
         else
         {

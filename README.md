@@ -601,7 +601,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   `spec.target.template`, `dataFrom.find`, generators and `ClusterExternalSecret` are not expanded.
 - Argo CD and Flux charts from a Helm or OCI repository are not fetched; pass the pulled chart folder. Remote values
   files (`https://`) and `fileParameters` are not read. Argo CD `$ref/` values files are looked up in the one
-  repository checkout you pass. ApplicationSet generator parameters (`{{cluster}}`) are not filled in.
+  repository checkout you pass. ApplicationSet generator parameters (`{{cluster}}`) are not filled in. A source path
+  or Flux `spec.path` that leads outside the checkout (with `..` or a symbolic link) is not read, and neither is a
+  chart's `values.yaml` or `templates` folder that links outside it; the trace warns instead.
 - Argo CD kustomize patches are traced only when they are inline and set ConfigMap `data` (strategic merge, or JSON
   patch on `/data/...`). Patch files, env patches, Flux `spec.patches` and `postRenderers` are not traced.
 - A Flux `${VAR}` link needs the source manifests under `spec.path` in the checkout, and matches the rendered

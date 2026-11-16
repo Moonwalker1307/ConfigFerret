@@ -338,8 +338,11 @@ public sealed class Kustomization
         return entries;
     }
 
-    /// <summary>True when <paramref name="path"/> is in or below <paramref name="folder"/>, after following symbolic links.</summary>
-    internal static bool IsInFolder(string path, string folder)
+    /// <summary>
+    /// True when <paramref name="path"/> is in or below <paramref name="folder"/>, after following symbolic links. The
+    /// folder itself counts only with <paramref name="orFolder"/>.
+    /// </summary>
+    internal static bool IsInFolder(string path, string folder, bool orFolder = false)
     {
         var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (RealPath(folder) is not { } realFolder || RealPath(path) is not { } realPath)
@@ -347,7 +350,9 @@ public sealed class Kustomization
             return false;
         }
 
-        return realPath.StartsWith(Path.TrimEndingDirectorySeparator(realFolder) + Path.DirectorySeparatorChar, comparison);
+        var trimmed = Path.TrimEndingDirectorySeparator(realFolder);
+        return realPath.StartsWith(trimmed + Path.DirectorySeparatorChar, comparison)
+            || (orFolder && string.Equals(Path.TrimEndingDirectorySeparator(realPath), trimmed, comparison));
     }
 
     // As many links as Linux follows in one path before it gives up.

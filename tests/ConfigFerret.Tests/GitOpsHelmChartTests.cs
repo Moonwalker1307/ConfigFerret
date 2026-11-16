@@ -124,6 +124,139 @@ public sealed class GitOpsHelmChartTests : IDisposable
     }
 
     [Fact]
+    public void A_source_path_that_leads_outside_the_repository_is_not_read()
+    {
+        WriteChart("outside");
+        var repo = Directory.CreateDirectory(Path.Join(_root, "repo")).FullName;
+
+        var chart = HelmChart.ForGitOps(Argo("      values: 'a: 1'", "path: ../outside"), new GitOpsOptions { RepositoryRoot = repo });
+
+        Assert.Equal(["The chart folder ../outside for Argo CD Application app is outside the repository checkout, so it was not read."], chart.Warnings);
+        Assert.Null(chart.ChartDirectory);
+        Assert.Null(chart.GetValue("db.timeout"));
+        Assert.Empty(chart.FindUses("Db__Timeout"));
+        Assert.Equal("1", chart.GetValue("a"));
+    }
+
+    [Fact]
+    public void A_chart_at_the_repository_root_is_read()
+    {
+        WriteChart(".");
+
+        var chart = HelmChart.ForGitOps(Argo("      releaseName: x", "path: ."), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Empty(chart.Warnings);
+        Assert.Equal("30", chart.GetValue("db.timeout"));
+        Assert.Single(chart.FindUses("Db__Timeout"));
+    }
+
+    [Fact]
+    public void Chart_files_that_link_outside_the_repository_are_not_read()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        WriteChart("outside");
+        Write("repo/chart/Chart.yaml", "name: c\n");
+        var repo = Path.Join(_root, "repo");
+        Directory.CreateSymbolicLink(Path.Join(repo, "linked"), Path.Join(_root, "outside"));
+        File.CreateSymbolicLink(Path.Join(repo, "chart", "values.yaml"), Path.Join(_root, "outside", "values.yaml"));
+        Directory.CreateSymbolicLink(Path.Join(repo, "chart", "templates"), Path.Join(_root, "outside", "templates"));
+        var options = new GitOpsOptions { RepositoryRoot = repo };
+
+        var linked = HelmChart.ForGitOps(Argo("      releaseName: x", "path: linked"), options);
+        Assert.Equal(["The chart folder linked for Argo CD Application app is outside the repository checkout, so it was not read."], linked.Warnings);
+        Assert.Null(linked.ChartDirectory);
+        Assert.Empty(linked.History);
+
+        var chart = HelmChart.ForGitOps(Argo("      releaseName: x"), options);
+        Assert.Equal(
+            [
+                $"The chart's values.yaml for Argo CD Application app is outside {repo}, so it was not read.",
+                $"The chart's templates folder for Argo CD Application app is outside {repo}, so it was not read.",
+            ],
+            chart.Warnings);
+        Assert.Empty(chart.History);
+        Assert.Empty(chart.FindUses("Db__Timeout"));
+    }
+
+    [Fact]
+    public void Chart_files_that_link_outside_give_the_same_warning_whether_or_not_their_target_exists()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        // Whether the warning appears must not tell whether a path outside the checkout exists.
+        WriteChart("outside");
+        var repo = Path.Join(_root, "repo");
+        foreach (var (folder, values, templates) in new[] { ("found", "values.yaml", "templates"), ("missing", "missing.yaml", "missing") })
+        {
+            Write($"repo/{folder}/Chart.yaml", "name: c\n");
+            File.CreateSymbolicLink(Path.Join(repo, folder, "values.yaml"), Path.Join(_root, "outside", values));
+            Directory.CreateSymbolicLink(Path.Join(repo, folder, "templates"), Path.Join(_root, "outside", templates));
+        }
+
+        var options = new GitOpsOptions { RepositoryRoot = repo };
+        var found = HelmChart.ForGitOps(Argo("      releaseName: x", "path: found"), options);
+        var missing = HelmChart.ForGitOps(Argo("      releaseName: x", "path: missing"), options);
+
+        Assert.Equal(
+            [
+                $"The chart's values.yaml for Argo CD Application app is outside {repo}, so it was not read.",
+                $"The chart's templates folder for Argo CD Application app is outside {repo}, so it was not read.",
+            ],
+            found.Warnings);
+        Assert.Equal(found.Warnings, missing.Warnings);
+    }
+
+    [Fact]
+    public void A_source_path_that_is_not_a_path_is_outside_the_repository()
+    {
+        var chart = HelmChart.ForGitOps(Argo("      releaseName: x", "path: \"chart\\0\""), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(["The chart folder chart\0 for Argo CD Application app is outside the repository checkout, so it was not read."], chart.Warnings);
+        Assert.Null(chart.ChartDirectory);
+    }
+
+    [Fact]
+    public void A_source_path_that_links_to_the_repository_root_is_read()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        WriteChart(".");
+        Directory.CreateSymbolicLink(Path.Join(_root, "linked"), ".");
+
+        var chart = HelmChart.ForGitOps(Argo("      releaseName: x", "path: linked"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Empty(chart.Warnings);
+        Assert.Equal("30", chart.GetValue("db.timeout"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void A_blank_repository_root_is_no_repository_root(string root)
+    {
+        WriteChart();
+        Write("chart/values-prod.yaml", "db:\n  timeout: 40\n");
+        var app = Argo("""
+                  valueFiles: [$values/envs/prod.yaml, values-prod.yaml]
+            """);
+
+        var chart = HelmChart.ForGitOps(app, new GitOpsOptions { ChartFolder = Path.Join(_root, "chart"), RepositoryRoot = root });
+
+        Assert.Equal(["Argo CD Application app (line 8) names the values file $values/envs/prod.yaml, which was not found; pass the repository checkout to read it."], chart.Warnings);
+        Assert.Equal("40", chart.GetValue("db.timeout"));
+    }
+
+    [Fact]
     public void A_chart_folder_wins_over_the_repository_and_works_for_remote_charts()
     {
         WriteChart("pulled");
