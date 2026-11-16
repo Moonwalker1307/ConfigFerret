@@ -468,8 +468,10 @@ public class HelmValueUsageTests
     // many values or values that aliases repeat took minutes and gigabytes before long paths were left out and the
     // values counted. The other Chart.yaml shapes guard the YAML read of the dependencies (they aren't YAML, so they give
     // no dead values), and the template shapes guard the patterns that were already linear, so a change can't make them
-    // try a long text in many ways. Each takes well under a second now, so the limit leaves room for a slow, busy
-    // machine. The scan runs on a thread of its own, so a thread pool kept busy by other tests doesn't delay its start.
+    // try a long text in many ways. Each takes about a second now, and under three on a machine kept busy by other
+    // builds, while the old scan took minutes to an hour. The limit is a minute, so a slow runner that runs several test
+    // assemblies at once stays under it and a scan that is no longer linear does not. The scan runs on a thread of its
+    // own, so a thread pool kept busy by other tests doesn't delay its start.
     [Theory]
     [InlineData("blank lines in Chart.yaml", "b")]
     [InlineData("a long line of dashes and blanks in Chart.yaml", "")]
@@ -491,7 +493,7 @@ public class HelmValueUsageTests
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var scan = Task.Factory.StartNew(() => HelmValueUsage.FindDead(temp.Path, []), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == scan;
+        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken)) == scan;
 
         Assert.True(finished, $"Scanning {text.Length} characters of {shape} took longer than {watch.Elapsed.TotalSeconds:0}s.");
         string[] expected = dead.Length == 0 ? [] : [dead];

@@ -102,8 +102,9 @@ public class JsonApiTests
         using var handler = new ScriptedHandler(_ => Respond(HttpStatusCode.OK, new StalledStream()));
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(300) };
 
+        // The timeout fires after 0.3 seconds, or a second on a busy machine. The minute only ends the test when it never fires.
         var ex = await Assert.ThrowsAsync<HttpRequestException>(
-            () => Get(client, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+            () => Get(client, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken));
 
         Assert.Equal("Example did not send a complete response for /v1/items within 0.3 seconds.", ex.Message);
         Assert.IsType<OperationCanceledException>(ex.InnerException, exactMatch: false);
@@ -116,7 +117,7 @@ public class JsonApiTests
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(300) };
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(
-            () => Get(client, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+            () => Get(client, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken));
 
         Assert.Equal("Example did not send a complete response for /v1/items within 0.3 seconds.", ex.Message);
     }

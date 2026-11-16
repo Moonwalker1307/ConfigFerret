@@ -518,8 +518,10 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Write("app/kustomization.yaml", field == "components" ? "resources: [../base]\ncomponents: [../l0a]\n" : "resources: [../base, ../l0a]\n");
         Write("base/kustomization.yaml", "configMapGenerator:\n  - name: c\n    literals: [A=0]\n");
 
+        // Stopping at 10,000 kustomizations takes a few seconds, and up to 20 on a machine kept busy by other builds.
+        // Loading all 2^24 would take hours, so five minutes still fails for a load that doesn't stop.
         var load = Task.Run(() => Load(), TestContext.Current.CancellationToken);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => load.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => load.WaitAsync(TimeSpan.FromMinutes(5), TestContext.Current.CancellationToken));
         Assert.Contains("more than 10000 kustomizations", ex.Message, StringComparison.Ordinal);
     }
 
