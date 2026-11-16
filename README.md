@@ -581,6 +581,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   Subchart values are not traced yet.
 - Helm links match env entries and data keys by name, so an env entry that overrides a templated ConfigMap key of
   the same name is linked to that ConfigMap's template too. The note then says the values and the manifest disagree.
+- `Kustomization.Load` throws when bases and components nest more than 100 deep, when it would read more than 10,000
+  kustomizations, when one kustomization or env file holds more than 16 MiB of text, or when all it reads from
+  kustomization and env files holds more than 256 MiB. A base, component or env file counts again each time something
+  names it.
 - Kustomize patches that edit env entries or ConfigMap data are not traced yet.
 - Like kustomize, a generator's `envs` files must be in or below the folder of the kustomization that names them.
   Pass `allowFilesOutsideFolder: true` to `Kustomization.Load` to lift this, like `--load-restrictor LoadRestrictionsNone`.
