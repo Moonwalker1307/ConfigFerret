@@ -24,7 +24,7 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     private readonly List<KubernetesManifests> _data;
     private HashSet<string>? _namedValues; // the values paths the object sets that a chart template names
     private bool _warned;
-    private bool _partlyRead; // a file or folder under the Kustomization path could not be read
+    private bool _partlyRead; // a part of the Kustomization path, or the whole path, was not read
 
     /// <summary>Creates a resolver for one GitOps object.</summary>
     /// <param name="application">The GitOps object.</param>
@@ -240,7 +240,9 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
 
         if (string.IsNullOrWhiteSpace(options.RepositoryRoot))
         {
-            _warnings.Add($"{_app.DisplayName} substitutes ${{VAR}} placeholders; pass the repository checkout to link them to the manifests in {_app.Path ?? "the repository"}.");
+            // The manifests that were not read may name any variable.
+            _partlyRead = true;
+            _warnings.Add($"{_app.DisplayName} substitutes ${{VAR}} placeholders; pass the repository checkout to link them to the manifests in {_app.Path ?? "the repository"}. Until then no variable is listed as unused.");
             return;
         }
 
@@ -248,7 +250,8 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
         var folder = Path.Join(root, _app.Path ?? ".");
         if (!HelmChart.IsInRoot(folder, root))
         {
-            _warnings.Add($"The folder {_app.Path} that {_app.DisplayName} deploys is outside the repository checkout, so it was not read.");
+            _partlyRead = true;
+            _warnings.Add($"The folder {_app.Path} that {_app.DisplayName} deploys is outside the repository checkout, so it was not read and no variable is listed as unused.");
             return;
         }
 

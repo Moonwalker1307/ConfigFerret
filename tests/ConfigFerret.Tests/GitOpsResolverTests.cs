@@ -560,7 +560,8 @@ public sealed class GitOpsResolverTests : IDisposable
     public void Warns_when_the_manifests_behind_substitutions_cannot_be_found()
     {
         var noRoot = new GitOpsResolver(Kustomization("    substitute: {A: b}"));
-        Assert.Equal(["Flux Kustomization apps substitutes ${VAR} placeholders; pass the repository checkout to link them to the manifests in ./apps."], noRoot.Warnings);
+        Assert.Equal(["Flux Kustomization apps substitutes ${VAR} placeholders; pass the repository checkout to link them to the manifests in ./apps. Until then no variable is listed as unused."], noRoot.Warnings);
+        AssertNoneUnused(noRoot, "A");
 
         var noPath = new GitOpsResolver(GitOpsApplication.Parse("""
             apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -569,10 +570,14 @@ public sealed class GitOpsResolverTests : IDisposable
             spec:
               postBuild: {substitute: {A: b}}
             """));
-        Assert.Equal(["Flux Kustomization root substitutes ${VAR} placeholders; pass the repository checkout to link them to the manifests in the repository."], noPath.Warnings);
+        Assert.Equal(["Flux Kustomization root substitutes ${VAR} placeholders; pass the repository checkout to link them to the manifests in the repository. Until then no variable is listed as unused."], noPath.Warnings);
+        AssertNoneUnused(noPath, "A");
 
         var missingFolder = new GitOpsResolver(Kustomization("    substitute: {A: b}"), new GitOpsOptions { RepositoryRoot = _root });
         Assert.Equal([$"The folder {Path.Join(_root, "apps")} that Flux Kustomization apps deploys does not exist."], missingFolder.Warnings);
+
+        // Flux fails on a path that does not exist, so its variables are still listed as unused.
+        Assert.Equal(["A"], new LoadedConfigSource("flux", missingFolder, missingFolder.Entries()).FindUnused(new ProvenanceReport([], [])).Select(e => e.Name));
 
         var noSubstitutions = new GitOpsResolver(Kustomization("    wait: true"), new GitOpsOptions { RepositoryRoot = _root });
         Assert.Empty(noSubstitutions.Warnings);
@@ -821,7 +826,8 @@ public sealed class GitOpsResolverTests : IDisposable
 
         var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: ../outside, postBuild: {substitute: {V: x}}}"), options);
         Assert.Empty(flux.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
-        Assert.Equal(["The folder ../outside that Flux Kustomization out deploys is outside the repository checkout, so it was not read."], flux.Warnings);
+        Assert.Equal(["The folder ../outside that Flux Kustomization out deploys is outside the repository checkout, so it was not read and no variable is listed as unused."], flux.Warnings);
+        AssertNoneUnused(flux, "V");
     }
 
     [Fact]
@@ -839,7 +845,7 @@ public sealed class GitOpsResolverTests : IDisposable
         var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: ./linked, postBuild: {substitute: {V: x}}}"), new GitOpsOptions { RepositoryRoot = repo });
 
         Assert.Empty(flux.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
-        Assert.Equal(["The folder ./linked that Flux Kustomization out deploys is outside the repository checkout, so it was not read."], flux.Warnings);
+        Assert.Equal(["The folder ./linked that Flux Kustomization out deploys is outside the repository checkout, so it was not read and no variable is listed as unused."], flux.Warnings);
     }
 
     [Fact]
@@ -877,7 +883,7 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal(["The source path apps\0 of Argo CD Application out is outside the repository checkout, so it was not read."], argo.Warnings);
 
         var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: \"apps\\0\", postBuild: {substitute: {V: x}}}"), options);
-        Assert.Equal(["The folder apps\0 that Flux Kustomization out deploys is outside the repository checkout, so it was not read."], flux.Warnings);
+        Assert.Equal(["The folder apps\0 that Flux Kustomization out deploys is outside the repository checkout, so it was not read and no variable is listed as unused."], flux.Warnings);
 
         var release = new GitOpsResolver(OutsidePath("helm.toolkit.fluxcd.io/v2", "HelmRelease", "spec: {chart: {spec: {chart: \"charts\\0\", sourceRef: {kind: GitRepository, name: repo}}}}"), options);
         Assert.Equal(["The chart folder charts\0 for Flux HelmRelease out is outside the repository checkout, so it was not read."], release.Warnings);
@@ -1067,11 +1073,11 @@ public sealed class GitOpsResolverTests : IDisposable
         AssertNoneUnused(resolver);
     }
 
-    private static void AssertNoneUnused(GitOpsResolver resolver)
+    private static void AssertNoneUnused(GitOpsResolver resolver, params string[] entries)
     {
         var loaded = new LoadedConfigSource("flux", resolver, resolver.Entries());
         Assert.Empty(loaded.FindUnused(new ProvenanceReport([], [])));
-        Assert.Equal(["UNUSED", "V"], loaded.Entries.Select(e => e.Name));
+        Assert.Equal(entries.Length > 0 ? entries : ["UNUSED", "V"], loaded.Entries.Select(e => e.Name));
     }
 
     private static bool CanRead(string path)
