@@ -743,6 +743,77 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void Refuses_an_entry_on_another_root_before_looking_at_it()
+    {
+        string far;
+        if (OperatingSystem.IsWindows())
+        {
+            // A name under .invalid never resolves, so even a wrong answer reaches no host.
+            far = @"\\configferret-test.invalid\share\base";
+        }
+        else
+        {
+            // Linux and macOS have one root. A link that can't be followed, here one that leads to itself, is refused by
+            // the same rule as one that leads to another root.
+            Directory.CreateDirectory(Path.Join(_root, "app"));
+            File.CreateSymbolicLink(Path.Join(_root, "app", "loop"), "loop");
+            far = "loop";
+        }
+
+        Write("app/kustomization.yaml", $"resources: ['{far}']\n");
+        var resource = Assert.Throws<InvalidOperationException>(() => Load());
+        Assert.StartsWith($"The entry {far} named in ", resource.Message, StringComparison.Ordinal);
+
+        Write("app/kustomization.yaml", $"configMapGenerator:\n  - name: cfg\n    envs: ['{far}/app.env']\n");
+        var env = Assert.Throws<InvalidOperationException>(() => Load());
+        Assert.StartsWith($"The env file {far}/app.env named in ", env.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Looks_only_at_entries_on_the_roots_of_the_kustomization_folder()
+    {
+        var app = Path.Join(_root, "app");
+        var root = Path.GetPathRoot(_root)!;
+        Assert.True(Kustomization.MayLookAt(Path.Join(app, "base"), app, root));
+        Assert.True(Kustomization.MayLookAt(Path.Join(app, "missing", "deeper"), app, null));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.False(Kustomization.MayLookAt(@"\\configferret-test.invalid\share\base", app, root));
+            Assert.False(Kustomization.MayLookAt(@"\\?\UNC\configferret-test.invalid\share\base", app, root));
+            var other = root.StartsWith('Q') ? @"R:\base" : @"Q:\base";
+            Assert.False(Kustomization.MayLookAt(other, app, root));
+        }
+    }
+
+    [Fact]
+    public void Refuses_a_base_behind_a_junction_to_another_drive()
+    {
+        var other = FolderOnSecondDrive();
+        Assert.SkipWhen(other is null, "Needs Windows and a second drive, such as D: on GitHub's runners.");
+        try
+        {
+            var outside = Path.Join(other, "outside");
+            Directory.CreateDirectory(Path.Join(outside, "base"));
+            File.WriteAllText(Path.Join(outside, "base", "kustomization.yaml"), "configMapGenerator:\n  - name: cfg\n    literals: [A=1]\n");
+            Write("app/kustomization.yaml", "resources: [ext/base]\n");
+            var junction = Path.Join(_root, "app", "ext");
+            Assert.SkipUnless(TryCreateJunction(junction, outside), "The junction could not be made here.");
+
+            Assert.StartsWith("The entry ext/base named in ", Assert.Throws<InvalidOperationException>(() => Load()).Message, StringComparison.Ordinal);
+            Assert.Equal("1", Kustomization.Load(Path.Join(_root, "app"), allowFilesOutsideFolder: true).ConfigMaps["cfg"].Keys["A"][0].Value);
+
+            // An env file there is refused before anything looks for it, so a missing one is refused too.
+            Write("app/kustomization.yaml", "configMapGenerator:\n  - name: cfg\n    envs: [ext/missing.env]\n");
+            Assert.StartsWith("The env file ext/missing.env named in ", Assert.Throws<InvalidOperationException>(() => Load()).Message, StringComparison.Ordinal);
+            Directory.Delete(junction);
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Reads_an_env_file_below_the_kustomization_folder()
     {
         Write("app/config/app.env", "A=1\n");

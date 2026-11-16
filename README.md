@@ -605,6 +605,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 - Kustomize patches that edit env entries or ConfigMap data are not traced yet.
 - Like kustomize, a generator's `envs` files must be in or below the folder of the kustomization that names them.
   Pass `allowFilesOutsideFolder: true` to `Kustomization.Load` to lift this, like `--load-restrictor LoadRestrictionsNone`.
+  Without it, an env file, base, resource or component on another drive, share or device than the kustomization naming
+  it, or behind a link to one, is refused before anything looks at it, unless that kustomization's folder really lies
+  there.
 - A folder of manifests, a chart's `templates` folder and the folder a GitOps app deploys are read without following
   symbolic links: a linked file or folder below them is skipped.
 - GitHub and Octopus links by name or JSON key are guesses, so they are marked `[inferred]`; a workflow `env:` line or

@@ -233,7 +233,7 @@ internal sealed class UpstreamOptions
 
     public Option<bool> KustomizeAllowFilesOutsideFolder { get; } = new("--kustomize-allow-files-outside-folder")
     {
-        Description = "Let generators read files outside their kustomization's folder, like --load-restrictor LoadRestrictionsNone.",
+        Description = "Let generators read files outside their kustomization's folder, and bases on another drive or share, like --load-restrictor LoadRestrictionsNone.",
     };
 
     public Option<string?> GitHubRepository { get; } = new("--github-repo")
