@@ -162,11 +162,11 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
                     : $"Key Vault reference to {setting.SecretId}; the secret is not read here");
                 break;
             case AzureAppConfigurationSettingKind.FeatureFlag:
-                // The name comes from the stored key, which no trimmed prefix changes. A snapshot built by hand may give a
-                // flag any key and configuration key.
+                // The name comes from the stored key, which no trimmed prefix changes: what follows the prefix, or the whole
+                // key when nothing does. A snapshot built by hand may give a flag any key and configuration key.
                 var prefix = AzureAppConfigurationSettings.FeatureFlagPrefix;
-                var name = setting.Key.StartsWith(prefix, StringComparison.Ordinal) && setting.Key.Length > prefix.Length
-                    ? setting.Key[prefix.Length..]
+                var name = setting.Key.StartsWith(prefix, StringComparison.Ordinal)
+                    ? setting.Key.Length > prefix.Length ? setting.Key[prefix.Length..] : setting.Key
                     : setting.ConfigurationKey.StartsWith(FeatureManagement, StringComparison.OrdinalIgnoreCase)
                         ? setting.ConfigurationKey[FeatureManagement.Length..]
                         : setting.ConfigurationKey;
