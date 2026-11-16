@@ -36,6 +36,9 @@ public sealed class ComposeProject
     private const int MaxExtendsDepth = 16;
     private const int MaxMergeDepth = 16;
     private const int MaxMountedFileChars = 1024 * 1024;
+
+    // The most origin steps for ${VAR} references built for one load, included projects and all, like a trace's bound.
+    private const int MaxOriginSteps = 250_000;
     private const string OutsideProject = "is outside the project directory";
 
     private readonly ComposeOptions _options;
@@ -54,6 +57,9 @@ public sealed class ComposeProject
     private readonly Dictionary<string, MountDefinition> _secrets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MountDefinition> _configs = new(StringComparer.Ordinal);
     private readonly Dictionary<YamlNode, Dictionary<string, (YamlScalarNode Key, YamlNode Value)>> _merged = new(ReferenceEqualityComparer.Instance);
+
+    // Shared by the root project and every project it includes.
+    private OriginBudget _origins = new(MaxOriginSteps);
 
     private ComposeProject(ComposeOptions options, string? projectDirectory, string? displayRoot)
     {
@@ -126,7 +132,7 @@ public sealed class ComposeProject
         options ??= new ComposeOptions();
         var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : Path.GetDirectoryName(paths[0])!;
         var texts = paths.Select(p => new ComposeText(p, File.ReadAllText(p))).ToList();
-        return Create(texts, options, directory, null, 0, paths);
+        return Create(texts, options, directory, null, 0, paths, new(MaxOriginSteps));
     }
 
     /// <summary>
@@ -143,12 +149,12 @@ public sealed class ComposeProject
         options ??= new ComposeOptions();
         var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : null;
         var texts = files.Select(f => new ComposeText(null, f.Text, f.Name)).ToList();
-        return Create(texts, options, directory, null, 0, []);
+        return Create(texts, options, directory, null, 0, [], new(MaxOriginSteps));
     }
 
-    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including)
+    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including, OriginBudget origins)
     {
-        var project = new ComposeProject(options, directory, displayRoot);
+        var project = new ComposeProject(options, directory, displayRoot) { _origins = origins };
         project.LoadEnvironment(fromCaller: depth == 0);
         foreach (var text in texts)
         {
@@ -312,7 +318,7 @@ public sealed class ComposeProject
             var envFiles = ItemsOrSelf(item.Get("env_file")).Select(e => e.Scalar()).Where(e => e is not null)
                 .Select(e => FullPath(file.Base, InterpolatedName(e, at, _warnings)!)!);
             var texts = full.Select(p => new ComposeText(p, ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
-            var sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full]);
+            var sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full], _origins);
             foreach (var name in sub.ServiceNames)
             {
                 if (_parts.ContainsKey(name) || _included.ContainsKey(name))
@@ -621,7 +627,7 @@ public sealed class ComposeProject
 
             var file = DotEnvFile.Parse(text, declaration.Display, declaration.FullPath, Lookup, declaration.Raw, v => earlier.TryGetValue(v, out var e) ? new LookupResult(e.Value, e) : null);
             warnings.AddRange(file.Warnings);
-            steps.AddRange(file.Entries.Select(e => ComposeSteps.Entry(e, $"env_file {declaration.Display}", $"env_file of service {service} ({declaration.At})")));
+            steps.AddRange(file.Entries.Select(e => ComposeSteps.Entry(e, $"env_file {declaration.Display}", $"env_file of service {service} ({declaration.At})", _origins)));
             foreach (var entry in file.Entries)
             {
                 earlier[entry.Name] = entry;
@@ -640,26 +646,28 @@ public sealed class ComposeProject
             Location = declaration.At,
             Reference = new ComposeEnvironmentRef(service, declaration.Name),
         };
-        List<ProvenanceStep> origins;
+        IReadOnlyList<DotEnvReference> references;
         if (declaration.Value is not null)
         {
-            origins = ComposeSteps.References(declaration.References, declaration.At, 0);
+            references = declaration.References;
             step = step with { Value = declaration.Value };
         }
         else if (Lookup(declaration.Name) is { } found)
         {
-            origins = ComposeSteps.References([new DotEnvReference(declaration.Name, found.Entry, IsSet: true) { Value = found.Value }], null, 0);
+            references = [new DotEnvReference(declaration.Name, found.Entry, IsSet: true) { Value = found.Value }];
             step = step with { Value = found.Value, Note = "a name without a value, so the value comes from the shell or the project's env file" };
         }
         else
         {
-            origins = [];
+            references = [];
             step = step with { IsRemoval = true, Note = "a name without a value that the shell and the project's env file don't set, so the container does not get it" };
         }
 
+        var origins = ComposeSteps.References(references, declaration.Value is null ? null : declaration.At, _origins, out var cut);
         return step with
         {
-            IsSensitive = ComposeSteps.IsSensitiveName(declaration.Name) || origins.Exists(o => o.IsSensitive),
+            IsSensitive = ComposeSteps.IsSensitiveName(declaration.Name) || references.Any(ComposeSteps.IsSensitive),
+            Note = ComposeSteps.Join(step.Note, cut ? ComposeSteps.CutNote : null),
             Origins = origins,
         };
     }

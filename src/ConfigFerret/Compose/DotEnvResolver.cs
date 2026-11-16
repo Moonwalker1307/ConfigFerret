@@ -23,7 +23,9 @@ internal sealed class DotEnvResolver(DotEnvLayers layers) : IOriginResolver
             return [];
         }
 
-        var steps = layers.History(env.Name).Select(e => ComposeSteps.Entry(e, e.File, null)).ToList();
+        // History has every line that sets the name, so the lines share one budget.
+        var budget = new OriginBudget(OriginBudget.MaxStepsPerTree);
+        var steps = layers.History(env.Name).Select(e => ComposeSteps.Entry(e, e.File, null, budget)).ToList();
         if (steps.Count == 0 || layer.Value is null || string.Equals(layer.Value, steps[^1].Value, StringComparison.Ordinal))
         {
             return steps;

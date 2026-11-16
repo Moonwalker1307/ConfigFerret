@@ -404,6 +404,50 @@ public class DotEnvLayersTests
         Assert.Equal("x", Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "x", Reference = new EnvironmentVariableRef("A12") }, new TraceDiagnostics())).Value);
     }
 
+    // Levels of keys where each key takes every key of the level below: the tree under one key has width^depth steps.
+    internal static string FanOutDotEnv(int levels, int width, string top) =>
+        string.Concat(Enumerable.Range(0, width).Select(i => $"L0_{i}=\n"))
+        + string.Concat(Enumerable.Range(1, levels - 1).SelectMany(level => Enumerable.Range(0, width).Select(i =>
+            $"L{level}_{i}={string.Concat(Enumerable.Range(0, width).Select(j => $"${{L{level - 1}_{j}}}"))}\n")))
+        + $"{top}={string.Concat(Enumerable.Range(0, width).Select(j => $"${{L{levels - 1}_{j}}}"))}${{HOLDER}}\n";
+
+    internal static int CountSteps(ProvenanceStep step) => 1 + step.Origins.Sum(CountSteps);
+
+    [Fact]
+    public void WithDotEnv_bounds_the_tree_of_values_that_each_take_many_others()
+    {
+        var text = "API_TOKEN=fake-api-token\nHOLDER=${API_TOKEN}\n" + FanOutDotEnv(8, 6, "APP");
+        var layers = DotEnvLayers.Parse([(".env", text)]);
+        var resolver = new DotEnvResolver(layers);
+
+        var step = Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "x", Reference = new EnvironmentVariableRef("APP") }, new TraceDiagnostics()));
+
+        Assert.InRange(CountSteps(step), 2, OriginBudget.MaxStepsPerTree + 1);
+        Assert.Single(step.Origins);
+        Assert.Equal(ComposeSteps.CutNote, step.Note);
+        Assert.True(step.IsSensitive);
+
+        // HOLDER, which leads to the token, is the reference that was not followed.
+        var environment = new Dictionary<string, string?> { ["APP"] = "fake-api-token" };
+        var config = new ConfigurationBuilder().Add(new ComposeGoldenTests.SimulatedEnvironmentSource(environment)).Build();
+        var report = ConfigTracer.For(config).WithOptions(o => o.Environment = environment).WithDotEnv(layers).Trace();
+        Assert.DoesNotContain("fake-api-token", report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-api-token", report.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WithDotEnv_bounds_the_steps_of_a_key_set_on_many_lines()
+    {
+        var top = string.Concat(Enumerable.Range(0, 6).Select(j => $"${{L7_{j}}}"));
+        var text = "HOLDER=\n" + DotEnvLayersTests.FanOutDotEnv(8, 6, "APP") + string.Concat(Enumerable.Repeat($"APP={top}\n", 200));
+        var resolver = new DotEnvResolver(DotEnvLayers.Parse([(".env", text)]));
+
+        var steps = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "x", Reference = new EnvironmentVariableRef("APP") }, new TraceDiagnostics());
+
+        Assert.Equal(201, steps.Count);
+        Assert.InRange(steps.Sum(CountSteps), steps.Count, steps.Count + OriginBudget.MaxStepsPerTree);
+    }
+
     [Fact]
     public void WithDotEnv_ignores_layers_that_are_not_environment_variables()
     {
