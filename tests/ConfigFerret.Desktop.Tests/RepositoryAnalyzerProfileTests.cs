@@ -206,6 +206,205 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     }
 
     [Fact]
+    public void A_chart_with_a_link_out_of_the_repository_is_not_rendered()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        var outside = Path.Join(_temp.FullName, "outside", "config");
+        Directory.CreateDirectory(Path.GetDirectoryName(outside)!);
+        File.WriteAllText(outside, "token: fake-kube-token\n");
+        Directory.CreateDirectory(Path.Join(_root.FullName, "chart", "files"));
+        File.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "files", "leak"), outside);
+        var called = false;
+
+        var (profile, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return Deployment("api", Container("api")); }), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.False(called);
+        var note = Assert.Single(notes);
+        Assert.Equal(
+            "helm was not run for the chart chart: chart/files/leak is a symbolic link that leads out of the repository, and helm would read what it leads to. Without the rendered chart its values are listed only where a ConfigMap or env entry in the repository uses them.",
+            note);
+        Assert.DoesNotContain("outside", note, StringComparison.Ordinal);
+        Assert.Null(profile.Sources.OfType<KubernetesSource>().SingleOrDefault()?.Rendered);
+    }
+
+    [Fact]
+    public void A_chart_with_a_link_to_a_folder_out_of_the_repository_is_not_rendered()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        var outside = Directory.CreateDirectory(Path.Join(_temp.FullName, "outside")).FullName;
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "files"), outside);
+        var called = false;
+
+        var (_, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return null; }), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.False(called);
+        Assert.StartsWith("helm was not run for the chart chart: chart/files is a symbolic link that leads out of the repository", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_link_out_of_the_repository_behind_a_link_inside_it_is_found()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        Write("shared/readme.txt", "shared files\n");
+        var outside = Path.Join(_temp.FullName, "outside-config");
+        File.WriteAllText(outside, "token: fake-kube-token\n");
+        File.CreateSymbolicLink(Path.Join(_root.FullName, "shared", "leak"), outside);
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "files"), Path.Join("..", "shared"));
+        var called = false;
+
+        var (_, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return null; }), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.False(called);
+        Assert.StartsWith("helm was not run for the chart chart: chart/files/leak is a symbolic link that leads out of the repository", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_link_whose_name_is_not_utf8_is_not_hidden_by_a_folder_that_reads_the_same()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux keeps file names that are not valid UTF-8.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        var outside = Directory.CreateDirectory(Path.Join(_temp.FullName, "outside")).FullName;
+        var files = Directory.CreateDirectory(Path.Join(_root.FullName, "chart", "files")).FullName;
+
+        // .NET reads the byte 0xFF as U+FFFD, so the link and the real folder named U+FFFD k both read as files/U+FFFD k.
+        Shell("ln -s \"$1\" \"$2/$(printf '\\377k')\"", outside, files);
+        Directory.CreateDirectory(Path.Join(files, "\uFFFDk"));
+        try
+        {
+            var called = false;
+
+            var (_, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return null; }), new AnalysisChoices { HelmChart = "chart" });
+
+            Assert.False(called);
+            Assert.StartsWith("helm was not run for the chart chart: its files could not be checked for symbolic links that lead out of the repository.", Assert.Single(notes), StringComparison.Ordinal);
+        }
+        finally
+        {
+            // .NET cannot delete what it cannot name.
+            Shell("rm -rf \"$1\"", files);
+        }
+    }
+
+    [Fact]
+    public void A_link_whose_name_is_not_utf8_is_not_rendered()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux keeps file names that are not valid UTF-8.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        var outside = Path.Join(_temp.FullName, "outside-config");
+        File.WriteAllText(outside, "token: fake-kube-token\n");
+        var files = Directory.CreateDirectory(Path.Join(_root.FullName, "chart", "files")).FullName;
+        Shell("ln -s \"$1\" \"$2/$(printf '\\377k')\"", outside, files);
+        try
+        {
+            var called = false;
+
+            var (_, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return null; }), new AnalysisChoices { HelmChart = "chart" });
+
+            Assert.False(called);
+            Assert.StartsWith("helm was not run for the chart chart: its files could not be checked for symbolic links that lead out of the repository.", Assert.Single(notes), StringComparison.Ordinal);
+        }
+        finally
+        {
+            // .NET cannot delete what it cannot name.
+            Shell("rm -rf \"$1\"", files);
+        }
+    }
+
+    [Fact]
+    public void A_link_through_a_link_target_that_is_not_utf8_is_not_rendered()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Only Linux keeps file names that are not valid UTF-8.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        var outside = Directory.CreateDirectory(Path.Join(_temp.FullName, "outside")).FullName;
+        File.WriteAllText(Path.Join(outside, "secret"), "token: fake-kube-token\n");
+        var other = Directory.CreateDirectory(Path.Join(_root.FullName, "other")).FullName;
+
+        // other/lnk leads to other/0xFF d, which leads out. .NET reads lnk's target as U+FFFD d, a folder that does not exist.
+        Shell("ln -s \"$(printf '\\377d')\" \"$2/lnk\" && ln -s \"$1\" \"$2/$(printf '\\377d')\"", outside, other);
+        Directory.CreateDirectory(Path.Join(_root.FullName, "chart", "files"));
+        File.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "files", "x"), Path.Join("..", "..", "other", "lnk", "secret"));
+        try
+        {
+            var called = false;
+
+            var (_, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return null; }), new AnalysisChoices { HelmChart = "chart" });
+
+            Assert.False(called);
+            Assert.StartsWith("helm was not run for the chart chart: chart/files/x is a symbolic link that leads out of the repository", Assert.Single(notes), StringComparison.Ordinal);
+        }
+        finally
+        {
+            // .NET cannot delete what it cannot name.
+            Shell("rm -rf \"$1\"", other);
+        }
+    }
+
+    // Runs script with /bin/sh, with arguments as $1, $2 and so on, to make names .NET cannot write.
+    private static void Shell(string script, params string[] arguments)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardError = true, UseShellExecute = false };
+        foreach (var argument in (string[])["-c", script, "sh", .. arguments])
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, error);
+    }
+
+    [Fact]
+    public void A_chart_with_links_that_stay_in_the_repository_is_rendered()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        Write("shared/config.yaml", "level: info\n");
+        Directory.CreateDirectory(Path.Join(_root.FullName, "chart", "files"));
+        File.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "files", "config.yaml"), Path.Join("..", "..", "shared", "config.yaml"));
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "shared"), Path.Join("..", "shared"));
+        var called = false;
+
+        var (profile, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return Deployment("api", Container("api")); }), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.True(called);
+        Assert.DoesNotContain(notes, n => n.StartsWith("helm", StringComparison.Ordinal));
+        Assert.Equal("helm-template.yaml", profile.Sources.OfType<KubernetesSource>().Single().Rendered?.Name);
+    }
+
+    [Fact]
+    public void A_link_loop_inside_the_chart_ends_and_the_chart_is_rendered()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        Write("chart/templates/a/readme.txt", "a\n");
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "templates", "a", "up"), Path.Join("..", ".."));
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "templates", "a", "self"), ".");
+        var called = false;
+
+        var (_, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return Deployment("api", Container("api")); }), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.True(called);
+        Assert.DoesNotContain(notes, n => n.StartsWith("helm", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_chart_with_more_files_than_can_be_checked_is_not_rendered()
+    {
+        Write("chart/Chart.yaml", "name: demo\n");
+        Write("chart/files/a.txt", "a\n");
+        Write("chart/files/b.txt", "b\n");
+
+        var refusal = RepositoryAnalyzer.ChartLinkProblem(_root.FullName, Path.Join(_root.FullName, "chart"), maxEntries: 3);
+
+        Assert.Equal("it has more than 3 files and folders to check for symbolic links that lead out of the repository", refusal);
+        Assert.Null(RepositoryAnalyzer.ChartLinkProblem(_root.FullName, Path.Join(_root.FullName, "chart"), maxEntries: 4));
+    }
+
+    [Fact]
     public void A_kustomize_overlay_is_built_with_kubectl_first()
     {
         Write("k8s/overlay/kustomization.yaml", "resources: []\n");
