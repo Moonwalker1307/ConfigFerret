@@ -3,13 +3,17 @@ namespace ConfigFerret.Tool;
 /// <summary>Reads <c>NAME=VALUE</c> pairs from <c>--env</c>, <c>--env-file</c> and <c>--set</c> style arguments.</summary>
 internal static class EnvironmentInput
 {
-    /// <summary>Parses one <c>NAME=VALUE</c> pair. The value may be empty and may contain <c>=</c>.</summary>
-    public static (string Name, string Value) ParsePair(string text, string optionName)
+    /// <summary>
+    /// Parses one <c>NAME=VALUE</c> pair, the <paramref name="position"/>th given with <paramref name="optionName"/>.
+    /// The value may be empty and may contain <c>=</c>.
+    /// </summary>
+    public static (string Name, string Value) ParsePair(string text, string optionName, int position = 1)
     {
         var eq = text.IndexOf('=', StringComparison.Ordinal);
         if (eq <= 0)
         {
-            throw new UsageException($"{optionName} expects NAME=VALUE, got '{text}'.");
+            // Only the position: the text may be a value, given without its name or its =.
+            throw new UsageException($"{optionName} expects NAME=VALUE, and {optionName} number {position} is not.");
         }
 
         return (text[..eq].Trim(), text[(eq + 1)..]);

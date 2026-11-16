@@ -125,6 +125,20 @@ public class TraceCommandTests
         Assert.Contains("app's arguments after --", result.Error, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("=fake-hunter2")]
+    [InlineData("fake-hunter2")]
+    public async Task Leaves_the_argument_out_of_the_error_for_an_env_without_a_name(string pair)
+    {
+        var result = await new ToolRunner().RunAsync([.. HelmRelease("Db:Host"), "--env", "Db__Host=x", "--env", pair]);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.DoesNotContain("fake-hunter2", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-hunter2", result.Output, StringComparison.Ordinal);
+        Assert.Contains("--env expects NAME=VALUE", result.Error, StringComparison.Ordinal);
+        Assert.Contains("--env number 2", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Never_reads_the_tools_own_environment_into_the_trace()
     {
