@@ -1118,6 +1118,27 @@ public class AzureDevOpsResolverTests
     }
 
     [Fact]
+    public void Gives_each_warning_to_every_trace_step_it_applies_to()
+    {
+        // The tracer may ask with diagnostics it then drops, so a warning given once could be lost.
+        var groups = new AzureDevOpsVariableGroups("contoso/api", [], ["group x missing"]);
+        const string pipeline = "stages:\n- stage: Staging\n  variables:\n    Db.Name: staging-db\n- stage: Production\n  variables:\n    Db.Name: prod-db\n";
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), groups);
+        var first = new TraceDiagnostics();
+        var second = new TraceDiagnostics();
+
+        foreach (var diagnostics in new[] { first, second })
+        {
+            resolver.Resolve(EnvStep("DB_NAME", "staging-db"), diagnostics);
+        }
+
+        Assert.Equal(2, first.Warnings.Count);
+        Assert.Equal(first.Warnings, second.Warnings);
+        Assert.Contains("group x missing", second.Warnings);
+        Assert.Contains(second.Warnings, w => w.StartsWith("Azure Pipelines stage Staging, stage Production set Db.Name differently", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Passes_load_warnings_to_the_trace_once()
     {
         var groups = new AzureDevOpsVariableGroups("p", [], ["group x missing"]);

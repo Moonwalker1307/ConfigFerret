@@ -19,11 +19,11 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     private const int MaxSteps = 1_000;
 
     private readonly List<string> _fileWarnings = options.ReadConfiguredCiFiles();
-    private readonly HashSet<string> _scopeWarnings = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _jobWarnings = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string?> _onlyScoped = new(StringComparer.Ordinal);
     private readonly HashSet<string> _secretVariables = variables.Entries.Where(IsSensitive).Select(v => v.Key).ToHashSet(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<GitLabVariable>> _effective = new(StringComparer.Ordinal);
     private readonly ConditionalWeakTable<ProvenanceStep, string> _seen = new();
+    private readonly ConditionalWeakTable<TraceDiagnostics, TraceDiagnostics> _loadWarned = new();
     private Lookups _all = Lookups.Of([], _ => true);
     private Lookups _notSelf = Lookups.Of([], _ => true);
     private Dictionary<(string File, int Line, string Name), GitLabCiVariable> _defined = [];
@@ -33,7 +33,6 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     private (int Version, string? Environment)? _indexed;
     private int _room;
     private bool _cut;
-    private bool _warned;
 
     /// <summary>How many CI file entries the resolver looked at, so a test can check that the work grows with the file.</summary>
     internal long Examined { get; private set; }
@@ -50,9 +49,9 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     {
         ArgumentNullException.ThrowIfNull(layer);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        if (!_warned)
+        // Once for each diagnostics, not once in all, since the tracer may ask with diagnostics it then drops.
+        if (_loadWarned.TryAdd(diagnostics, diagnostics))
         {
-            _warned = true;
             foreach (var warning in variables.Warnings.Concat(_fileWarnings))
             {
                 diagnostics.Warn(warning);
@@ -63,7 +62,7 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         _room = MaxSteps;
         _cut = false;
         var found = Find(layer, diagnostics);
-        if (_cut && (layer.Reference is GitLabCiVariableRef cut ? cut.Name : LayerNames.Of(layer)) is { } subject && _jobWarnings.Add("\0" + subject))
+        if (_cut && (layer.Reference is GitLabCiVariableRef cut ? cut.Name : LayerNames.Of(layer)) is { } subject)
         {
             diagnostics.Warn(string.Create(CultureInfo.InvariantCulture, $"{subject} is linked or set in more GitLab CI jobs and definitions than the trace follows for one step ({MaxSteps:N0}), so not all of them were followed; the steps listed are marked inferred and sensitive."));
         }
@@ -325,11 +324,9 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
             .OrderBy(c => Rank(c.File!.Job))
             .ThenBy(c => c.Alternative && seen is not null && string.Equals(c.File!.Value, seen, StringComparison.Ordinal));
         var effective = Effective(key);
-        if (effective.Count == 0 && !_scopeWarnings.Contains(key) && variables.Find(key) is { Count: > 0 } scoped)
+        if (effective.Count == 0 && OnlyScoped(key) is { } warning)
         {
-            _scopeWarnings.Add(key);
-            var scopes = string.Join(", ", scoped.Select(v => v.EnvironmentScope).Distinct(StringComparer.Ordinal));
-            diagnostics.Warn($"GitLab variable {key} is set only for environment scopes {scopes}, and none applies to {(options.Environment is null ? "a job with no environment" : $"environment {options.Environment}")}.");
+            diagnostics.Warn(warning);
         }
 
         var chain = fromFiles.Concat(effective.Select(v => new Candidate(v, null)));
@@ -416,13 +413,23 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         return none;
     }
 
-    private void WarnJobs(string what, IEnumerable<string> jobs, TraceDiagnostics diagnostics)
+    // The warning for a key that is set only for environment scopes that do not apply, worked out once per key.
+    private string? OnlyScoped(string key)
     {
-        if (!_jobWarnings.Add(what))
+        if (!_onlyScoped.TryGetValue(key, out var warning))
         {
-            return;
+            var scoped = variables.Find(key);
+            var scopes = string.Join(", ", scoped.Select(v => v.EnvironmentScope).Distinct(StringComparer.Ordinal));
+            warning = scoped.Count == 0 ? null
+                : $"GitLab variable {key} is set only for environment scopes {scopes}, and none applies to {(options.Environment is null ? "a job with no environment" : $"environment {options.Environment}")}.";
+            _onlyScoped[key] = warning;
         }
 
+        return warning;
+    }
+
+    private void WarnJobs(string what, IEnumerable<string> jobs, TraceDiagnostics diagnostics)
+    {
         var names = jobs.Distinct(StringComparer.Ordinal).ToList();
         var list = string.Join(", ", names.Take(5)) + (names.Count > 5 ? $" and {names.Count - 5} more" : string.Empty);
         var hint = options.Environment is null ? " Set Environment to leave out the jobs for other environments." : string.Empty;
@@ -488,6 +495,7 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
 
         _links = options.FileLinks().ToLookup(l => l.Mapping.Name, StringComparer.Ordinal);
         _effective.Clear();
+        _onlyScoped.Clear();
         _maySecret = MaySecretKeys();
         _indexed = (options.Version, options.Environment);
     }
