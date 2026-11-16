@@ -604,6 +604,18 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void Counts_a_file_below_a_root_folder_as_inside_it()
+    {
+        var file = Write("app/app.env", "A=1\n");
+        var root = Path.GetPathRoot(file)!;
+
+        Assert.True(Kustomization.IsInFolder(file, root));
+        Assert.True(Kustomization.IsInFolder(file, _root));
+        Assert.False(Kustomization.IsInFolder(root, root));
+        Assert.False(Kustomization.IsInFolder(_root, _root));
+    }
+
+    [Fact]
     public void Reads_an_env_file_below_the_kustomization_folder()
     {
         Write("app/config/app.env", "A=1\n");
