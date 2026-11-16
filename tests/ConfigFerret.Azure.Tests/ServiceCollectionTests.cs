@@ -218,6 +218,26 @@ public class ServiceCollectionTests
     }
 
     [Fact]
+    public async Task Loads_App_Configuration_with_a_connection_string_alone_although_a_credential_is_registered()
+    {
+        using var provider = Services(
+            Configuration(With(("ConfigFerret:AzureAppConfiguration:Endpoint", null)), new() { ["ConfigFerret:AzureAppConfiguration:ConnectionString"] = AppConfigurationLoadTests.ConnectionString }),
+            s => s.AddSingleton<TokenCredential>(new FakeCredential()));
+        var ac = provider.GetRequiredService<AzureAppConfigurationSource>();
+        var handler = new FakeAzureHandler { Challenge = false }
+            .Respond(AppConfigurationLoadTests.KeysPath("base", "Orders%3A%2A"), AppConfigurationLoadTests.Page(null, AppConfigurationLoadTests.Kv("Orders:Db:Timeout", "30", "base")))
+            .Respond(AppConfigurationLoadTests.KeysPath("prod", "Orders%3A%2A"), AppConfigurationLoadTests.Page(null));
+        ac.ClientOptions = handler.AppConfigurationOptions();
+
+        var settings = await ac.LoadSettingsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("contoso", settings.Store);
+        Assert.Equal("30", Assert.Single(settings.FindByConfigurationKey("Db:Timeout")).Value);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.All(handler.Requests, r => Assert.StartsWith("HMAC-SHA256", r.Headers.Authorization!.ToString(), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Loads_through_dependency_injection_with_a_registered_credential()
     {
         var credential = new FakeCredential();

@@ -77,7 +77,7 @@ Console.WriteLine(tracer.Trace().Explain("Db:Password"));
 The sources sign in with a `TokenCredential` registered in the container if there is one. Otherwise they use
 `TenantId`, `ClientId` and `ClientSecret` from the section as a service principal, or, without a client secret,
 `DefaultAzureCredential` (with `ClientId` as the managed or workload identity, when set). App Configuration can take a
-`ConnectionString` with an access key instead of `Endpoint`.
+`ConnectionString` with an access key instead of `Endpoint`; it is used even when a `TokenCredential` is registered.
 
 Supply the client secret or connection string from somewhere that is not committed:
 
