@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
@@ -11,7 +10,7 @@ namespace ConfigFerret.GitOps;
 /// Links layers to what a GitOps object adds: the Helm values of an Argo CD Application or Flux HelmRelease, the
 /// ConfigMap keys an Argo CD kustomize patch sets, and the <c>${VAR}</c> placeholders a Flux Kustomization substitutes.
 /// </summary>
-internal sealed partial class GitOpsResolver : IOriginResolver
+internal sealed class GitOpsResolver : IOriginResolver
 {
     private readonly GitOpsApplication _app;
     private readonly HelmChart? _chart;
@@ -374,20 +373,55 @@ internal sealed partial class GitOpsResolver : IOriginResolver
 
     private static string Yaml(string file, int line) => string.Create(CultureInfo.InvariantCulture, $"{file}:{line}");
 
-    /// <summary>The <c>${VAR}</c> placeholders in a value, as Flux reads them. <c>$${VAR}</c> is an escaped, literal one.</summary>
-    internal static List<(string Name, string? Default)> ReadVariables(string value) =>
-        Placeholder().Matches(value)
-            .Select(m => (m.Groups["name"].Value, Default(m.Groups["op"].Value)))
-            .ToList();
+    /// <summary>
+    /// The <c>${VAR}</c> placeholders in a value, as Flux reads them: a name, then anything up to the next <c>}</c>, such as
+    /// <c>:=default</c>. <c>$${VAR}</c> is an escaped, literal one, and a bare <c>$VAR</c> is not one.
+    /// </summary>
+    /// <remarks>
+    /// The search for the closing <c>}</c> only moves forward, so a long run of <c>${A</c> with no <c>}</c> is read in
+    /// linear time: once no <c>}</c> is left, no placeholder can follow.
+    /// </remarks>
+    internal static List<(string Name, string? Default)> ReadVariables(string value)
+    {
+        var variables = new List<(string Name, string? Default)>();
+        var close = -1;
+        var start = 0;
+        while ((start = value.IndexOf("${", start, StringComparison.Ordinal)) >= 0)
+        {
+            var name = start + 2;
+            if ((start > 0 && value[start - 1] == '$') || name == value.Length || !(char.IsAsciiLetter(value[name]) || value[name] == '_'))
+            {
+                start++;
+                continue;
+            }
+
+            var end = name + 1;
+            while (end < value.Length && (char.IsAsciiLetterOrDigit(value[end]) || value[end] == '_'))
+            {
+                end++;
+            }
+
+            if (close < end)
+            {
+                close = value.IndexOf('}', end);
+                if (close < 0)
+                {
+                    break;
+                }
+            }
+
+            variables.Add((value[name..end], Default(value[end..close])));
+            start = close + 1;
+        }
+
+        return variables;
+    }
 
     private static string? Default(string op)
     {
         var trimmed = op.StartsWith(':') ? op[1..] : op;
         return trimmed.Length > 0 && trimmed[0] is '=' or '-' ? trimmed[1..] : null;
     }
-
-    [GeneratedRegex(@"(?<!\$)\$\{(?<name>[_a-zA-Z][_a-zA-Z0-9]*)(?<op>[^}]*)\}", RegexOptions.CultureInvariant)]
-    private static partial Regex Placeholder();
 
     private sealed record SubstitutionTemplate(string File, int Line, string Text, List<(string Name, string? Default)> Variables);
 }
