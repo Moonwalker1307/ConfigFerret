@@ -597,19 +597,30 @@ public sealed class ComposeProject
             return;
         }
 
-        List<(string Name, string? Value, YamlNode Node, bool Typed)> entries = node switch
+        List<(string Name, string? Value, YamlNode Node, bool Typed, string? Tag)> entries = node switch
         {
             YamlMappingNode map => [.. MergedPairs(map, 0).Values.Select(p => MapEntry(part, p.Key, p.Value, warnings))],
-            YamlSequenceNode seq => [.. seq.Children.Select(c => SplitListEntry(part, c)).Select(e => (e.Name, e.Value, e.Node, false))],
+            YamlSequenceNode seq => [.. seq.Children.Select(c => SplitListEntry(part, c)).Select(e => (e.Name, e.Value, e.Node, false, (string?)null))],
             _ when node.IsNull() => [],
             _ => throw new FormatException($"{Yaml.Location(part.File.Display, node)}: environment must be a mapping or a list."),
         };
 
-        foreach (var (name, value, at, typed) in entries.Select(e => (e.Name, e.Value, Yaml.Location(part.File.Display, e.Node), e.Typed)))
+        foreach (var (name, value, at, typed, tag) in entries.Select(e => (e.Name, e.Value, Yaml.Location(part.File.Display, e.Node), e.Typed, e.Tag)))
         {
             if (name.Length == 0)
             {
                 throw new FormatException($"{at}: an environment entry needs a name.");
+            }
+
+            // Like compose, !reset on one entry's value drops what earlier files set for it and adds nothing, and
+            // !override drops it and adds this entry.
+            if (tag is "!reset" or "!override")
+            {
+                environment.Remove(name);
+                if (tag == "!reset")
+                {
+                    continue;
+                }
             }
 
             var interpolation = new Interpolation(Lookup, at);
@@ -626,28 +637,36 @@ public sealed class ComposeProject
 
     // Like compose, a plain value that YAML reads as a number, a boolean or a date, or a value tagged !!int, !!float,
     // !!bool or !!timestamp, is passed as compose formats it. go-yaml refuses the whole file for a value that does not
-    // fit its tag; it is kept as written here, with a warning that names the tag and not the value.
-    private static (string Name, string? Value, YamlNode Node, bool Typed) MapEntry(Part part, YamlScalarNode key, YamlNode value, List<string> warnings)
+    // fit its tag; it is kept as written here, with a warning that names the tag and not the value. Tag is the value's
+    // tag, such as !reset, or null.
+    private static (string Name, string? Value, YamlNode Node, bool Typed, string? Tag) MapEntry(Part part, YamlScalarNode key, YamlNode value, List<string> warnings)
     {
+        if (!value.Tag.IsEmpty && value.Tag.Value == "!reset")
+        {
+            return (key.Value!, null, key, false, "!reset");
+        }
+
         if (value is not YamlScalarNode scalar)
         {
             throw new FormatException($"{Yaml.Location(part.File.Display, value)}: the value of {key.Value} must be a string, a number or a boolean.");
         }
 
-        if (scalar.Value is { } text && TypedTag(scalar) is (true, var tag))
+        if (scalar.Value is { } text && TypedTag(scalar) is (true, var typedTag))
         {
-            if (ComposeScalar.Format(text, tag) is { } formatted)
+            if (ComposeScalar.Format(text, typedTag) is { } formatted)
             {
-                return formatted != text ? (key.Value!, formatted, key, true) : (key.Value!, value.Scalar(), key, false);
+                if (formatted != text)
+                {
+                    return (key.Value!, formatted, key, true, null);
+                }
             }
-
-            if (tag is not null)
+            else if (typedTag is not null)
             {
-                warnings.Add($"{Yaml.Location(part.File.Display, key)}: the value of {key.Value} in service {part.Service} does not fit its tag {tag.Replace("tag:yaml.org,2002:", "!!", StringComparison.Ordinal)}, so docker compose refuses the file; it is shown as written.");
+                warnings.Add($"{Yaml.Location(part.File.Display, key)}: the value of {key.Value} in service {part.Service} does not fit its tag {typedTag.Replace("tag:yaml.org,2002:", "!!", StringComparison.Ordinal)}, so docker compose refuses the file; it is shown as written.");
             }
         }
 
-        return (key.Value!, value.Scalar(), key, false);
+        return (key.Value!, value.Scalar(), key, false, scalar.Tag.IsEmpty ? null : scalar.Tag.Value);
     }
 
     // Whether go-yaml types a scalar, and by which tag: a plain one without a tag by what it reads as, any one tagged
