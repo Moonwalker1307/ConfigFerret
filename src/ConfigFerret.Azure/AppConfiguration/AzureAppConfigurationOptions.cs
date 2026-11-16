@@ -29,7 +29,8 @@ public sealed class AzureAppConfigurationOptions
 
     /// <summary>
     /// Key prefixes the app trims, like the .NET provider's <c>TrimKeyPrefix</c>, so <c>Orders:Db:Timeout</c> is traced as
-    /// <c>Db:Timeout</c>. The first prefix that matches is trimmed.
+    /// <c>Db:Timeout</c>. As in the provider, case is ignored and one prefix is trimmed: of two nested prefixes, such as
+    /// <c>Shop:</c> and <c>Shop:Db:</c>, the longer one, whatever their order here.
     /// </summary>
     public IList<string> TrimKeyPrefixes { get; } = [];
 
