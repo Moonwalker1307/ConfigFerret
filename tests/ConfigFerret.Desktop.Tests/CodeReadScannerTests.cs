@@ -1558,6 +1558,47 @@ public class CodeReadScannerTests
     }
 
     [Fact]
+    public void An_expression_bodied_property_or_accessors_with_attributes_count_as_properties()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<A>(cfg.GetSection("A"));
+            services.Configure<B>(cfg.GetSection("B"));
+            services.Configure<C>(cfg.GetSection("C"));
+            """,
+            """
+            class A { public Inner In => _in; }
+            class B { public int Port { [Attr] get; set; } }
+            class C { public Known Known => _known; public override string ToString() => "c"; }
+            class Known { public string Host { get; set; } = ""; }
+            """);
+
+        Assert.True(scanner.Check("A:In:Host").IsRead);
+        Assert.True(scanner.Check("B:Port").IsRead);
+        Assert.True(scanner.Check("C:Known:Host").IsRead);
+        Assert.Equal(new ReadVerdict(false, "C is bound to Known, which has no property Color"), scanner.Check("C:Known:Color"));
+        Assert.Equal(new ReadVerdict(false, "C is bound to C, which has no property Other"), scanner.Check("C:Other"));
+    }
+
+    [Fact]
+    public void A_nested_type_whose_body_starts_with_an_attribute_leaves_the_class_closed()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<AppOptions>(cfg.GetSection("App"));
+            services.Configure<ModeOptions>(cfg.GetSection("Mode"));
+            """,
+            """
+            class AppOptions { public SmtpOptions Smtp { get; set; } = new(); public class SmtpOptions { [Required] public string Host { get; set; } = ""; } }
+            class ModeOptions { public Mode Kind { get; set; } public enum Mode { [Description("x")] A } }
+            """);
+
+        Assert.True(scanner.Check("App:Smtp:Host").IsRead);
+        Assert.Equal(new ReadVerdict(false, "App is bound to AppOptions, which has no property Typo"), scanner.Check("App:Typo"));
+        Assert.Equal(new ReadVerdict(false, "Mode is bound to ModeOptions, which has no property Typo"), scanner.Check("Mode:Typo"));
+    }
+
+    [Fact]
     public void A_configuration_key_name_counts_after_any_number_of_attributes()
     {
         var scanner = Scan(

@@ -310,8 +310,9 @@ public sealed partial class CodeReadScanner
         // A class without the property doesn't make the key dead while a longer prefix is read or bound on its own, such
         // as Messaging:Kafka under Messaging. When none is, the reason names the longest prefix bound. The prefixes are
         // walked one segment at a time down the sections the code reads. Each bound one is followed at most MaxBoundDepth
-        // segments down, and a key under more than MaxBoundDepth bound sections counts as read, so the cost is bounded by
-        // the key's length plus MaxBoundDepth squared lookups.
+        // segments down, each segment looked up in the class and at most MaxBaseClasses bases, and a key under more than
+        // MaxBoundDepth bound sections counts as read. So the cost is bounded by the key's length plus MaxBoundDepth
+        // times MaxBoundDepth times MaxBaseClasses + 1 lookups, about 70,000.
         (int End, string Type, string Name)? dead = null;
         var node = _tree;
         var end = -1;
@@ -964,7 +965,8 @@ public sealed partial class CodeReadScanner
                 next++;
             }
 
-            if ((next == matched.Count || matched[next].Start > p.Index) && sweep.At(p.Index) is { } body)
+            // A nested type whose body starts with an attribute, as in public class Smtp { [Required] ..., is no property.
+            if ((next == matched.Count || matched[next].Start > p.Index) && !TypeKeyword().IsMatch(p.Value) && sweep.At(p.Index) is { } body)
             {
                 body.Shape.Open = true;
             }
@@ -1618,13 +1620,19 @@ public sealed partial class CodeReadScanner
     [GeneratedRegex(@"^\s*(?>(?:\[[^\]]*\]\s*)*)(?<type>(?>[\w.<>\[\],?]+)(?:(?> +)(?>[\w.<>\[\],?]+))*?)\s+(?<name>[A-Za-z_]\w*)\s*(?:=.*)?$", RegexOptions.CultureInvariant | RegexOptions.Singleline, MatchTimeoutMilliseconds)]
     private static partial Regex Parameter();
 
-    // At most ten attributes, five modifiers and eleven words of type, each taken whole.
-    [GeneratedRegex(@"(?:\[\s*ConfigurationKeyName\s*\(\s*""(?<key>[^""]+)""\s*\)\s*\]\s*)?(?>(?:\[[^\[\]]*\]\s*){0,10})\bpublic\s+(?>(?:(?:required|virtual|override|new|sealed)\s+){0,5})(?<type>(?>[\w.<>\[\],?]+)(?:(?> +)(?>[\w.<>\[\],?]+)){0,10}?)\s+(?<name>[A-Za-z_]\w*)\s*\{\s*(?:get|init|set)", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    // At most ten attributes, five modifiers and eleven words of type, each taken whole. An expression-bodied property,
+    // as in Inner In => _in, counts too: the binder binds below it into the object it returns.
+    [GeneratedRegex(@"(?:\[\s*ConfigurationKeyName\s*\(\s*""(?<key>[^""]+)""\s*\)\s*\]\s*)?(?>(?:\[[^\[\]]*\]\s*){0,10})\bpublic\s+(?>(?:(?:required|virtual|override|new|sealed)\s+){0,5})(?<type>(?>[\w.<>\[\],?]+)(?:(?> +)(?>[\w.<>\[\],?]+)){0,10}?)\s+(?<name>[A-Za-z_]\w*)\s*(?:\{\s*(?:get|init|set)|=>)", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex Property();
 
-    // Where a settable public property starts, whatever its type: at most 400 characters before its accessors.
-    [GeneratedRegex(@"\bpublic\b[^;{}=]{0,400}\{\s*(?:get|init|set)\b", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    // Where a public property starts, whatever its type: at most 400 characters before its accessors, which may start
+    // with an attribute, or before the => of an expression-bodied one. A method, with its parameter list, doesn't count.
+    [GeneratedRegex(@"\bpublic\b(?:[^;{}=]{0,400}\{\s*(?:\[|(?:get|init|set)\b)|[^;{}=()]{0,400}=>)", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex PropertyStart();
+
+    // Runs on one PropertyStart match only, at most 400 characters and the accessors.
+    [GeneratedRegex(@"\b(?:class|struct|record|interface|enum)\b", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex TypeKeyword();
 
     // ConfigurationKeyName("x"), or one with a name the scan can't read, in which case key doesn't match.
     [GeneratedRegex(@"\bConfigurationKeyName(?:Attribute)?\s*\(\s*(?:""(?<key>[^""\r\n]+)""\s*\))?", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
