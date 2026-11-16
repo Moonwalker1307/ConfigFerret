@@ -44,7 +44,8 @@ A workflow `env:` entry such as `Db__Host: ${{ vars.DB_HOST }}` counts as an env
 `Db:Host` gets the variable's value and links back to it. Only entries that look like app settings are used: names with
 `__`, connection strings, or names of keys in `appsettings`. Kubernetes manifests and environment variable sources win
 over workflow entries. GitHub doesn't return secret values, so a setting a workflow takes from a secret shows
-`(GitHub secret)`.
+`(GitHub secret)`. In the same way a variable whose value the manifests don't hold, such as one from a Secret outside
+the repository, shows `(value not in the manifests)` and links to the Secret, ConfigMap or field it comes from.
 
 You can also open a local folder instead of a GitHub repository. Hide the repository sidebar with the button at its top,
 or Ctrl+B (Cmd+B on macOS), to give the results the whole window.
