@@ -215,6 +215,56 @@ public class TraceRunnerTests
         Assert.DoesNotContain(result.Secrets, s => s.Key == "Db:Password" && s.Rating == SecretRating.Exposed);
     }
 
+    [Theory]
+    [InlineData(true, false, "db.repo.internal")]
+    [InlineData(false, true, "db.env.internal")]
+    [InlineData(true, true, "db.env.internal")]
+    public async Task Sets_a_workflow_setting_to_the_github_variable_that_wins(bool organization, bool environment, string expected)
+    {
+        using var repo = new TempFolder();
+        repo.Write("src/Api/appsettings.json", """{ "Db": { "Host": "localhost" } }""");
+        repo.Write(".github/workflows/deploy.yml", """
+            jobs:
+              deploy:
+                environment: production
+                env:
+                  Db__Host: ${{ vars.DB_HOST }}
+                steps:
+                  - run: echo deploying
+            """);
+        var profile = new Profile { Name = "api", Mode = TraceMode.App };
+        profile.Sources.Add(new AppSettingsSource { Name = "app", Folder = repo.Full("src/Api"), UseUserSecrets = false });
+        var github = new GitHubSource
+        {
+            Name = "github",
+            Repository = "contoso/api",
+            Environment = environment ? "production" : string.Empty,
+            Workflows = [repo.Full(".github/workflows/deploy.yml")],
+        };
+        profile.Sources.Add(github);
+        var store = new InMemoryCredentialStore();
+        store.Write(github.CredentialAccount, Token);
+        const string api = "/repos/contoso/api";
+        var handler = new FakeHttpHandler()
+            .Respond($"{api}/actions/organization-variables?per_page=30&page=1", organization
+                ? """{"total_count":1,"variables":[{"name":"DB_HOST","value":"db.org.internal"}]}"""
+                : """{"total_count":0,"variables":[]}""")
+            .Respond($"{api}/actions/organization-secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""")
+            .Respond($"{api}/actions/variables?per_page=30&page=1", """{"total_count":1,"variables":[{"name":"DB_HOST","value":"db.repo.internal"}]}""")
+            .Respond($"{api}/actions/secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""")
+            .Respond($"{api}/environments/production/variables?per_page=30&page=1", """{"total_count":1,"variables":[{"name":"DB_HOST","value":"db.env.internal"}]}""")
+            .Respond($"{api}/environments/production/secrets?per_page=100&page=1", """{"total_count":0,"secrets":[]}""");
+
+        var result = await new TraceRunner(store, httpClientFactory: handler.Client).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.All(result.Sources, s => Assert.Null(s.Problem));
+        var host = result.Report.Find("Db:Host")!;
+        Assert.Equal(expected, host.Value);
+        var winner = Assert.Single(host.Steps.SelectMany(s => s.Origins), o => o.IsEffective);
+        Assert.Equal(expected, winner.Value);
+        Assert.DoesNotContain("differs", winner.Note, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Github_variables_a_workflow_uses_outside_app_settings_are_not_listed_as_unused()
     {

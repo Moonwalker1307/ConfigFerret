@@ -636,8 +636,9 @@ public sealed class TraceRunner
                 }
                 else
                 {
+                    // Lowest priority first, so the last one is the value the workflow passes.
                     var found = variables.Find(mapping.VariableName, GitHubVariableKind.Variable);
-                    environment[mapping.Name] = found.Count > 0 ? found[0].Value ?? string.Empty : string.Empty;
+                    environment[mapping.Name] = found.Count > 0 ? found[^1].Value ?? string.Empty : string.Empty;
                 }
             }
         }
