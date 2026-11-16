@@ -734,6 +734,56 @@ public class ComposeProjectTests
         Assert.DoesNotContain("fake-db-password", ConfigTracer.ForCompose(project, "app").Trace().ToText(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Bounds_the_trees_of_values_that_each_take_many_others()
+    {
+        using var folder = new TempFolder();
+        folder.Write(".env", "API_TOKEN=fake-api-token\nHOLDER=${API_TOKEN}\n" + DotEnvLayersTests.FanOutDotEnv(8, 6, "TOP"));
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    environment:\n      APP: ${TOP}\n");
+
+        var project = ComposeProject.Load(compose);
+
+        var app = Service(project).Layers("APP")[0];
+        Assert.InRange(DotEnvLayersTests.CountSteps(app), 2, OriginBudget.MaxStepsPerTree + 1);
+        Assert.Equal(ComposeSteps.CutNote, app.Origins[0].Note?.Split("; ")[^1]);
+        Assert.True(app.IsSensitive);
+        Assert.DoesNotContain("fake-api-token", ConfigTracer.ForCompose(project, "app").Trace().ToText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bounds_the_origin_steps_of_a_whole_project()
+    {
+        using var folder = new TempFolder();
+        folder.Write("wide.envfile", "HOLDER=\nAPI_TOKEN=fake-api-token\n" + DotEnvLayersTests.FanOutDotEnv(8, 50, "WIDE"));
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    env_file: wide.envfile\n    environment:\n      LAST: ${API_TOKEN}\n");
+
+        var service = Service(ComposeProject.Load(compose));
+
+        var layers = service.Environment.Keys.SelectMany(service.Layers).ToList();
+        Assert.InRange(layers.Sum(DotEnvLayersTests.CountSteps), layers.Count, layers.Count + 250_000);
+        Assert.Contains(layers, s => s.Note?.EndsWith(ComposeSteps.CutNote, StringComparison.Ordinal) == true);
+        var last = service.Layers("LAST")[0];
+        Assert.Empty(last.Origins);
+        Assert.True(last.IsSensitive);
+    }
+
+    [Fact]
+    public void Bounds_the_origin_steps_of_a_whole_load_across_includes()
+    {
+        using var folder = new TempFolder();
+        folder.Write("wide.envfile", "HOLDER=\n" + DotEnvLayersTests.FanOutDotEnv(8, 50, "WIDE"));
+        for (var i = 1; i <= 3; i++)
+        {
+            folder.Write($"a{i}.yaml", $"services:\n  s{i}:\n    env_file: wide.envfile\n");
+        }
+
+        var project = ComposeProject.Load(folder.Write("compose.yaml", "include: [a1.yaml, a2.yaml, a3.yaml]\n"));
+
+        var layers = project.Services.SelectMany(s => s.Environment.Keys.SelectMany(s.Layers)).ToList();
+        Assert.Equal(["s1", "s2", "s3"], project.ServiceNames);
+        Assert.InRange(layers.Sum(DotEnvLayersTests.CountSteps), layers.Count, layers.Count + 250_000);
+    }
+
     [Theory]
     [InlineData("services:\n  app:\n    env_file: ${DB_PASSWORD}.envfile\n")]
     [InlineData("services:\n  app:\n    extends: ${API_KEY:-x}\n")]

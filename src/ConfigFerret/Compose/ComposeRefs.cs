@@ -34,6 +34,9 @@ internal static class ComposeSteps
     // whether a step is sensitive still follows every hop.
     private const int MaxReferenceDepth = 8;
 
+    /// <summary>The note on a step whose <c>${VAR}</c> references were not all followed. Its value is still marked secret when one it did not follow leads to a secret.</summary>
+    public const string CutNote = "more ${VAR} references are not followed, to keep the trace small";
+
     private static readonly Regex Sensitive = new(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     // Whether each dotenv entry leads to a secret, worked out once: an entry and its references never change.
@@ -115,9 +118,31 @@ internal static class ComposeSteps
     }
 
     /// <summary>A step for a dotenv entry, with its <c>${VAR}</c> references as origins.</summary>
-    public static ProvenanceStep Entry(DotEnvEntry entry, string source, string? note, int depth = 0)
+    /// <param name="entry">The entry.</param>
+    /// <param name="source">The step's source.</param>
+    /// <param name="note">The step's note.</param>
+    /// <param name="budget">How many origin steps may be built, shared with other steps; null for this step alone.</param>
+    public static ProvenanceStep Entry(DotEnvEntry entry, string source, string? note, OriginBudget? budget = null)
     {
-        var origins = References(entry.References, entry.IsInherited ? null : $"{entry.File} line {entry.Line.ToString(CultureInfo.InvariantCulture)}", depth);
+        budget ??= new OriginBudget();
+        budget.StartTree();
+        return Entry(entry, source, note, 0, budget);
+    }
+
+    /// <summary>One step per <c>${VAR}</c> reference: where the variable's value came from.</summary>
+    /// <param name="references">The references.</param>
+    /// <param name="usedAt">Where the reference is written, for the note, or null for a bare key that takes the variable itself.</param>
+    /// <param name="budget">How many origin steps may be built, shared with other steps.</param>
+    /// <param name="cut">True when the budget ran out before every reference had a step.</param>
+    public static List<ProvenanceStep> References(IReadOnlyList<DotEnvReference> references, string? usedAt, OriginBudget budget, out bool cut)
+    {
+        budget.StartTree();
+        return References(references, usedAt, 0, budget, out cut);
+    }
+
+    private static ProvenanceStep Entry(DotEnvEntry entry, string source, string? note, int depth, OriginBudget budget)
+    {
+        var origins = References(entry.References, entry.IsInherited ? null : $"{entry.File} line {entry.Line.ToString(CultureInfo.InvariantCulture)}", depth, budget, out var cut);
         return new ProvenanceStep
         {
             Kind = LayerKind.DotEnv,
@@ -125,32 +150,43 @@ internal static class ComposeSteps
             Location = string.Create(CultureInfo.InvariantCulture, $"line {entry.Line}"),
             Value = entry.Value,
             IsSensitive = IsSensitive(entry),
-            Note = Join(note, entry.IsInherited ? "a bare key, so the value comes from the shell" : null),
+            Note = Join(Join(note, entry.IsInherited ? "a bare key, so the value comes from the shell" : null), cut ? CutNote : null),
             Reference = new DotEnvEntryRef(entry.Path ?? entry.File, entry.Name),
             Origins = origins,
         };
     }
 
-    /// <summary>One step per <c>${VAR}</c> reference: where the variable's value came from.</summary>
-    /// <param name="references">The references.</param>
-    /// <param name="usedAt">Where the reference is written, for the note, or null for a bare key that takes the variable itself.</param>
-    /// <param name="depth">How many references deep this is.</param>
-    public static List<ProvenanceStep> References(IReadOnlyList<DotEnvReference> references, string? usedAt, int depth)
+    // Builds the steps depth first, one taken from the budget each, so a file whose values each take several others
+    // can't make the tree grow by that factor at every level.
+    private static List<ProvenanceStep> References(IReadOnlyList<DotEnvReference> references, string? usedAt, int depth, OriginBudget budget, out bool cut)
     {
+        cut = false;
         if (depth >= MaxReferenceDepth)
         {
             return [];
         }
 
-        return references.Select(r => Reference(r, usedAt, depth)).ToList();
+        var steps = new List<ProvenanceStep>(references.Count);
+        foreach (var reference in references)
+        {
+            if (!budget.TryTake())
+            {
+                cut = true;
+                break;
+            }
+
+            steps.Add(Reference(reference, usedAt, depth, budget));
+        }
+
+        return steps;
     }
 
-    private static ProvenanceStep Reference(DotEnvReference reference, string? usedAt, int depth)
+    private static ProvenanceStep Reference(DotEnvReference reference, string? usedAt, int depth, OriginBudget budget)
     {
         var how = usedAt is null ? null : $"interpolated as ${{{reference.Name}}} in {usedAt}";
         if (reference.From is { } entry)
         {
-            return Entry(entry, entry.File, how, depth + 1) with { IsEffective = true };
+            return Entry(entry, entry.File, how, depth + 1, budget) with { IsEffective = true };
         }
 
         return new ProvenanceStep
@@ -166,4 +202,33 @@ internal static class ComposeSteps
     }
 
     public static string? Join(string? a, string? b) => a is null ? b : b is null ? a : a + "; " + b;
+}
+
+/// <summary>
+/// How many origin steps for <c>${VAR}</c> references may still be built: at most <see cref="MaxStepsPerTree"/> under
+/// one step, and at most a total that the steps sharing the budget draw from.
+/// </summary>
+internal sealed class OriginBudget(int total = int.MaxValue)
+{
+    /// <summary>The most origin steps built under one step, like a trace's bound per setting.</summary>
+    public const int MaxStepsPerTree = 1_000;
+
+    private int _total = total;
+    private int _tree;
+
+    /// <summary>Starts the tree under a new step.</summary>
+    public void StartTree() => _tree = MaxStepsPerTree;
+
+    /// <summary>Takes one step, or returns false when the tree or the total is used up.</summary>
+    public bool TryTake()
+    {
+        if (_tree == 0 || _total == 0)
+        {
+            return false;
+        }
+
+        _tree--;
+        _total--;
+        return true;
+    }
 }

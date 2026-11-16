@@ -644,6 +644,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   chain that goes on beyond `MaxDepth`, gets a warning, and its values are hidden as `***` unless
   `RevealSensitiveValues` is on, since the part not traced may hold a secret. Once the trace-wide limit is reached,
   every setting after it is cut off. A `MaxDepth` of 0 follows nothing upstream and hides nothing for it.
+- Dotenv and compose `${VAR}` references are followed 8 deep. At most 1,000 steps are built under one value (under
+  all the lines that set one variable, for `WithDotEnv`), and 250,000 for one load of a compose project, included
+  projects and all. The step whose references were not all followed says so in its note, and its value is still
+  hidden when a reference not followed leads to a variable named like a secret.
 - Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
   further upstream from them.
