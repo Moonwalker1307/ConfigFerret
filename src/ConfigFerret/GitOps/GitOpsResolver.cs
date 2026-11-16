@@ -268,6 +268,22 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
 
         if (!Directory.Exists(folder))
         {
+            // Directory.Exists is false too when a parent folder may not be searched. Then the folder may hold manifests
+            // that name any variable, so it counts as not read rather than as missing.
+            try
+            {
+                _ = File.GetAttributes(folder);
+            }
+            catch (IOException ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // It is missing, which the warning below says.
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                NotRead($"the folder {Relative(root, folder)}", ex);
+                return;
+            }
+
             _warnings.Add($"The folder {folder} that {_app.DisplayName} deploys does not exist.");
             return;
         }

@@ -649,7 +649,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   in an Ingress host, since Flux substitutes it there too; a `${VAR}` in a comment or in a file the build leaves out
   counts as well. The variable stays in `Entries`. A file or folder under `spec.path` that cannot be read is a
   warning, and then `FindUnused` lists no variable of that Kustomization, since the part not read may name any of them.
-  The same holds when no repository checkout is passed and when `spec.path` is outside it. Links under `spec.path`
+  The same holds when no repository checkout is passed, when `spec.path` is outside it, and when a folder above
+  `spec.path` may not be searched, so it cannot be told whether `spec.path` exists. Links under `spec.path`
   are not followed. A link counts as read only when its text leads to a YAML file or a folder the scan reads; when one
   leads anywhere else, out of the folder, nowhere, or to a file the scan skips, or when there are more than 1,000
   links, one warning says so, and again no variable is listed as unused. Nothing is read through a link. The scan reads

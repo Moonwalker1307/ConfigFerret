@@ -1159,6 +1159,41 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public void A_path_under_a_folder_it_may_not_search_is_not_read_rather_than_missing()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
+        Write("apps/prod/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        var locked = Path.Join(_root, "apps");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanRead(locked), "The process may read any folder, for example as root.");
+            var app = GitOpsApplication.Parse("""
+                apiVersion: kustomize.toolkit.fluxcd.io/v1
+                kind: Kustomization
+                metadata: {name: prod}
+                spec:
+                  path: ./apps/prod
+                  postBuild:
+                    substitute: {V: x, UNUSED: y}
+                """, "prod.yaml");
+
+            var resolver = new GitOpsResolver(app, new GitOpsOptions { RepositoryRoot = _root });
+
+            Assert.StartsWith(
+                "Could not read the folder apps/prod, so no variable of Flux Kustomization prod is listed as unused: ",
+                Assert.Single(resolver.Warnings),
+                StringComparison.Ordinal);
+            Assert.Empty(new LoadedConfigSource("flux", resolver, resolver.Entries()).FindUnused(new ProvenanceReport([], [])));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
     public void A_backslash_in_a_file_name_under_the_folder_stays_a_backslash()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "A backslash is the separator on Windows.");
