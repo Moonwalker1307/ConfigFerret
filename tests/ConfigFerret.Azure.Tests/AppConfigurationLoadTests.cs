@@ -440,6 +440,54 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Leads_only_the_keys_the_provider_writes_under_a_flag_to_that_flag()
+    {
+        static string Flag(string id, bool enabled, bool filters) =>
+            "{\"id\":\"" + id + "\",\"enabled\":" + (enabled ? "true" : "false") + ",\"conditions\":{\"client_filters\":["
+            + (filters ? """{"name":"Microsoft.Percentage"}""" : string.Empty) + "]}}";
+        var handler = Handler()
+            .Respond(KeysPath(), Page(null))
+            .Respond(FlagsPath(), Page(
+                null,
+                Kv(".appconfig.featureflag/X", Flag("X", true, true), contentType: FeatureFlagType),
+                Kv(".appconfig.featureflag/X:EnabledFor", Flag("X:EnabledFor", true, true), contentType: FeatureFlagType),
+                Kv(".appconfig.featureflag/Beta", Flag("Beta", true, true), contentType: FeatureFlagType),
+                Kv(".appconfig.featureflag/Off", Flag("Off", false, true), contentType: FeatureFlagType),
+                Kv(".appconfig.featureflag/On", Flag("On", true, false), contentType: FeatureFlagType)));
+        var settings = await Load(handler, o => o.TrimKeyPrefixes.Add("FeatureManagement:"));
+        var resolver = new AzureAppConfigurationResolver(settings, new());
+        string[] Flags(string key) =>
+            [.. resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", key, "v"), new TraceDiagnostics()).Select(s => s.Source)];
+        static string Named(string name) => $"Azure App Configuration feature flag {name} (contoso)";
+
+        Assert.Equal([Named("X:EnabledFor")], Flags("X:EnabledFor:EnabledFor:0:Name"));
+        Assert.Equal([Named("Beta")], Flags("Beta:EnabledFor:0:Name"));
+        Assert.Equal([Named("Beta")], Flags("Beta:EnabledFor:12:Parameters:Value"));
+        Assert.Equal([Named("Beta")], Flags("Beta:requirementtype"));
+        Assert.Empty(Flags("Beta:EnabledFor"));
+        Assert.Empty(Flags("Beta:EnabledFor:x"));
+        Assert.Empty(Flags("Beta:EnabledFor:0"));
+        Assert.Empty(Flags("Beta:EnabledFor:0:Other"));
+        Assert.Empty(Flags("Beta:EnabledFor:0:Name:More"));
+        Assert.Empty(Flags("Beta:RequirementType:x"));
+
+        // Only a flag that is on and has a filter has such keys.
+        Assert.Empty(Flags("Off:EnabledFor:0:Name"));
+        Assert.Empty(Flags("On:EnabledFor:0:Name"));
+        Assert.Empty(Flags("On:RequirementType"));
+
+        // A prefix without its colon leaves flag keys that start with one.
+        handler = Handler()
+            .Respond(KeysPath(), Page(null))
+            .Respond(FlagsPath(), Page(null, Kv(".appconfig.featureflag/Beta", Flag("Beta", true, true), contentType: FeatureFlagType)));
+        settings = await Load(handler, o => o.TrimKeyPrefixes.Add("FeatureManagement"));
+        resolver = new AzureAppConfigurationResolver(settings, new());
+        Assert.Equal([Named("Beta")], Flags(":Beta:EnabledFor:0:Name"));
+        Assert.Empty(Flags(":"));
+        Assert.Empty(Flags(string.Empty));
+    }
+
+    [Fact]
     public async Task Names_a_feature_flag_by_its_stored_key_whatever_prefix_is_trimmed()
     {
         var handler = Handler()
