@@ -83,7 +83,7 @@ public sealed class AzureKeyVaultSecrets
             Warnings);
 
     /// <summary>Reads the secrets, signing in with <c>DefaultAzureCredential</c> or the service principal in <paramref name="options"/>.</summary>
-    /// <exception cref="RequestFailedException">Key Vault refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="RequestFailedException">Key Vault could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static Task<AzureKeyVaultSecrets> LoadAsync(AzureKeyVaultOptions options, CancellationToken cancellationToken = default)
     {
@@ -92,7 +92,7 @@ public sealed class AzureKeyVaultSecrets
     }
 
     /// <summary>Reads the secrets, signing in with <paramref name="credential"/>.</summary>
-    /// <exception cref="RequestFailedException">Key Vault refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="RequestFailedException">Key Vault could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static Task<AzureKeyVaultSecrets> LoadAsync(AzureKeyVaultOptions options, TokenCredential credential, CancellationToken cancellationToken = default) =>
         LoadAsync(options, credential, new SecretClientOptions(), cancellationToken);
@@ -101,7 +101,7 @@ public sealed class AzureKeyVaultSecrets
     /// Reads the secrets with your own client options, for example a proxy, retry settings, or a
     /// <c>Transport</c> (<c>new HttpClientTransport(httpClient)</c>) that answers from a test handler.
     /// </summary>
-    /// <exception cref="RequestFailedException">Key Vault refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="RequestFailedException">Key Vault could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static async Task<AzureKeyVaultSecrets> LoadAsync(AzureKeyVaultOptions options, TokenCredential credential, SecretClientOptions clientOptions, CancellationToken cancellationToken = default)
     {
@@ -140,21 +140,31 @@ public sealed class AzureKeyVaultSecrets
                     break;
                 }
             }
+
+            // Inside the try, so that a vault that stops answering ends the load at the first value instead of running
+            // the retries again for every secret.
+            if (options.IncludeValues)
+            {
+                for (var i = 0; i < secrets.Count; i++)
+                {
+                    if (secrets[i].Enabled)
+                    {
+                        secrets[i] = await ReadValueAsync(client, secrets[i], warnings, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
         }
         catch (Exception ex) when (IsUnreadable(ex))
         {
             throw Unreadable(vault, ex);
         }
-
-        if (options.IncludeValues)
+        catch (AggregateException ex) when (IsUnreachable(ex, cancellationToken))
         {
-            for (var i = 0; i < secrets.Count; i++)
-            {
-                if (secrets[i].Enabled)
-                {
-                    secrets[i] = await ReadValueAsync(client, secrets[i], warnings, cancellationToken).ConfigureAwait(false);
-                }
-            }
+            throw Unreachable($"Azure Key Vault {vault}", ex);
+        }
+        catch (AggregateException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            throw Cancelled(ex, cancellationToken);
         }
 
         return new AzureKeyVaultSecrets(vault, secrets, warnings);
@@ -231,6 +241,21 @@ public sealed class AzureKeyVaultSecrets
 
     private static RequestFailedException Unreadable(string vault, Exception inner) =>
         new($"Azure Key Vault {vault} sent a response that could not be read.", inner);
+
+    // What Azure.Core throws once its retries run out when every try failed in the transport (status 0), for example
+    // because the host name is mistyped or there is no network, or timed out because the host never answered. A
+    // cancellation is a timeout only while the caller's token is not cancelled, the same rule Azure.Core uses.
+    internal static bool IsUnreachable(AggregateException ex, CancellationToken cancellationToken) =>
+        ex.InnerExceptions.Count > 0 && ex.InnerExceptions.All(e =>
+            e is RequestFailedException { Status: 0 } || (e is OperationCanceledException && !cancellationToken.IsCancellationRequested));
+
+    // Names the service only: the inner messages come from the HTTP stack and are not repeated here.
+    internal static RequestFailedException Unreachable(string service, AggregateException inner) =>
+        new($"Could not reach {service}.", inner);
+
+    // The caller cancelled after a try had failed, so Azure.Core put the cancellation in an AggregateException.
+    internal static OperationCanceledException Cancelled(AggregateException inner, CancellationToken cancellationToken) =>
+        new("The operation was canceled.", inner, cancellationToken);
 
     /// <summary>Matches names exactly or by a prefix ending in <c>*</c>, case-insensitively. Empty matches everything.</summary>
     private sealed class NameFilter(IEnumerable<string> patterns)

@@ -34,6 +34,10 @@ internal sealed class FakeAzureHandler : HttpMessageHandler
 
     private readonly Dictionary<string, Queue<(HttpStatusCode Status, string Body, Dictionary<string, string>? Headers)>> _responses = new(StringComparer.Ordinal);
 
+    private Func<string, bool> _unreachable = _ => false;
+
+    private Func<Exception> _failure = () => new HttpRequestException("Name or service not known (fake-unreachable-host:443)");
+
     public List<HttpRequestMessage> Requests { get; } = [];
 
     public bool Challenge { get; set; } = true;
@@ -50,19 +54,28 @@ internal sealed class FakeAzureHandler : HttpMessageHandler
         return this;
     }
 
-    public SecretClientOptions KeyVaultOptions()
+    /// <summary>
+    /// Fails requests for the path and query (without api-version), or for every path when null, the way the transport
+    /// fails when the host cannot be reached: with <paramref name="failure"/>, or a name resolution error by default.
+    /// </summary>
+    public FakeAzureHandler Unreachable(string? pathAndQuery = null, Func<Exception>? failure = null)
     {
-        var options = new SecretClientOptions { Transport = new HttpClientTransport(new HttpClient(this, disposeHandler: false)) };
-        options.Retry.MaxRetries = 0;
-        return options;
+        _unreachable = key => pathAndQuery is null || key == pathAndQuery;
+        if (failure is not null)
+        {
+            _failure = failure;
+        }
+
+        return this;
     }
 
-    public ConfigurationClientOptions AppConfigurationOptions()
-    {
-        var options = new ConfigurationClientOptions { Transport = new HttpClientTransport(new HttpClient(this, disposeHandler: false)) };
-        options.Retry.MaxRetries = 0;
-        return options;
-    }
+    /// <summary>Client options without retries, or with the SDK's default retry count and tiny delays.</summary>
+    public SecretClientOptions KeyVaultOptions(bool defaultRetries = false) =>
+        WithRetries(new SecretClientOptions { Transport = new HttpClientTransport(new HttpClient(this, disposeHandler: false)) }, defaultRetries);
+
+    /// <summary>Client options without retries, or with the SDK's default retry count and tiny delays.</summary>
+    public ConfigurationClientOptions AppConfigurationOptions(bool defaultRetries = false) =>
+        WithRetries(new ConfigurationClientOptions { Transport = new HttpClientTransport(new HttpClient(this, disposeHandler: false)) }, defaultRetries);
 
     /// <summary>The path and query of every request that carried a token, without api-version.</summary>
     public List<string> Paths => Requests.Where(r => r.Headers.Authorization is not null).Select(r => Key(r.RequestUri!)).ToList();
@@ -76,6 +89,11 @@ internal sealed class FakeAzureHandler : HttpMessageHandler
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(request);
+        if (_unreachable(Key(request.RequestUri!)))
+        {
+            throw _failure();
+        }
+
         if (Challenge && request.Headers.Authorization is null && request.Headers.All(h => h.Key != "x-ms-content-sha256"))
         {
             var challenge = new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent(string.Empty) };
@@ -110,5 +128,20 @@ internal sealed class FakeAzureHandler : HttpMessageHandler
         }
 
         base.Dispose(disposing);
+    }
+
+    private static T WithRetries<T>(T options, bool defaultRetries) where T : ClientOptions
+    {
+        if (defaultRetries)
+        {
+            options.Retry.Delay = TimeSpan.FromMilliseconds(1);
+            options.Retry.MaxDelay = TimeSpan.FromMilliseconds(1);
+        }
+        else
+        {
+            options.Retry.MaxRetries = 0;
+        }
+
+        return options;
     }
 }

@@ -82,13 +82,13 @@ public sealed class AzureAppConfigurationSettings
             Warnings);
 
     /// <summary>Reads the key-values, signing in with the connection string, the service principal or <c>DefaultAzureCredential</c>.</summary>
-    /// <exception cref="RequestFailedException">App Configuration refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="RequestFailedException">App Configuration could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static Task<AzureAppConfigurationSettings> LoadAsync(AzureAppConfigurationOptions options, CancellationToken cancellationToken = default) =>
         LoadAsync(options, null, new ConfigurationClientOptions(), cancellationToken);
 
     /// <summary>Reads the key-values from <see cref="AzureAppConfigurationOptions.Endpoint"/>, signing in with <paramref name="credential"/>.</summary>
-    /// <exception cref="RequestFailedException">App Configuration refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="RequestFailedException">App Configuration could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static Task<AzureAppConfigurationSettings> LoadAsync(AzureAppConfigurationOptions options, TokenCredential credential, CancellationToken cancellationToken = default)
     {
@@ -101,7 +101,7 @@ public sealed class AzureAppConfigurationSettings
     /// (<c>new HttpClientTransport(httpClient)</c>) that answers from a test handler. With a null
     /// <paramref name="credential"/>, signs in with the connection string, the service principal or <c>DefaultAzureCredential</c>.
     /// </summary>
-    /// <exception cref="RequestFailedException">App Configuration refused the request or sent a response that could not be read.</exception>
+    /// <exception cref="RequestFailedException">App Configuration could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static async Task<AzureAppConfigurationSettings> LoadAsync(
         AzureAppConfigurationOptions options,
@@ -226,6 +226,14 @@ public sealed class AzureAppConfigurationSettings
         catch (Exception ex) when (AzureKeyVaultSecrets.IsUnreadable(ex))
         {
             throw new RequestFailedException($"Azure App Configuration {store} sent a response that could not be read.", ex);
+        }
+        catch (AggregateException ex) when (AzureKeyVaultSecrets.IsUnreachable(ex, cancellationToken))
+        {
+            throw AzureKeyVaultSecrets.Unreachable($"Azure App Configuration {store}", ex);
+        }
+        catch (AggregateException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            throw AzureKeyVaultSecrets.Cancelled(ex, cancellationToken);
         }
     }
 
