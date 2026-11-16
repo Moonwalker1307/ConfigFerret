@@ -109,7 +109,8 @@ When the host starts, the options are checked, and startup fails with a message 
   whose configuration key matches the secret id the way .NET reads environment variables: `Db__Timeout` and
   `Db:Timeout` both match secret `Db__Timeout`. `Prefix` is stripped from secret ids first (`StripSecretPrefix`), and
   `StripPrefixes` from layer names. Set `Separator` to `--` for secrets named like Azure Key Vault ones (`Db--Timeout`).
-  A configuration provider that reads Secret Manager directly is matched by its configuration key.
+  A configuration provider that reads Secret Manager directly is matched by its configuration key, when its name holds
+  `Secret Manager`, `SecretManager` (as a type name does), `Google` or `GCP`.
 
 A `property` is read from a JSON object value, by name or as a dotted path (`db.password`), when values are read.
 When a reference pins a version, the note says whether that version is disabled or destroyed, or older than the latest

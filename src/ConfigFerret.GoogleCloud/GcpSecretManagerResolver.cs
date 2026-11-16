@@ -10,7 +10,7 @@ namespace ConfigFerret.GoogleCloud;
 /// </summary>
 internal sealed class GcpSecretManagerResolver : IOriginResolver
 {
-    private static readonly string[] ProviderHints = ["Secret Manager", "Google", "GCP"];
+    private static readonly string[] ProviderHints = ["Secret Manager", "SecretManager", "Google", "GCP"];
 
     private readonly GcpSecrets _secrets;
     private readonly GcpSecretManagerTraceOptions _options;
