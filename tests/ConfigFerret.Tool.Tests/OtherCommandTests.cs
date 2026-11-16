@@ -339,6 +339,30 @@ public class InputErrorTests
     }
 
     [Fact]
+    public async Task Refuses_a_file_in_a_manifest_folder_over_the_size_limit()
+    {
+        var folder = Directory.CreateTempSubdirectory("configferret-manifests-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(folder.FullName, "pod.yaml"), "apiVersion: v1\nkind: Pod\nmetadata: {name: api}\nspec:\n  containers: [{name: api}]\n", TestContext.Current.CancellationToken);
+            using (var file = File.Create(Path.Join(folder.FullName, "big.yaml")))
+            {
+                file.SetLength(InputReader.MaxFoundFileBytes + 1);
+            }
+
+            var result = await new ToolRunner().RunAsync("container", "-m", folder.FullName, "-w", "api");
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("big.yaml", result.Error, StringComparison.Ordinal);
+            Assert.Contains("64 MB", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            folder.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Prints_help()
     {
         var result = await new ToolRunner().RunAsync("--help");

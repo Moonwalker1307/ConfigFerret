@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using ConfigFerret.Kustomize;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.Tool;
@@ -45,6 +46,8 @@ internal static partial class AppConfiguration
         var foundAny = false;
         foreach (var file in new[] { baseFile, environmentFile }.Distinct(StringComparer.Ordinal).Where(File.Exists))
         {
+            RequireInFolder(file, directory);
+            InputReader.RequireFoundFileSize(file);
             builder.AddJsonFile(file, optional: false);
             foundAny = true;
         }
@@ -172,6 +175,16 @@ internal static partial class AppConfiguration
             {
                 yield return nested;
             }
+        }
+    }
+
+    // A settings file the tool finds by itself may be a link, as in a mounted ConfigMap, but only to a file in the app
+    // folder: the checkout may come from someone else, and a link is a few bytes in Git.
+    private static void RequireInFolder(string file, string directory)
+    {
+        if (!Kustomization.IsInFolder(file, directory))
+        {
+            throw new UsageException($"{file} links to a file outside the app folder. Pass it with --config to read it anyway.");
         }
     }
 

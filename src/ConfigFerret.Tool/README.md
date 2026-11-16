@@ -85,6 +85,10 @@ or as a JSON array. Repeat it to combine several runs.
 4. Environment variables, through one `AddEnvironmentVariables` call per `--env-prefix` (one without a prefix by default).
 5. The app's command line: everything after `--`.
 
+The tool reads at most 64 MB from a file it finds by itself: the two `appsettings` files and the files in a
+`--manifests` folder. An `appsettings` file may be a symbolic link, but only to a file in the app folder; pass a
+file outside it with `--config`. Files you name on the command line are read as they are.
+
 The app's environment variables are what the container gets from `--manifests`, then `--env-file`, then `--env`,
 each winning over the one before. The tool's own environment is never read into a trace, so your shell's variables
 and tokens can't leak in. A variable Kubernetes fills in at run time, such as a `fieldRef`, has no value in the
