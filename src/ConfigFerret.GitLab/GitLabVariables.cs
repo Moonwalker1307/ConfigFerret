@@ -128,7 +128,7 @@ public sealed class GitLabVariables
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Project);
         var baseAddress = JsonApi.RequireSafeBaseAddress(options.BaseAddress, options.AllowUnencryptedHttp, nameof(options.BaseAddress));
-        var loader = new Loader(httpClient, new Uri(baseAddress, "api/v4/"), options.Token, options.IncludeMaskedValues);
+        var loader = new Loader(httpClient, new Uri(baseAddress, "api/v4/"), Token(options), options.IncludeMaskedValues);
         var entries = new List<GitLabVariable>();
         var warnings = new List<string>();
 
@@ -151,6 +151,16 @@ public sealed class GitLabVariables
 
         await loader.ReadAsync(entries, string.Create(CultureInfo.InvariantCulture, $"projects/{project.Id}/variables"), GitLabVariableLevel.Project, project.Path, cancellationToken).ConfigureAwait(false);
         return new GitLabVariables(entries, warnings);
+    }
+
+    // A token read from a file or a secret store often ends in a line break, and white space alone is no token. A
+    // control character inside cannot go in a header, and the message says so without the token.
+    private static string? Token(GitLabOptions options)
+    {
+        var token = string.IsNullOrWhiteSpace(options.Token) ? null : options.Token.Trim();
+        return token is not null && token.Any(char.IsControl)
+            ? throw new ArgumentException("Token holds a line break or another control character, so it cannot be sent in a request header.", nameof(options))
+            : token;
     }
 
     internal static string Describe(GitLabVariableLevel level) => level switch

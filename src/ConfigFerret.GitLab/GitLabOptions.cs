@@ -17,7 +17,8 @@ public sealed class GitLabOptions
     /// (GitLab shows CI/CD variables only to maintainers). A job's <c>CI_JOB_TOKEN</c> cannot read variables. Read it from
     /// user secrets, an environment variable (<c>GITLAB_TOKEN</c>) or a key vault; never hard-code it or put it in a
     /// committed appsettings file. ConfigFerret sends it only in the <c>PRIVATE-TOKEN</c> header and never writes it to a
-    /// report or exception.
+    /// report or exception. White space around it, such as the line break at the end of a token read from a file, is
+    /// left out, and a token of white space alone counts as none.
     /// </summary>
     public string? Token { get; set; }
 
