@@ -807,8 +807,33 @@ public sealed class GitOpsResolverTests : IDisposable
     [InlineData("${1A}")]
     [InlineData("${}")]
     [InlineData("{A}")]
+    [InlineData("$$${A}")]
+    [InlineData("${A")]
+    [InlineData("${A ${B")]
     public void Ignores_what_flux_does_not_substitute(string value)
     {
         Assert.Empty(GitOpsResolver.ReadVariables(value));
+    }
+
+    [Fact]
+    public void Reads_every_placeholder_from_where_the_last_one_ended()
+    {
+        Assert.Equal([("A", null), ("B", "x")], GitOpsResolver.ReadVariables("${A}${B:=x}"));
+        Assert.Equal([("A", "${B")], GitOpsResolver.ReadVariables("${A:-${B} ${C"));
+        Assert.Equal([("B", null)], GitOpsResolver.ReadVariables("${1 ${B}"));
+        Assert.Equal([("A", null), ("C", null)], GitOpsResolver.ReadVariables("${A}}$${B}${C}"));
+    }
+
+    [Theory(Timeout = 10_000)]
+    [InlineData("")]
+    [InlineData("}")]
+    public async Task Reads_a_long_run_of_unclosed_placeholders_in_linear_time(string end)
+    {
+        // 2 MB of ${A, where each ${ could start a placeholder that ends at the next }.
+        var value = string.Concat(Enumerable.Repeat("${A", 700_000)) + end;
+
+        var variables = await Task.Run(() => GitOpsResolver.ReadVariables(value), TestContext.Current.CancellationToken);
+
+        Assert.Equal(end.Length, variables.Count);
     }
 }
