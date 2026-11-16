@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using ConfigFerret.Tests.Shared;
 
 namespace ConfigFerret.Octopus.Tests;
@@ -408,6 +411,26 @@ public class OctopusVariablesTests
         await Assert.ThrowsAsync<ArgumentException>(() => OctopusVariables.LoadAsync(options, TestContext.Current.CancellationToken));
     }
 
+    // The real client, not a fake handler: HttpClient removes only the Authorization header when it follows a redirect,
+    // so X-Octopus-ApiKey would reach the other address.
+    [Fact]
+    public async Task Does_not_follow_a_redirect_with_the_API_key_through_its_own_client()
+    {
+        await using var other = new LoopbackServer(_ => "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        await using var octopus = new LoopbackServer(_ => $"HTTP/1.1 302 Found\r\nLocation: {other.Address}api/spaces/all\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        var options = Options();
+        options.ServerUri = octopus.Address;
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => OctopusVariables.LoadAsync(options, TestContext.Current.CancellationToken));
+
+        // A followed redirect would be answered, and so recorded, before the load could end.
+        Assert.Empty(other.Requests);
+        var request = Assert.Single(octopus.Requests);
+        Assert.Contains($"X-Octopus-ApiKey: {ApiKey}", request, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.Found, ex.StatusCode);
+        Assert.Contains("Redirects are not followed", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Names_Octopus_in_errors()
     {
@@ -417,5 +440,71 @@ public class OctopusVariablesTests
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => OctopusVariables.LoadAsync(Options(), client, TestContext.Current.CancellationToken));
 
         Assert.StartsWith("Octopus returned 500", ex.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A minimal HTTP server on a free loopback port that records each request head and sends a fixed answer.</summary>
+    private sealed class LoopbackServer : IAsyncDisposable
+    {
+        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Func<string, string> _respond;
+        private readonly Task _serving;
+
+        public LoopbackServer(Func<string, string> respond)
+        {
+            _respond = respond;
+            _listener.Start();
+            _serving = ServeAsync();
+        }
+
+        public Uri Address => new($"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/");
+
+        public ConcurrentQueue<string> Requests { get; } = new();
+
+        public async ValueTask DisposeAsync()
+        {
+            await _stop.CancelAsync();
+            _listener.Stop();
+            await _serving;
+            _listener.Dispose();
+            _stop.Dispose();
+        }
+
+        private async Task ServeAsync()
+        {
+            try
+            {
+                while (true)
+                {
+                    using var client = await _listener.AcceptTcpClientAsync(_stop.Token);
+                    var stream = client.GetStream();
+                    var head = await ReadHeadAsync(stream, _stop.Token);
+                    Requests.Enqueue(head);
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(_respond(head)), _stop.Token);
+                }
+            }
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+            {
+            }
+        }
+
+        // A GET has no body, so the request ends with the blank line after the headers.
+        private static async Task<string> ReadHeadAsync(NetworkStream stream, CancellationToken cancellationToken)
+        {
+            var head = new StringBuilder();
+            var buffer = new byte[4096];
+            while (!head.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+            {
+                var read = await stream.ReadAsync(buffer, cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                head.Append(Encoding.ASCII.GetString(buffer, 0, read));
+            }
+
+            return head.ToString();
+        }
     }
 }
