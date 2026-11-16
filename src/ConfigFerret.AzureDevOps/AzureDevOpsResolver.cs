@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using ConfigFerret.Shared;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.AzureDevOps;
@@ -17,7 +18,7 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
     private const int MaxCandidates = 32;
 
     // The most pipeline entries one trace step looks at: the tracer keeps no more upstream steps than this per setting.
-    private const int MaxSteps = 1_000;
+    private const int MaxSteps = TraceLimits.MaxStepsPerSetting;
 
     private readonly List<string> _pipelineWarnings = options.ReadConfiguredPipelines();
     private readonly HashSet<string> _secretVariables = groups.Variables.Where(IsSensitive).Select(v => v.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

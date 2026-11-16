@@ -43,6 +43,8 @@
     <InternalsVisibleTo Include="ConfigFerret.Desktop" />
     <InternalsVisibleTo Include="ConfigFerret.Web" />
     <InternalsVisibleTo Include="ConfigFerret.Tool" />
+    <!-- The bounds the packages share with the tracer; each package compiles its own copy. -->
+    <Compile Include="../Shared/TraceLimits.cs" Link="Shared/TraceLimits.cs" />
   </ItemGroup>
 
 </Project>
