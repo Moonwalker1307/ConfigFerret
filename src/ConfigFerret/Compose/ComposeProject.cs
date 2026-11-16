@@ -709,7 +709,7 @@ public sealed class ComposeProject
             {
                 Location = definition.At,
                 Value = found?.Value,
-                IsSensitive = step.IsSensitive || ComposeSteps.IsSensitiveName(definition.EnvironmentVariable),
+                IsSensitive = step.IsSensitive || ComposeSteps.IsSensitiveName(definition.EnvironmentVariable) || (found?.Entry is { } entry && ComposeSteps.IsSensitive(entry)),
                 Note = step.Note + $"; from the variable {definition.EnvironmentVariable}" + (found is null ? ", which is not set" : string.Empty),
             };
         }
@@ -734,7 +734,7 @@ public sealed class ComposeProject
         var expanded = InterpolatedContent(text, at, warnings);
         if (expanded.IsSensitive)
         {
-            throw new FormatException($"{at}: a path or a name may not refer to a variable named like a secret ({string.Join(", ", expanded.References.Where(r => ComposeSteps.IsSensitiveName(r.Name)).Select(r => r.Name))}).");
+            throw new FormatException($"{at}: a path or a name may not refer to a variable named like a secret ({string.Join(", ", expanded.References.Where(ComposeSteps.IsSensitive).Select(r => r.Name))}).");
         }
 
         return expanded.Value;
@@ -745,7 +745,7 @@ public sealed class ComposeProject
         var interpolation = new Interpolation(Lookup, at);
         var value = interpolation.Expand(text);
         warnings.AddRange(interpolation.Unset.Select(v => UnsetWarning(at, v)));
-        var sensitive = interpolation.References.Any(r => ComposeSteps.IsSensitiveName(r.Name) || (r.From is { } entry && ComposeSteps.IsSensitiveName(entry.Name)));
+        var sensitive = interpolation.References.Any(ComposeSteps.IsSensitive);
         return (value, sensitive, interpolation.References);
     }
 
