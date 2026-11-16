@@ -122,6 +122,52 @@ public class ContainerTraceTests
     }
 
     [Fact]
+    public void A_key_that_is_secret_by_name_never_shows_its_helm_values_in_a_note()
+    {
+        // Neither key comes from a Secret: only their names say they are secret, and both differ from the chart's values.
+        var chart = HelmChart.FromText(
+            [("values.yaml", "db:\n  host: orders-db\n  password: fake-values-pw\n")],
+            [
+                ("templates/configmap.yaml", "data:\n  ConnectionStrings__Default: \"Host={{ .Values.db.host }};Password={{ .Values.db.password }}\"\n"),
+                ("templates/deployment.yaml", "env:\n  - name: Db__Password\n    value: {{ .Values.db.password | quote }}\n"),
+            ]);
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: { name: api-config }
+            data:
+              ConnectionStrings__Default: "Host=orders-db;Password=fake-rendered-pw"
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: { name: api-7d9f }
+            spec:
+              containers:
+                - name: api
+                  envFrom:
+                    - configMapRef: { name: api-config }
+                  env:
+                    - name: Db__Password
+                      value: fake-deployed-pw
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).WithHelm(chart).Trace();
+        var output = report.ToText() + report.ToJson() + string.Join("\n", report.Warnings);
+
+        Assert.Equal(["ConnectionStrings__Default", "Db__Password"], report.Settings.Select(s => s.Key));
+        Assert.All(report.Settings, s => Assert.True(s.IsSensitive));
+        foreach (var secret in new[] { "fake-values-pw", "fake-rendered-pw", "fake-deployed-pw", "orders-db" })
+        {
+            Assert.DoesNotContain(secret, output, StringComparison.Ordinal);
+        }
+
+        Assert.All(report.Settings, s => Assert.EndsWith(
+            "; the values differ from the manifest, so the release may be out of date or the template transforms it",
+            Assert.Single(Assert.Single(s.Steps).Origins).Note,
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Warns_when_an_envFrom_source_was_not_loaded()
     {
         var manifests = KubernetesManifests.Parse("""

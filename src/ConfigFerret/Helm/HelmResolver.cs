@@ -20,15 +20,15 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
 
         return layer.Reference switch
         {
-            ConfigMapKeyRef cm => ResolveTemplate(cm.Key, layer.Value, layer.IsSensitive),
-            SecretKeyRef s => ResolveTemplate(s.Key, layer.Value, secret: true),
-            WorkloadEnvRef env => ResolveTemplate(env.Name, layer.Value, layer.IsSensitive),
+            ConfigMapKeyRef cm => ResolveTemplate(cm.Key, layer.Value),
+            SecretKeyRef s => ResolveTemplate(s.Key, layer.Value),
+            WorkloadEnvRef env => ResolveTemplate(env.Name, layer.Value),
             HelmValueRef v => ResolveValues(v.Path),
             _ => [],
         };
     }
 
-    private List<ProvenanceStep> ResolveTemplate(string name, string? renderedValue, bool secret)
+    private List<ProvenanceStep> ResolveTemplate(string name, string? renderedValue)
     {
         var uses = chart.FindUses(name);
         if (uses.Count == 0)
@@ -44,10 +44,9 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
         var sensitive = chart.IsSensitivePath(use.ValuesPath);
         if (renderedValue is not null && helmValue is not null && !string.Equals(helmValue, renderedValue, StringComparison.Ordinal))
         {
-            // Notes are not redacted, so a secret's values are never written into one.
-            note += secret || sensitive
-                ? "; the values differ from the manifest, so the release may be out of date or the template transforms it"
-                : $"; the values give '{helmValue}' but the manifest has '{renderedValue}', so the release may be out of date or the template transforms it";
+            // Notes are not redacted, and whether the key is secret by its name is only decided after the resolvers ran,
+            // so neither value is ever written into one. Both are the values of this step and the one it resolves.
+            note += "; the values differ from the manifest, so the release may be out of date or the template transforms it";
         }
 
         return
