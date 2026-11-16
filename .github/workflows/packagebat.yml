@@ -22,6 +22,7 @@ jobs:
   blast-radius:
     name: PackageBat
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write # to post the report as a PR comment
