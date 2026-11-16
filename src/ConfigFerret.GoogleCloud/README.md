@@ -145,8 +145,9 @@ A secret whose versions or value cannot be read is kept with a trace warning ins
 - A secret whose id breaks Secret Manager's rules (1 to 255 letters, digits, `_` and `-`), or whose project is neither a
   project number nor a project id (6 to 30 lower-case letters, digits and hyphens, or the old `example.com:my-project`
   form), or whose location is not lower-case letters, digits and dashes, and a version whose id is not a number, are
-  left out of what the server sent. A warning gives how many, never their names.
+  left out of what the server sent. One warning for the listing gives how many secrets, never their names.
 - Secrets with no enabled version are skipped when versions are read, unless `IncludeDisabled` is on.
 - Only the latest enabled version's value is read. A reference pinned to another version is linked, but its value is
   not compared. Binary payloads are not compared either.
-- Loading stops after `MaxSecrets` secrets (default 1000), with a warning.
+- Loading stops after `MaxSecrets` secrets (default 1000), with a warning. Secrets that are left out as described above
+  count too.

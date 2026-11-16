@@ -101,6 +101,58 @@ public class GcpSecretsTests
     }
 
     [Fact]
+    public async Task Gives_one_warning_for_the_secrets_left_out_of_all_pages()
+    {
+        const string Left = "Left out 4 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.";
+        var handler = new FakeHttpHandler()
+            .Respond(List, $$"""{"secrets":[{{Secret("bad id")}},{{Secret("A")}}],"nextPageToken":"t"}""")
+            .Respond(List + "&pageToken=t", $$"""{"secrets":[{{Secret("bad id")}},{"name":"projects/Bad/secrets/B"}],"nextPageToken":"u"}""")
+            .Respond(List + "&pageToken=u", $$"""{"secrets":[{{Secret("C")}},{"name":"projects/123/locations/Bad/secrets/D"}]}""");
+
+        var gcp = await Load(handler);
+
+        Assert.Equal(["A", "C"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal(Left, Assert.Single(gcp.Warnings));
+    }
+
+    [Fact]
+    public async Task Counts_the_secrets_left_out_toward_MaxSecrets()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond(List, $$"""{"secrets":[{{Secret("bad id")}},{{Secret("A")}},{{Secret("B")}}],"nextPageToken":"more"}""");
+
+        var gcp = await Load(handler, o => o.MaxSecrets = 2);
+
+        Assert.Equal(["A"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal(
+            [
+                "Stopped after 2 Google Cloud secrets (MaxSecrets); the rest were not read.",
+                "Left out 1 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.",
+            ],
+            gcp.Warnings);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Stops_at_MaxSecrets_when_every_secret_is_left_out()
+    {
+        var bad = string.Join(",", Enumerable.Range(0, 5).Select(i => Secret("bad id")));
+        var handler = new FakeHttpHandler()
+            .Respond(List, $$"""{"secrets":[{{bad}}],"nextPageToken":"more"}""");
+
+        var gcp = await Load(handler, o => o.MaxSecrets = 2);
+
+        Assert.Empty(gcp.Secrets);
+        Assert.Equal(
+            [
+                "Stopped after 2 Google Cloud secrets (MaxSecrets); the rest were not read.",
+                "Left out 2 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.",
+            ],
+            gcp.Warnings);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task Stops_when_the_server_repeats_a_page_token()
     {
         var handler = new FakeHttpHandler()
