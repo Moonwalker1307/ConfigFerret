@@ -74,6 +74,8 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Empty(resolver.Resolve(ConfigMapKey("billing-config", "Other"), diagnostics));
         Assert.Empty(resolver.Resolve(ConfigMapKey("prod-billing-config", "Currency"), diagnostics));
         Assert.Empty(resolver.Resolve(ConfigMapKey("billing-config-short", "Currency"), diagnostics));
+        Assert.Empty(resolver.Resolve(ConfigMapKey("billing-config-production", "Currency"), diagnostics));
+        Assert.Empty(resolver.Resolve(ConfigMapKey("prod-billing-config-eu-monitoring", "Currency"), diagnostics));
         Assert.Empty(resolver.Resolve(ConfigMapKey("x-billing-config", "Currency"), diagnostics));
         Assert.Empty(resolver.Resolve(SecretKey("billing-config", "Currency"), diagnostics));
         Assert.Empty(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.Helm, Source = "x", Reference = new GitOpsPatchRef("billing", "billing-config", "Currency") }, diagnostics));
