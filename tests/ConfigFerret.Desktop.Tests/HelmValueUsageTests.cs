@@ -584,6 +584,71 @@ public class HelmValueUsageTests
     }
 
     [Fact]
+    public void A_large_chart_gives_what_comparing_every_value_with_every_reference_gives()
+    {
+        // Short names from a few parts, some with dots, so values and references are often the same, above or below each
+        // other. Values also use parts no reference has.
+        string[] parts = ["a", "b", "ab", "a-b", "x_1", "c.d", "global", "sub", "e", "f.g", "h", "i"];
+        var random = new Random(7);
+        string Path(int most, int kinds) => string.Join('.', Enumerable.Range(0, random.Next(1, most + 1)).Select(_ => parts[random.Next(kinds)]));
+        var references = Enumerable.Range(0, 1_500).Select(_ => Path(5, 6)).ToList();
+        var values = Enumerable.Range(0, 3_000).Select(i => (Path(4, parts.Length), i % 3 == 0 ? "values-prod.yaml" : "values.yaml")).ToList();
+        string[] subcharts = ["sub"];
+        var template = string.Concat(references.Select(r => $"{{{{ .Values.{r} }}}}\n"));
+
+        var expected = new List<(string, string)>();
+        foreach (var (path, file) in values)
+        {
+            var read = path.Split('.')[0] is "global" or "sub" || references.Any(r =>
+                r == path || path.StartsWith(r + ".", StringComparison.Ordinal) || r.StartsWith(path + ".", StringComparison.Ordinal));
+            if (!read && !expected.Contains((path, file)))
+            {
+                expected.Add((path, file));
+            }
+        }
+
+        var dead = HelmValueUsage.FindDead([template], values, subcharts).Select(d => (d.Path, d.File)).ToList();
+
+        Assert.InRange(expected.Count, 300, 2_000);
+        Assert.InRange(values.Count - values.Distinct().Count(), 100, 2_000);
+        Assert.Equal(expected, dead);
+    }
+
+    [Fact]
+    public void Checks_each_value_without_building_a_string_for_every_reference()
+    {
+        var template = string.Concat(Enumerable.Range(0, 1_500).Select(i => $"{{{{ .Values.read{i}.x }}}}\n"));
+        var values = Enumerable.Range(0, 3_000).Select(i => ($"unread{i}.x", "values.yaml")).ToList();
+        HelmValueUsage.FindDead([template], values.Take(1), []);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var dead = HelmValueUsage.FindDead([template], values, []);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(3_000, dead.Count);
+        // Two strings for each of the 4.5 million pairs of a value and a reference come to hundreds of megabytes.
+        Assert.True(allocated < 32 * 1024 * 1024, $"Allocated {allocated / 1024 / 1024} MB.");
+    }
+
+    [Fact]
+    public void Checks_each_value_without_building_a_string_for_every_path_above_a_reference()
+    {
+        // 2 MB of references, each 125 parts below a name of its own, and one value as long as a path may be.
+        var below = string.Concat(Enumerable.Repeat(".a", 125));
+        var template = string.Concat(Enumerable.Range(0, 7_700).Select(i => $"{{{{ .Values.k{i:00000}{below} }}}}\n"));
+        (string, string)[] values = [(new string('v', 256), "values.yaml")];
+        HelmValueUsage.FindDead(["{{ .Values.x }}"], values, []);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var dead = HelmValueUsage.FindDead([template], values, []);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Single(dead);
+        // The template and its references are about 12 MB; a string for every path above each reference is about 300 MB.
+        Assert.True(allocated < 48 * 1024 * 1024, $"Allocated {allocated / 1024 / 1024} MB.");
+    }
+
+    [Fact]
     public void Malformed_values_YAML_is_a_YamlException_whatever_YamlDotNet_throws()
     {
         // Found by fuzzing: this made YamlDotNet's scanner throw InvalidOperationException.
