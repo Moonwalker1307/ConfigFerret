@@ -781,11 +781,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void Does_not_follow_links_in_the_folder_it_deploys()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
-
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
         var outside = Directory.CreateTempSubdirectory("cf-gitops-outside-").FullName;
         try
         {
@@ -806,6 +802,9 @@ public sealed class GitOpsResolverTests : IDisposable
 
             Assert.Equal("cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
             Assert.Empty(resolver.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+            Assert.Equal(
+                ["Flux Kustomization root: links under . are not followed, and one leads to a file or folder the scan does not read, so no variable is listed as unused."],
+                resolver.Warnings);
         }
         finally
         {
@@ -914,6 +913,72 @@ public sealed class GitOpsResolverTests : IDisposable
         """, "out.yaml");
 
     [Fact]
+    public void Links_out_of_the_folder_count_as_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        Write("outside/extra.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: o}\ndata: {K: '${UNUSED}'}\n");
+        File.CreateSymbolicLink(Path.Join(_root, "apps", "extra.yaml"), Path.Join(_root, "outside", "extra.yaml"));
+        Directory.CreateSymbolicLink(Path.Join(_root, "apps", "more"), Path.Join(_root, "outside"));
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(["Flux Kustomization apps: links under apps are not followed, and one leads to a file or folder the scan does not read, so no variable is listed as unused."], resolver.Warnings);
+        Assert.Empty(resolver.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact]
+    public void Links_to_files_and_folders_the_scan_reads_count_as_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        Write("apps/sub/x.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\ndata: {K: '${V}'}\n");
+        File.CreateSymbolicLink(Path.Join(_root, "apps", "alias.yaml"), "cm.yaml");
+        Directory.CreateSymbolicLink(Path.Join(_root, "apps", "loop"), ".");
+        Directory.CreateSymbolicLink(Path.Join(_root, "apps", "same"), "sub");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Empty(resolver.Warnings);
+        Assert.Equal(["UNUSED"], new LoadedConfigSource("flux", resolver, resolver.Entries()).FindUnused(new ProvenanceReport([], [])).Select(e => e.Name));
+    }
+
+    [Fact]
+    public void A_link_in_the_folder_to_a_file_the_scan_skips_counts_as_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+
+        // Flux reads cm.txt as linked.yaml, but the scan reads only .yaml and .yml files.
+        Write("apps/cm.txt", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: t}\ndata: {K: '${UNUSED}'}\n");
+        File.CreateSymbolicLink(Path.Join(_root, "apps", "linked.yaml"), "cm.txt");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(["Flux Kustomization apps: links under apps are not followed, and one leads to a file or folder the scan does not read, so no variable is listed as unused."], resolver.Warnings);
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact]
+    public void More_links_than_it_checks_count_as_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        for (var i = 0; i < 1001; i++)
+        {
+            File.CreateSymbolicLink(Path.Join(_root, "apps", $"alias{i}.yaml"), "cm.yaml");
+        }
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(
+            ["Flux Kustomization apps: links under apps are not followed, and there are more than 1000 to check, so no variable is listed as unused."],
+            resolver.Warnings);
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact]
     public void A_dangling_link_in_the_folder_it_deploys_is_skipped_like_any_link()
     {
         if (OperatingSystem.IsWindows())
@@ -926,8 +991,9 @@ public sealed class GitOpsResolverTests : IDisposable
 
         var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x}"), new GitOpsOptions { RepositoryRoot = _root });
 
+        // Its target is never looked at, so it counts as a link to a part not read.
         Assert.Equal("apps/cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
-        Assert.Empty(resolver.Warnings);
+        Assert.Equal(["Flux Kustomization apps: links under apps are not followed, and one leads to a file or folder the scan does not read, so no variable is listed as unused."], resolver.Warnings);
     }
 
     [Fact]

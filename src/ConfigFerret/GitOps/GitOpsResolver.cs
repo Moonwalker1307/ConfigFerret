@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Enumeration;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
@@ -263,13 +264,15 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             return;
         }
 
-        // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files. Each
+        // Links are not followed: a link to a parent folder never ends, and one out of the folder reads other files. Each
         // folder is read on its own, so one that cannot be read is a warning and the others are still read. The scan
         // stops at the limits, since the folder may hold anything.
         var limits = options.ScanLimits;
         var top = Relative(root, folder);
-        var enumeration = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
+        var enumeration = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.None };
         var files = new List<string>();
+        var links = new List<string>();
+        var visited = new List<string>();
         var entries = 0;
         var tooDeep = false;
         var folders = new Stack<(string Path, int Depth)>([(folder, 0)]);
@@ -278,34 +281,39 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             var (current, depth) = folders.Pop();
             try
             {
-                foreach (var file in Directory.EnumerateFiles(current, "*", enumeration))
+                var found = new FileSystemEnumerable<(string Path, bool IsFolder, bool IsLink)>(
+                    current,
+                    (ref FileSystemEntry e) => (e.ToFullPath(), e.IsDirectory, (e.Attributes & FileAttributes.ReparsePoint) != 0),
+                    enumeration);
+                foreach (var (path, isFolder, isReparsePoint) in found)
                 {
                     if (++entries > limits.Entries)
                     {
                         break;
                     }
 
-                    if (file.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                    if (isReparsePoint && IsLink(path))
                     {
-                        files.Add(file);
+                        // A file or folder link, or a Windows junction. Other reparse points, such as deduplicated
+                        // files, are read as files and folders.
+                        links.Add(path);
                     }
-                }
-
-                foreach (var sub in Directory.EnumerateDirectories(current, "*", enumeration))
-                {
-                    if (++entries > limits.Entries)
+                    else if (!isFolder)
                     {
-                        break;
+                        if (path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                        {
+                            files.Add(path);
+                        }
                     }
-
-                    if (depth < limits.Depth)
+                    else if (depth < limits.Depth)
                     {
-                        folders.Push((sub, depth + 1));
+                        folders.Push((path, depth + 1));
+                        visited.Add(path);
                     }
                     else if (!tooDeep)
                     {
                         tooDeep = true;
-                        Limit(string.Create(CultureInfo.InvariantCulture, $"{Relative(root, sub)} is more than {limits.Depth} folders below {top}, so it was not read"));
+                        Limit(string.Create(CultureInfo.InvariantCulture, $"{Relative(root, path)} is more than {limits.Depth} folders below {top}, so it was not read"));
                     }
                 }
             }
@@ -318,6 +326,26 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             {
                 Limit(string.Create(CultureInfo.InvariantCulture, $"{top} holds more than {limits.Entries} files and folders, so the rest were not read"));
                 break;
+            }
+        }
+
+        // A link whose text leads to a file or folder the walk read is read there under its own name. Any other link,
+        // one out of the folder, a dangling one or one to a file the walk skips, leads to a part not read. One is
+        // enough to say so, and the checks stop there or past MaxLinkChecks, since each may follow a chain of links.
+        if (links.Count > MaxLinkChecks)
+        {
+            _partlyRead = true;
+            _warnings.Add(string.Create(CultureInfo.InvariantCulture, $"{_app.DisplayName}: links under {top} are not followed, and there are more than {MaxLinkChecks} to check, so no variable is listed as unused."));
+        }
+        else if (links.Count > 0)
+        {
+            var read = new HashSet<string>(files, PathComparer) { folder };
+            read.UnionWith(visited);
+            var realFolder = RealPathOf(folder);
+            if (realFolder is null || links.Exists(l => !LeadsToRead(l, folder, realFolder, read)))
+            {
+                _partlyRead = true;
+                _warnings.Add($"{_app.DisplayName}: links under {top} are not followed, and one leads to a file or folder the scan does not read, so no variable is listed as unused.");
             }
         }
 
@@ -361,6 +389,61 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     {
         _partlyRead = true;
         _warnings.Add($"{_app.DisplayName}: {what} and no variable is listed as unused.");
+    }
+
+    // More links than this are not checked one by one: each check may follow a chain of up to 40 links.
+    private const int MaxLinkChecks = 1000;
+
+    // As Kustomization.IsInFolder compares paths.
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    // LinkTarget reads the entry's own link text and does not follow it.
+    private static bool IsLink(string path)
+    {
+        try
+        {
+            return new FileInfo(path).LinkTarget is not null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true; // not read either way, and a link is counted
+        }
+    }
+
+    private static string? RealPathOf(string folder)
+    {
+        try
+        {
+            return Kustomization.RealPath(folder, anyRoot: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="link"/> leads to a file or folder in <paramref name="read"/>. The text of each link is
+    /// judged before anything it names is looked at, so a link to another root, such as a share, is never opened, and
+    /// only then is the target placed in the walk.
+    /// </summary>
+    private static bool LeadsToRead(string link, string folder, string realFolder, HashSet<string> read)
+    {
+        try
+        {
+            if (!Kustomization.IsInFolder(link, folder, orFolder: true)
+                || Kustomization.RealPath(link, alsoRoot: Path.GetPathRoot(realFolder)) is not { } target)
+            {
+                return false;
+            }
+
+            var relative = Path.GetRelativePath(realFolder, target);
+            return read.Contains(relative == "." ? folder : Path.Join(folder, relative));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
