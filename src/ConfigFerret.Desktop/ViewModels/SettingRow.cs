@@ -35,7 +35,7 @@ public sealed class SettingRow
     /// <param name="what">What it is, for example "GitHub Actions secret", shown as the details caption.</param>
     /// <param name="name">The variable name or values path.</param>
     /// <param name="value">The value, or null when unknown or secret.</param>
-    /// <param name="isSecret">True for a secret or sensitive variable.</param>
+    /// <param name="isSecret">True when the value is treated as secret: a secret or sensitive variable, or one whose name looks secret.</param>
     /// <param name="source">Where it is defined, for example "GitHub Actions repository secret (contoso/web)".</param>
     /// <param name="location">Where in the source, when known.</param>
     /// <param name="deadReason">Why nothing uses it, when nothing does.</param>

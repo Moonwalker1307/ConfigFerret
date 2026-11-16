@@ -87,6 +87,39 @@ public sealed class VariableRowsTests : IDisposable
         Assert.Equal(viewModel.DeadCount, viewModel.Rows.Count);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_variable_whose_name_looks_secret_has_a_lock_and_shows_its_value_only_when_revealed(bool revealed)
+    {
+        var report = ConfigTracer.For(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["A"] = "1" }).Build()).Trace();
+        var result = new TraceResult(report, report.FindUnused(), [], [], [],
+        [
+            new UnusedVariable("GitHub Actions", "SMTP_PASSWORD", "repository variable (contoso/web)") { Value = revealed ? "fake-smtp-password" : null, NameLooksSecret = true },
+            new UnusedVariable("Octopus Deploy", "Legacy.ApiKey", "Web") { Value = revealed ? "fake-api-key" : null, NameLooksSecret = true },
+        ])
+        {
+            WorkflowVariables = [new WorkflowVariable("DEPLOY_TOKEN", "repository variable (contoso/web)", "deploy.yml line 4") { Value = revealed ? "fake-deploy-token" : null, NameLooksSecret = true }],
+        };
+        using var viewModel = Show(result);
+
+        foreach (var (key, value, caption) in new[]
+        {
+            ("SMTP_PASSWORD", "fake-smtp-password", "GITHUB ACTIONS VARIABLE"),
+            ("Legacy.ApiKey", "fake-api-key", "OCTOPUS DEPLOY VARIABLE"),
+            ("DEPLOY_TOKEN", "fake-deploy-token", "GITHUB ACTIONS VARIABLE"),
+        })
+        {
+            var row = viewModel.Rows.Single(r => r.Key == key);
+            var step = Assert.Single(row.Setting.Steps);
+            Assert.True(row.IsSensitive);
+            Assert.True(step.IsSensitive);
+            Assert.Equal(revealed ? value : "***", row.Value);
+            Assert.Equal(revealed ? value : "***", step.Value);
+            Assert.Equal(caption, row.Caption);
+        }
+    }
+
     [Fact]
     public void A_tick_list_unticked_before_a_retrace_stays_unticked()
     {

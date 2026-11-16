@@ -906,7 +906,7 @@ public class TraceRunnerSourcesTests : IDisposable
         var result = await Run(ProfileOf(App("""{"Db":{"Host":"base"}}"""), github), name => Token, http: GitHub().Client);
 
         Assert.Null(ProblemOf(result, github));
-        Assert.Contains(new UnusedVariable("GitHub Actions", "OLD_KEY", "repository secret (contoso/orders)") { IsSecret = true }, result.UnusedVariables);
+        Assert.Contains(new UnusedVariable("GitHub Actions", "OLD_KEY", "repository secret (contoso/orders)") { IsSecret = true, NameLooksSecret = true }, result.UnusedVariables);
         Assert.Contains(new UnusedVariable("GitHub Actions", "Db__Host", "repository variable (contoso/orders)") { Value = "gh-host" }, result.UnusedVariables);
     }
 
@@ -919,6 +919,36 @@ public class TraceRunnerSourcesTests : IDisposable
         var result = await Run(ProfileOf(App("{}"), github), name => Token, http: handler.Client);
 
         Assert.Contains(new UnusedVariable("GitHub Actions", "UNUSED_VAR", "repository variable (contoso/orders)") { Value = "x" }, result.UnusedVariables);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_github_variable_whose_name_looks_secret_has_no_value_unless_secrets_are_revealed(bool reveal)
+    {
+        var github = GitHubSourceFor();
+        github.Workflows = [Write("workflows/deploy.yml", "jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./deploy.sh ${{ vars.DEPLOY_TOKEN }}\n")];
+        var handler = GitHub().Respond("/repos/contoso/orders/actions/variables?per_page=30&page=1", """
+            {"total_count":3,"variables":[
+              {"name":"SMTP_PASSWORD","value":"fake-smtp-password"},
+              {"name":"DEPLOY_TOKEN","value":"fake-deploy-token"},
+              {"name":"MAIL_HOST","value":"mail.example.test"}]}
+            """);
+
+        var result = await Run(ProfileOf(App("{}"), github), name => Token, reveal, handler.Client);
+
+        var unused = result.UnusedVariables.Single(v => v.Name == "SMTP_PASSWORD");
+        Assert.Equal(reveal ? "fake-smtp-password" : null, unused.Value);
+        Assert.False(unused.IsSecret);
+        Assert.True(unused.NameLooksSecret);
+        Assert.Equal("repository variable (contoso/orders)", unused.Detail);
+        var workflow = result.WorkflowVariables.Single(v => v.Name == "DEPLOY_TOKEN");
+        Assert.Equal(reveal ? "fake-deploy-token" : null, workflow.Value);
+        Assert.False(workflow.IsSecret);
+        Assert.True(workflow.NameLooksSecret);
+        var plain = result.UnusedVariables.Single(v => v.Name == "MAIL_HOST");
+        Assert.Equal("mail.example.test", plain.Value);
+        Assert.False(plain.NameLooksSecret);
     }
 
     // Octopus
@@ -1029,6 +1059,28 @@ public class TraceRunnerSourcesTests : IDisposable
         var result = await Run(ProfileOf(App("{}"), OctopusSourceFor()), _ => "API-KEY", http: Octopus().Client);
 
         Assert.DoesNotContain("sensitive", result.UnusedVariables.Single(v => v.Name == "Unused:Var").Detail, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_octopus_variable_whose_name_looks_secret_has_no_value_unless_secrets_are_revealed(bool reveal)
+    {
+        var handler = Octopus().Respond("/api/Spaces-1/variables/vs-lib", """
+            {"Variables":[
+              {"Name":"Legacy.ApiKey","Value":"fake-api-key","Type":"String","Scope":{}},
+              {"Name":"Lib:Var","Value":"x","Type":"String","Scope":{}}
+            ],"ScopeValues":{}}
+            """);
+
+        var result = await Run(ProfileOf(App("{}"), OctopusSourceFor()), _ => "API-KEY", reveal, handler.Client);
+
+        var unused = result.UnusedVariables.Single(v => v.Name == "Legacy.ApiKey");
+        Assert.Equal(reveal ? "fake-api-key" : null, unused.Value);
+        Assert.False(unused.IsSecret);
+        Assert.True(unused.NameLooksSecret);
+        Assert.Equal("library variable set Shared", unused.Detail);
+        Assert.Equal("x", result.UnusedVariables.Single(v => v.Name == "Lib:Var").Value);
     }
 
     [Fact]

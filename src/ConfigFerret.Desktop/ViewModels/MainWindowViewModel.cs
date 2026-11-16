@@ -1349,7 +1349,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 variable.IsSecret ? "GitHub Actions secret" : "GitHub Actions variable",
                 variable.Name,
                 variable.Value,
-                variable.IsSecret,
+                variable.IsSecret || variable.NameLooksSecret,
                 "GitHub Actions " + variable.Detail,
                 variable.UsedBy,
                 workflowUse: variable.UsedBy);
@@ -1363,7 +1363,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 $"{variable.Tool} {(variable.IsSecret ? (github ? "secret" : "sensitive variable") : "variable")}",
                 variable.Name,
                 variable.Value,
-                variable.IsSecret,
+                variable.IsSecret || variable.NameLooksSecret,
                 $"{variable.Tool} {variable.Detail}",
                 deadReason: github ? "No setting in this trace or workflow uses it" : "No setting in this trace uses it");
         }
