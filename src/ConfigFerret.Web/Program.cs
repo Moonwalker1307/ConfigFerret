@@ -37,7 +37,8 @@ builder.Services.AddScoped(services =>
     var options = services.GetRequiredService<IOptions<WebAppOptions>>().Value;
 
     // Credentials typed in a tab stay in that tab's memory. A token in GITHUB_TOKEN (or an Octopus key in
-    // OCTOPUS_API_KEY) is used by every tab when none is typed in.
+    // OCTOPUS_API_KEY) is used by every tab when none is typed in, but it is the server's: IsSharedServer sends it only
+    // to api.github.com (or OCTOPUS_URL), whatever address a visitor types.
     var credentials = new EnvironmentFallbackCredentialStore(
         new SessionCredentialStore(),
         new Dictionary<string, string[]>
@@ -47,6 +48,7 @@ builder.Services.AddScoped(services =>
         });
     return new MainWindowViewModel(new WorkspaceStore(options.WorkspacePath), credentials)
     {
+        IsSharedServer = true,
         OctopusServerFallback = Environment.GetEnvironmentVariable("OCTOPUS_URL") ?? Environment.GetEnvironmentVariable("OCTOPUS_CLI_SERVER"),
         Dialogs = services.GetRequiredService<WebDialogs>(),
     };

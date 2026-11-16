@@ -147,6 +147,17 @@ public sealed class HostTests : IClassFixture<HostTests.App>
     }
 
     [Fact]
+    public void The_servers_tokens_are_kept_to_the_servers_own_addresses()
+    {
+        using var scope = _app.Services.CreateScope();
+
+        var viewModel = scope.ServiceProvider.GetRequiredService<MainWindowViewModel>();
+
+        Assert.True(viewModel.IsSharedServer);
+        Assert.Equal(string.Empty, viewModel.GitHubApiUrl);
+    }
+
+    [Fact]
     public void The_workspace_file_goes_in_the_data_folder()
     {
         var options = new Services.WebAppOptions { DataFolder = "/data" };
