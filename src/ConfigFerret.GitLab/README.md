@@ -27,7 +27,8 @@ var report = ConfigTracer.For(builder.Configuration)
     .Trace();
 
 Console.WriteLine(report.Explain("Db:Timeout"));
-// set in environment variable DB_TIMEOUT from GitLab project variable DB_TIMEOUT
+// set in environment variable Db__Timeout from GitLab project variable DB_TIMEOUT
+// (when a script line in .gitlab-ci.yml says `export Db__Timeout=$DB_TIMEOUT` before the app starts)
 ```
 
 ## Configure from appsettings and dependency injection
