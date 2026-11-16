@@ -48,6 +48,8 @@ volumes:
 
 The image runs as a non-root user, has no shell, and listens on port 8080. It includes `helm` and `kubectl`, so Helm
 charts and Kustomize overlays are rendered, without network access, like the desktop app does when they're installed.
+The tools get only the environment variables they need to run (`PATH`, the home and temp folders, and Helm's folder
+settings), never the tokens below.
 
 ## Credentials
 
