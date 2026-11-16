@@ -416,15 +416,93 @@ public class CodeReadScannerTests
     }
 
     [Fact]
-    public void A_constant_in_another_file_resolves_and_the_first_definition_wins()
+    public void A_constant_in_another_file_resolves_by_its_type()
     {
         var scanner = Scan(
             """var a = configuration[Names.Key];""",
-            """static class Names { public const string Key = "Real:Key"; }""",
-            """static class Other { public const string Key = "Wrong:Key"; }""");
+            """static class Other { public const string Key = "Wrong:Key"; }""",
+            """static class Names { public const string Key = "Real:Key"; }""");
 
         Assert.True(scanner.Check("Real:Key").IsRead);
         Assert.False(scanner.Check("Wrong:Key").IsRead);
+    }
+
+    [Fact]
+    public void Options_classes_with_their_own_section_name_constant_each_bind_their_section()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<SmtpOptions>(cfg.GetSection(SmtpOptions.SectionName));
+            services.Configure<JwtOptions>(cfg.GetSection(JwtOptions.SectionName));
+            services.AddOptions<CacheOptions>().BindConfiguration(My.Options.CacheOptions.SectionName);
+            """,
+            """
+            public sealed class SmtpOptions { public const string SectionName = "Smtp"; public string Host { get; set; } = ""; }
+            public sealed class JwtOptions { public const string SectionName = "Jwt"; public string Issuer { get; set; } = ""; }
+            public sealed class CacheOptions { public const string SectionName = nameof(Cache); public int Ttl { get; set; } }
+            """);
+
+        Assert.True(scanner.Check("Smtp:Host").IsRead);
+        Assert.True(scanner.Check("Jwt:Issuer").IsRead);
+        Assert.True(scanner.Check("Cache:Ttl").IsRead);
+        Assert.False(scanner.Check("Jwt:Host").IsRead);
+        Assert.Equal("SmtpOptions", scanner.BoundSections["Smtp"]);
+        Assert.Equal("JwtOptions", scanner.BoundSections["Jwt"]);
+        Assert.Empty(scanner.DynamicReads);
+    }
+
+    [Fact]
+    public void A_bare_constant_name_resolves_only_when_its_value_is_unique()
+    {
+        var scanner = Scan(
+            """
+            var a = configuration.GetSection(SectionName);
+            var b = configuration[Shared];
+            var c = configuration[Missing.Shared];
+            """,
+            """
+            class AOptions { public const string SectionName = "A"; public const string Shared = "Same:Key"; }
+            class BOptions { public const string SectionName = "B"; public const string Shared = "Same:Key"; }
+            """);
+
+        Assert.False(scanner.Check("A:X").IsRead);
+        Assert.False(scanner.Check("B:X").IsRead);
+        Assert.True(scanner.Check("Same:Key").IsRead);
+        Assert.Equal(["File0.cs (line 1)", "File0.cs (line 3)"], scanner.DynamicReads);
+    }
+
+    [Fact]
+    public void A_bare_constant_name_resolves_first_in_the_type_the_read_is_in()
+    {
+        var scanner = Scan(
+            """
+            public class SmtpOptions
+            {
+                public const string SectionName = "Smtp";
+
+                public static string Host(IConfiguration configuration) => configuration.GetSection(SectionName)["Host"];
+            }
+            """,
+            """
+            public class JwtOptions
+            {
+                public const string SectionName = "Jwt";
+
+                public static string Issuer(IConfiguration configuration) => configuration.GetSection(SectionName)["Issuer"];
+
+                public class Signing
+                {
+                    // Signing declares no SectionName, and the two outside it differ, so the scan can't tell which is read.
+                    public static string Key(IConfiguration configuration) => configuration.GetSection(SectionName)["Key"];
+                }
+            }
+            """);
+
+        Assert.True(scanner.Check("Smtp:Host").IsRead);
+        Assert.True(scanner.Check("Jwt:Issuer").IsRead);
+        Assert.False(scanner.Check("Jwt:Host").IsRead);
+        Assert.False(scanner.Check("Smtp:Issuer").IsRead);
+        Assert.Equal(["File1.cs (line 10)"], scanner.DynamicReads);
     }
 
     [Fact]

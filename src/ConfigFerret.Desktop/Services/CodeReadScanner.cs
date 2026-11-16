@@ -232,20 +232,23 @@ public sealed partial class CodeReadScanner
         // A file a pattern times out on is skipped from then on. What it gave before the timeout stays.
         var skipped = new bool[files.Count];
         // The classes of a file skipped in the first pass may have lost properties, so they are left open.
-        var constants = new Dictionary<string, string>(StringComparer.Ordinal);
+        var constants = new Constants();
+        var typeBodies = new List<TypeBody>[files.Count];
         for (var i = 0; i < files.Count; i++)
         {
             var (name, text) = files[i];
             var declared = new List<OptionsShape>();
+            var bodies = typeBodies[i] = [];
             skipped[i] = !TryRead(name, "types", () =>
             {
+                ReadShapes(text, declared, bodies, () => atStep?.Invoke(name, "properties"));
+                var sweep = new TypeSweep(bodies);
                 foreach (Match m in StringConstant().Matches(text))
                 {
                     Step();
-                    constants.TryAdd(m.Groups["name"].Value, m.Groups["value"].Value);
+                    var value = m.Groups["value"].Success ? m.Groups["value"].Value : m.Groups["nameof"].Value.Split('.')[^1];
+                    constants.Add(sweep.At(m.Index)?.Name, m.Groups["name"].Value, value);
                 }
-
-                ReadShapes(text, declared, () => atStep?.Invoke(name, "properties"));
             });
 
             if (skipped[i])
@@ -257,7 +260,8 @@ public sealed partial class CodeReadScanner
         for (var i = 0; i < files.Count; i++)
         {
             var (name, text) = files[i];
-            skipped[i] = skipped[i] || !TryRead(name, "calls", () => ReadCalls(name, text, constants));
+            var bodies = typeBodies[i];
+            skipped[i] = skipped[i] || !TryRead(name, "calls", () => ReadCalls(name, text, constants, bodies));
         }
 
         FilesScanned = skipped.Count(s => !s);
@@ -288,7 +292,7 @@ public sealed partial class CodeReadScanner
         }
     }
 
-    private void ReadCalls(string file, string text, Dictionary<string, string> constants)
+    private void ReadCalls(string file, string text, Constants constants, List<TypeBody> bodies)
     {
         var consumed = new List<(int Start, int End)>();
         var newlines = new List<int>();
@@ -324,6 +328,10 @@ public sealed partial class CodeReadScanner
 
         var covered = new HashSet<int>();
 
+        // A bare constant name resolves first in the type around the read.
+        var types = new TypeSweep(bodies);
+        string? Key(Match match) => Resolve(match.Groups["arg"].Value, constants, types.At(match.Index)?.Name);
+
         void Dynamic(int index)
         {
             var before = newlines.BinarySearch(index);
@@ -340,7 +348,7 @@ public sealed partial class CodeReadScanner
                 continue;
             }
 
-            var path = Resolve(m.Groups["arg"].Value, constants);
+            var path = Key(m);
             var end = m.Index + m.Length;
             if (path is null)
             {
@@ -359,7 +367,7 @@ public sealed partial class CodeReadScanner
                     break;
                 }
 
-                var arg = next.Groups["arg"].Success ? Resolve(next.Groups["arg"].Value, constants) : null;
+                var arg = next.Groups["arg"].Success ? Key(next) : null;
                 if (next.Groups["section"].Success || next.Groups["index"].Success || next.Groups["value"].Success)
                 {
                     if (arg is null)
@@ -424,7 +432,7 @@ public sealed partial class CodeReadScanner
                 continue;
             }
 
-            var key = Resolve(m.Groups["arg"].Value, constants);
+            var key = Key(m);
             if (key is null)
             {
                 Dynamic(m.Index);
@@ -462,7 +470,7 @@ public sealed partial class CodeReadScanner
                 continue;
             }
 
-            var key = Resolve(m.Groups["arg"].Value, constants);
+            var key = Key(m);
             if (key is null)
             {
                 Dynamic(m.Index);
@@ -477,7 +485,7 @@ public sealed partial class CodeReadScanner
         foreach (Match m in SectionNameArgument().Matches(text))
         {
             Step();
-            if (!Consumed(m.Index) && Resolve(m.Groups["arg"].Value, constants) is { } section)
+            if (!Consumed(m.Index) && Key(m) is { } section)
             {
                 _sections.Add(section);
             }
@@ -528,7 +536,7 @@ public sealed partial class CodeReadScanner
         return m.Success ? Simple(m.Groups["type"].Value) : null;
     }
 
-    private static string? Resolve(string arg, Dictionary<string, string> constants)
+    private static string? Resolve(string arg, Constants constants, string? type)
     {
         arg = arg.Trim();
         if (arg.Length >= 2 && arg[0] == '"' && arg[^1] == '"')
@@ -550,16 +558,16 @@ public sealed partial class CodeReadScanner
 
         if (Identifier().IsMatch(arg))
         {
-            return constants.GetValueOrDefault(arg.Split('.')[^1]);
+            return constants.Resolve(arg, type);
         }
 
         return null;
     }
 
-    // Reads the types in text into _shapes, and adds each to declared as soon as it is known.
-    private void ReadShapes(string text, List<OptionsShape> declared, Action beforeProperties)
+    // Reads the types in text into _shapes and their bodies, in text order, into bodies. Each shape goes into declared as
+    // soon as it is known.
+    private void ReadShapes(string text, List<OptionsShape> declared, List<TypeBody> bodies, Action beforeProperties)
     {
-        var bodies = new List<(OptionsShape Shape, int Open, int Close)>();
         Dictionary<int, int>? closes = null;
         var parsed = new List<(int Start, int End)>();
         foreach (Match m in TypeDeclaration().Matches(text))
@@ -587,7 +595,7 @@ public sealed partial class CodeReadScanner
             closes ??= text[open] == '{' ? MatchBraces(text) : null;
             if (closes is not null && closes.TryGetValue(open, out var close))
             {
-                bodies.Add((shape, open, close));
+                bodies.Add(new TypeBody(name, shape, open, close));
             }
 
             _shapes.TryAdd(name, shape);
@@ -625,41 +633,22 @@ public sealed partial class CodeReadScanner
 
         beforeProperties();
 
-        // A property belongs to the innermost type around it. Matches come in text order, so the text is matched once,
-        // however deep types nest.
-        var around = new Stack<(OptionsShape Shape, int Close)>();
-        var body = 0;
-        OptionsShape? Around(int index)
-        {
-            for (; body < bodies.Count && bodies[body].Open < index; body++)
-            {
-                around.Push((bodies[body].Shape, bodies[body].Close));
-            }
-
-            while (around.Count > 0 && around.Peek().Close <= index)
-            {
-                around.Pop();
-            }
-
-            return around.Count > 0 ? around.Peek().Shape : null;
-        }
-
+        // A property belongs to the innermost type around it. The text is matched once, however deep types nest.
+        var sweep = new TypeSweep(bodies);
         var matched = new List<(int Start, int End)>();
         foreach (Match p in Property().Matches(text))
         {
             Step();
             matched.Add((p.Index, p.Index + p.Length));
-            if (Around(p.Index) is { } shape)
+            if (sweep.At(p.Index) is { } body)
             {
                 var key = p.Groups["key"].Success ? p.Groups["key"].Value : p.Groups["name"].Value;
-                shape.Properties[key] = PropertyType(p.Groups["type"].Value);
+                body.Shape.Properties[key] = PropertyType(p.Groups["type"].Value);
             }
         }
 
         // A property the pattern above can't take apart, such as one of a tuple type, a global:: type or a type of more
         // than 11 words, may take any key, so its class is left open.
-        around.Clear();
-        body = 0;
         next = 0;
         foreach (Match p in PropertyStart().Matches(text))
         {
@@ -669,31 +658,29 @@ public sealed partial class CodeReadScanner
                 next++;
             }
 
-            if ((next == matched.Count || matched[next].Start > p.Index) && Around(p.Index) is { } shape)
+            if ((next == matched.Count || matched[next].Start > p.Index) && sweep.At(p.Index) is { } body)
             {
-                shape.Open = true;
+                body.Shape.Open = true;
             }
         }
 
         // ConfigurationKeyName("x") names a key the class takes, wherever it stands, such as after more attributes than
         // the pattern above takes. A name the scan can't read leaves the class open.
-        around.Clear();
-        body = 0;
         foreach (Match k in ConfigurationKeyName().Matches(text))
         {
             Step();
-            if (Around(k.Index) is not { } shape)
+            if (sweep.At(k.Index) is not { } body)
             {
                 continue;
             }
 
             if (k.Groups["key"].Success)
             {
-                shape.Properties.TryAdd(k.Groups["key"].Value, null);
+                body.Shape.Properties.TryAdd(k.Groups["key"].Value, null);
             }
             else
             {
-                shape.Open = true;
+                body.Shape.Open = true;
             }
         }
     }
@@ -967,6 +954,87 @@ public sealed partial class CodeReadScanner
         }
     }
 
+    private sealed record TypeBody(string Name, OptionsShape Shape, int Open, int Close);
+
+    // Finds the innermost type body around an index. Bodies are in text order, so asking for indexes in text order walks
+    // them once, however deep types nest. Asking for an earlier index starts the walk again.
+    private sealed class TypeSweep(List<TypeBody> bodies)
+    {
+        private readonly Stack<TypeBody> _around = new();
+        private int _next;
+        private int _last = -1;
+
+        public TypeBody? At(int index)
+        {
+            if (index < _last)
+            {
+                _around.Clear();
+                _next = 0;
+            }
+
+            _last = index;
+            for (; _next < bodies.Count && bodies[_next].Open < index; _next++)
+            {
+                Leave(bodies[_next].Open);
+                _around.Push(bodies[_next]);
+            }
+
+            Leave(index);
+            return _around.Count > 0 ? _around.Peek() : null;
+        }
+
+        // Drops the bodies that close at or before index. They close innermost first, so the stack holds only the
+        // bodies around index.
+        private void Leave(int index)
+        {
+            while (_around.Count > 0 && _around.Peek().Close <= index)
+            {
+                _around.Pop();
+            }
+        }
+    }
+
+    // String constants by name, and by type and name. A name declared twice with different values resolves to null, so
+    // the read shows as one the scan cannot work out instead of taking either value.
+    private sealed class Constants
+    {
+        private readonly Dictionary<string, string?> _byName = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string?> _byType = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string?> _outsideTypes = new(StringComparer.Ordinal);
+
+        public void Add(string? type, string name, string value)
+        {
+            Merge(_byName, name, value);
+            if (type is null)
+            {
+                Merge(_outsideTypes, name, value);
+            }
+            else
+            {
+                Merge(_byType, type + "." + name, value);
+            }
+        }
+
+        // Options.SectionName resolves by its type. A bare SectionName resolves by the type the read is in, and otherwise
+        // only when every constant of that name agrees. A type the scan did not see falls back only to a constant declared
+        // outside any type, such as in top-level code.
+        public string? Resolve(string identifier, string? type)
+        {
+            var parts = identifier.Split('.');
+            if (parts.Length == 1)
+            {
+                return type is not null && _byType.TryGetValue(type + "." + identifier, out var own) ? own : _byName.GetValueOrDefault(identifier);
+            }
+
+            return _byType.TryGetValue(parts[^2] + "." + parts[^1], out var value) ? value : _outsideTypes.GetValueOrDefault(parts[^1]);
+        }
+
+        private static void Merge(Dictionary<string, string?> constants, string key, string value)
+        {
+            constants[key] = constants.TryGetValue(key, out var existing) && existing != value ? null : value;
+        }
+    }
+
     private sealed class OptionsShape(string? baseName)
     {
         public string? Base { get; } = baseName;
@@ -1018,7 +1086,7 @@ public sealed partial class CodeReadScanner
     [GeneratedRegex(@"(?:Configure\s*<\s*(?<type>[\w.]+)\s*>\s*\(\s*(?:""[^""]*""\s*,\s*)?[\w.]*\s*\.?\s*|AddOptions\s*<\s*(?<type>[\w.]+)\s*>\s*\([^()]*\)\s*\.\s*(?:Bind\s*\(\s*[\w.]*\s*\.?\s*)?)$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex OptionsTypeTail();
 
-    [GeneratedRegex(@"\bconst\s+string\s+(?<name>\w+)\s*=\s*""(?<value>[^""\r\n]*)""|\bstatic\s+readonly\s+string\s+(?<name>\w+)\s*=\s*""(?<value>[^""\r\n]*)""", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    [GeneratedRegex(@"\b(?:const|static\s+readonly)\s+string\s+(?<name>\w+)\s*=\s*(?:""(?<value>[^""\r\n]*)""|nameof\(\s*(?<nameof>[\w.]+)\s*\))", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex StringConstant();
 
     [GeneratedRegex(@"^nameof\(\s*(?<name>[\w.]+)\s*\)$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
