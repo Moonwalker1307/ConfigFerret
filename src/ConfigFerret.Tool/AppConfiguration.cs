@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 using ConfigFerret.Kustomize;
 using Microsoft.Extensions.Configuration;
@@ -19,10 +20,17 @@ internal sealed record AppInputs(
     bool UseUserSecrets);
 
 /// <summary>
+/// What the tool reads from the app folder's project file: the app's name, which .NET takes from the entry assembly
+/// (the <c>AssemblyName</c>, else the project file's name), and the <c>UserSecretsId</c>.
+/// </summary>
+internal sealed record AppProject(string ApplicationName, string? UserSecretsId);
+
+/// <summary>
 /// Builds configuration the way <c>WebApplication.CreateBuilder</c> and <c>Host.CreateApplicationBuilder</c> do,
 /// from files on disk instead of a running app: the <c>ASPNETCORE_</c> and <c>DOTNET_</c> environment variables,
-/// <c>appsettings.json</c>, <c>appsettings.{Environment}.json</c>, user secrets in Development, environment variables,
-/// the command line, then the settings files the app adds itself.
+/// <c>appsettings.json</c>, <c>appsettings.{Environment}.json</c>, <c>{ApplicationName}.settings.json</c>,
+/// <c>{ApplicationName}.settings.{Environment}.json</c>, user secrets in Development, environment variables, the
+/// command line, then the settings files the app adds itself.
 /// </summary>
 internal static partial class AppConfiguration
 {
@@ -58,10 +66,17 @@ internal static partial class AppConfiguration
             builder.Add(new SimulatedEnvironmentVariablesSource(inputs.Environment, "DOTNET_"));
         }
 
-        var baseFile = Path.Join(directory, "appsettings.json");
-        var environmentFile = Path.Join(directory, $"appsettings.{environmentName}.json");
+        // .NET 10 also loads {ApplicationName}.settings.json and its environment file after the appsettings files.
+        var project = ReadProject(directory, inputs.AppDirectory, host.Error);
+        List<string> settingsFiles = [Path.Join(directory, "appsettings.json"), Path.Join(directory, $"appsettings.{environmentName}.json")];
+        if (project?.ApplicationName is { } applicationName)
+        {
+            settingsFiles.Add(Path.Join(directory, $"{applicationName}.settings.json"));
+            settingsFiles.Add(Path.Join(directory, $"{applicationName}.settings.{environmentName}.json"));
+        }
+
         var foundAny = false;
-        foreach (var file in new[] { baseFile, environmentFile }.Distinct(StringComparer.Ordinal).Where(File.Exists))
+        foreach (var file in settingsFiles.Distinct(StringComparer.Ordinal).Where(File.Exists))
         {
             // A settings file the tool finds by itself may be a link, as in a mounted ConfigMap, but only to a file in
             // the app folder: the checkout may come from someone else, and a link is a few bytes in Git.
@@ -91,7 +106,7 @@ internal static partial class AppConfiguration
             AddJsonFiles(builder, configFiles);
         }
 
-        var secretsId = inputs.UserSecretsId ?? FindUserSecretsId(directory);
+        var secretsId = inputs.UserSecretsId ?? project?.UserSecretsId;
         var loadSecrets = inputs.UseUserSecrets
             && secretsId is not null
             && (inputs.UserSecretsId is not null || string.Equals(environmentName, "Development", StringComparison.OrdinalIgnoreCase));
@@ -132,8 +147,13 @@ internal static partial class AppConfiguration
         }
     }
 
-    /// <summary>Reads <c>UserSecretsId</c> from the one project file in <paramref name="directory"/>, if there is one.</summary>
-    internal static string? FindUserSecretsId(string directory)
+    /// <summary>
+    /// Reads the one project file in <paramref name="directory"/>, if there is one. The checkout may come from someone
+    /// else, so the file is read only when it is in the app folder, links followed, and at most
+    /// <see cref="InputReader.MaxFoundFileBytes"/> long, without a DTD. Otherwise nothing is read from it, and one
+    /// warning names the file, as <paramref name="appFolder"/> was given, and the reason, but nothing in it.
+    /// </summary>
+    internal static AppProject? ReadProject(string directory, string appFolder, TextWriter warnings)
     {
         var projects = Directory.GetFiles(directory, "*.csproj");
         if (projects.Length != 1)
@@ -141,15 +161,55 @@ internal static partial class AppConfiguration
             return null;
         }
 
+        var path = projects[0];
+        var applicationName = Path.GetFileNameWithoutExtension(path);
+        AppProject NotRead(string reason)
+        {
+            // Only a fixed reason: an exception message can hold a path the file links to.
+            var shown = TextRenderer.Escape(Path.Join(appFolder, Path.GetFileName(path)));
+            warnings.WriteLine($"configferret: {shown} {reason}, so its UserSecretsId and AssemblyName are not used.");
+            return new AppProject(applicationName, null);
+        }
+
+        if (!Kustomization.IsInFolder(path, directory))
+        {
+            return NotRead("links to a file outside the app folder");
+        }
+
         try
         {
-            var id = XDocument.Load(projects[0]).Descendants().FirstOrDefault(e => e.Name.LocalName == "UserSecretsId")?.Value.Trim();
-            return string.IsNullOrEmpty(id) ? null : id;
+            using var stream = File.OpenRead(path);
+            if (stream.Length > InputReader.MaxFoundFileBytes)
+            {
+                return NotRead($"is bigger than {InputReader.MaxFoundFileBytes / (1024 * 1024)} MB");
+            }
+
+            using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+            var document = XDocument.Load(reader);
+
+            // A name built from MSBuild properties can't be worked out here; the project file's name is the usual result.
+            var assemblyName = ReadProperty(document, "AssemblyName");
+            if (assemblyName is not null && !assemblyName.Contains("$(", StringComparison.Ordinal) && IsFileNamePart(assemblyName))
+            {
+                applicationName = assemblyName;
+            }
+
+            return new AppProject(applicationName, ReadProperty(document, "UserSecretsId"));
         }
-        catch (System.Xml.XmlException)
+        catch (XmlException)
         {
-            return null;
+            return NotRead("holds a DTD or is not valid XML");
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return NotRead("could not be read");
+        }
+    }
+
+    private static string? ReadProperty(XDocument document, string name)
+    {
+        var value = document.Descendants().FirstOrDefault(e => e.Name.LocalName == name)?.Value.Trim();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     /// <summary>Where <c>dotnet user-secrets</c> keeps the secrets for <paramref name="id"/> on this machine.</summary>
