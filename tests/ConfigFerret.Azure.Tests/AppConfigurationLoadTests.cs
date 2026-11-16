@@ -488,6 +488,33 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public void Walks_up_a_long_key_to_its_flag_without_copying_the_key()
+    {
+        var flag = new AzureAppConfigurationSetting(".appconfig.featureflag/Z", null, "s")
+        {
+            Kind = AzureAppConfigurationSettingKind.FeatureFlag,
+            ConfigurationKey = new string('Z', 100_000),
+            Enabled = true,
+            Filters = ["Microsoft.Percentage"],
+        };
+        var resolver = new AzureAppConfigurationResolver(new AzureAppConfigurationSettings("s", [flag]), new());
+        // Every colon here is followed by EnabledFor:0:Parameters:, so each one could end a flag's key.
+        var key = "F" + string.Concat(Enumerable.Repeat(":EnabledFor:0:Parameters", 2_000));
+        resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "Warm", "v"), new TraceDiagnostics());
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var steps = resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", key, "v"), new TraceDiagnostics());
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Empty(steps);
+        // Copying the key up to each of those colons would take about 96 MB.
+        Assert.InRange(allocated, 0, 1_000_000);
+        Assert.Equal(
+            "Azure App Configuration feature flag Z (s)",
+            Assert.Single(resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", flag.ConfigurationKey + ":EnabledFor:0:Name", "v"), new TraceDiagnostics())).Source);
+    }
+
+    [Fact]
     public async Task Names_a_feature_flag_by_its_stored_key_whatever_prefix_is_trimmed()
     {
         var handler = Handler()
@@ -498,8 +525,9 @@ public class AppConfigurationLoadTests
 
         var step = Assert.Single(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "Management:Beta", "True"), new TraceDiagnostics()));
         Assert.Equal("Azure App Configuration feature flag Beta (contoso)", step.Source);
-        Assert.Equal("Management:Beta".Length, settings.LongestFlagKey);
-        Assert.Equal(0, new AzureAppConfigurationSettings("s", [new("Plain", null, "s")]).LongestFlagKey);
+        // Beta has no filters, so no key under it leads to it, and there is no flag key length to try.
+        Assert.Empty(settings.FlagKeyLengths);
+        Assert.Empty(new AzureAppConfigurationSettings("s", [new("Plain", null, "s")]).FlagKeyLengths);
     }
 
     [Fact]
