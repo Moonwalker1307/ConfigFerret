@@ -14,8 +14,21 @@ public enum SecretRating
     /// <summary>Orange: in doubt, for example a development value or a guessed link. Check it.</summary>
     Check,
 
-    /// <summary>Red: a secret value sits in plain configuration, such as a committed appsettings file, a ConfigMap or a Helm values file.</summary>
+    /// <summary>Red: a secret value sits in plain configuration, such as a committed appsettings file, a ConfigMap, a Helm values file, or a Secret manifest or secretGenerator that holds the value.</summary>
     Exposed,
+}
+
+/// <summary>Which tool rendered the Kubernetes manifests a trace read.</summary>
+public enum RenderedManifests
+{
+    /// <summary>None: the manifests are files in the repository.</summary>
+    None,
+
+    /// <summary><c>helm template</c> rendered them from a chart.</summary>
+    Helm,
+
+    /// <summary><c>kubectl kustomize</c> or <c>kustomize build</c> built them from an overlay.</summary>
+    Kustomize,
 }
 
 /// <summary>The audit of one setting.</summary>
@@ -27,22 +40,26 @@ public sealed record SecretFinding(string Key, SecretRating Rating, string Reaso
 
 /// <summary>
 /// Rates each setting that looks like a secret: green when it comes from a secret store, red when a real value sits in
-/// plain configuration, orange when in doubt. Works on a trace run with secret values revealed, so it can look at the
-/// values; the findings never hold a value.
+/// plain configuration or in a Secret manifest or secretGenerator, orange when in doubt. Works on a trace run with
+/// secret values revealed, so it can look at the values; the findings never hold a value.
 /// </summary>
 public static partial class SecretAudit
 {
     private static readonly Regex SensitiveKey = new(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>Rates every setting in <paramref name="revealed"/>, a report traced with <see cref="TraceOptions.RevealSensitiveValues"/> on.</summary>
-    public static IReadOnlyList<SecretFinding> Audit(ProvenanceReport revealed)
+    /// <param name="revealed">The report.</param>
+    /// <param name="rendered">Which tool rendered the Kubernetes manifests the report read, if any.</param>
+    public static IReadOnlyList<SecretFinding> Audit(ProvenanceReport revealed, RenderedManifests rendered = RenderedManifests.None)
     {
         ArgumentNullException.ThrowIfNull(revealed);
-        return revealed.Settings.Select(Rate).ToList();
+        return revealed.Settings.Select(s => Rate(s, rendered)).ToList();
     }
 
     /// <summary>Rates one setting.</summary>
-    public static SecretFinding Rate(TracedSetting setting)
+    /// <param name="setting">The setting, traced with secret values revealed.</param>
+    /// <param name="rendered">Which tool rendered the Kubernetes manifests the trace read, if any.</param>
+    public static SecretFinding Rate(TracedSetting setting, RenderedManifests rendered = RenderedManifests.None)
     {
         ArgumentNullException.ThrowIfNull(setting);
         var layers = AllLayers(setting.Steps).ToList();
@@ -67,6 +84,27 @@ public static partial class SecretAudit
                 ? $"The value is kept in plain text in {Describe(exposed)}. Move it to a secret store (a Kubernetes Secret, a GitHub secret, a sensitive Octopus variable or a key vault)."
                 : $"A later layer overrides it, but {Describe(exposed)} still holds a plain-text value. Remove it from there.";
             return new SecretFinding(setting.Key, SecretRating.Exposed, reason, Where(exposed));
+        }
+
+        // A Secret manifest or a secretGenerator keeps the value in plain text or base64, which protects nothing, so it is
+        // exposed like a plain layer, even when a later layer overrides it.
+        var (layer, committed) = layers.Select(l => (l, CommittedSecret(l))).FirstOrDefault(c => c.Item2 is not null);
+        if (committed is not null)
+        {
+            // A chart may write the value in its template, or generate it as it renders (randAlphaNum, lookup).
+            if (rendered == RenderedManifests.Helm && committed.Kind == LayerKind.KubernetesSecret)
+            {
+                return new SecretFinding(setting.Key, SecretRating.Check, $"Comes from {committed.Source}, which the chart renders without a values file that sets it. Check the chart's template: a value written there is kept in the repository, one it generates as it renders (such as with randAlphaNum or lookup) is not.", SecretKey(committed));
+            }
+
+            var (place, form, reader) = Kept(committed, rendered);
+            var reason = OnWinningChain(setting, layer!)
+                ? $"The value is kept in {form} in {place}, so anyone who can read {reader} can decode it. Fill the Secret from a secret store instead (an ExternalSecret or the Secrets Store CSI driver), or encrypt it (a SealedSecret or SOPS)."
+                : $"A later layer overrides it, but {place} still holds the value in {form}. Remove it from there.";
+
+            // The output of a build is not a file to look in; the Secret's name and key are.
+            var where = committed.Kind == LayerKind.KubernetesSecret && rendered != RenderedManifests.None ? SecretKey(committed) : Where(committed);
+            return new SecretFinding(setting.Key, SecretRating.Exposed, reason, where);
         }
 
         var development = plainWithValue.FirstOrDefault(IsDevelopmentOnly);
@@ -153,6 +191,66 @@ public static partial class SecretAudit
         _ => false,
     };
 
+    // The layer that holds a Secret's value in plain text or base64: a Secret manifest with the value in data or
+    // stringData, a secretGenerator literal or env file, or the secretGenerator a built overlay made the Secret from (a
+    // files entry carries no value of its own, but the built Secret does). Null when the value is not written down: a
+    // Secret that was not loaded or that an ExternalSecret or SecretProviderClass creates (it has no value), a
+    // placeholder, a value SOPS encrypted, or a Secret that another layer fills, such as a secret store or a Helm template
+    // (whose values are plain layers).
+    private static ProvenanceStep? CommittedSecret(ProvenanceStep step)
+    {
+        if (!step.IsSensitive || step.IsRemoval || IsPlaceholder(step.Value) || IsSopsEncrypted(step.Value))
+        {
+            return null;
+        }
+
+        var origins = step.Origins.Where(o => o.IsEffective).ToList();
+        return step.Kind switch
+        {
+            LayerKind.Kustomize => step,
+            LayerKind.KubernetesSecret when origins.Count == 0 => step,
+            LayerKind.KubernetesSecret => origins.LastOrDefault(o => o.Kind == LayerKind.Kustomize),
+            _ => null,
+        };
+    }
+
+    // A value SOPS encrypted, such as ENC[AES256_GCM,data:...,iv:...,tag:...,type:str].
+    private static bool IsSopsEncrypted(string? value) =>
+        value is not null && value.StartsWith("ENC[", StringComparison.Ordinal) && value.EndsWith(']') && value.Contains(",data:", StringComparison.Ordinal);
+
+    // Where a committed Secret's value is written, how, and who can read it, for "kept in {form} in {place}, so anyone who
+    // can read {reader} can decode it". A secretGenerator's env file or file is named from the step's note, which holds
+    // only the path ("create (env file secrets.env:3)", "create (file password.txt)"); a literal's note holds no text of it.
+    private static (string Place, string Form, string Reader) Kept(ProvenanceStep step, RenderedManifests rendered)
+    {
+        if (step.Kind == LayerKind.Kustomize)
+        {
+            var generator = $"the secretGenerator of {step.Source}";
+            var input = GeneratorInput().Match(step.Note ?? string.Empty);
+            var place = !input.Success ? generator
+                : input.Groups["line"].Success ? $"line {input.Groups["line"].Value} of the env file {input.Groups["path"].Value} named by {generator}"
+                : $"the file {input.Groups["path"].Value} named by {generator}";
+            return (place, "plain text", "that file");
+        }
+
+        return rendered == RenderedManifests.Kustomize
+            ? ($"{step.Source} from the overlay's resources", "plain text or base64", "the overlay's files")
+            : ($"the manifest of {step.Source}", "plain text or base64", "that file");
+    }
+
+    // A Secret by its name and key, for a Secret whose manifest is the output of a render rather than a file to look in.
+    private static string SecretKey(ProvenanceStep step) => step.Reference is SecretKeyRef r ? $"{step.Source} (key {r.Key})" : step.Source;
+
+    // True when the winning value passes through step: the setting's effective step, or an effective origin below it.
+    // Each resolver adds its own effective origin, such as the manifests and a GitHub variable of the same name, so every
+    // one of them counts, not only the last.
+    private static bool OnWinningChain(TracedSetting setting, ProvenanceStep step)
+    {
+        return setting.EffectiveStep is { } effective && Holds(effective);
+
+        bool Holds(ProvenanceStep on) => ReferenceEquals(on, step) || on.Origins.Any(o => o.IsEffective && Holds(o));
+    }
+
     private static bool IsDevelopmentOnly(ProvenanceStep step) =>
         step.Source.Contains(".Development.", StringComparison.OrdinalIgnoreCase)
         || step.Source.Contains(".Local.", StringComparison.OrdinalIgnoreCase)
@@ -216,6 +314,10 @@ public static partial class SecretAudit
         @"^(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|API-[A-Z0-9]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,})$|-----BEGIN [A-Z ]*PRIVATE KEY-----",
         RegexOptions.CultureInvariant)]
     private static partial Regex KnownTokenFormat();
+
+    // The note of a secretGenerator step read from an env file or a file, such as "create (env file secrets.env:3)".
+    [GeneratedRegex(@"^[a-z]+ \((?:env file (?<path>.+):(?<line>[0-9]+)|file (?<path>.+))\)$", RegexOptions.CultureInvariant)]
+    private static partial Regex GeneratorInput();
 
     [GeneratedRegex(@"(?:^|;)\s*(password|pwd|accountkey|sharedaccesskey|sharedaccesssignature|sig)\s*=\s*[^;#{$\s][^;]*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CredentialInConnectionString();

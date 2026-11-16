@@ -9,6 +9,7 @@ builder.Services.AddOptions<SmtpOptions>().BindConfiguration("Smtp");
 var cacheTtl = builder.Configuration.GetValue<int>("Cache:Ttl");
 var searchEnabled = builder.Configuration["Features:Search"];
 var apiBaseUrl = builder.Configuration.GetSection("Api")["BaseUrl"];
+var mapsApiKey = builder.Configuration["Maps:ApiKey"];
 
 // Payments moved to the payments service; this used to read Payments:ApiKey.
 // var paymentsKey = builder.Configuration["Payments:ApiKey"];
