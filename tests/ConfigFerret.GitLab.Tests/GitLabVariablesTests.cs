@@ -194,14 +194,20 @@ public sealed class GitLabVariablesTests : IDisposable
     [Theory]
     [InlineData("glpat-never\nprinted_4d2")]
     [InlineData("glpat-never\0printed_4d2")]
-    public async Task Refuses_a_token_with_a_line_break_or_control_character_inside(string token)
+    [InlineData("glpat-never\u200Bprinted_4d2")]
+    [InlineData("\uFEFFglpat-never_printed_4d2")]
+    [InlineData("glpat-never\u00A0printed_4d2")]
+    [InlineData("glpat-néver_printed_4d2")]
+    public async Task Refuses_a_token_a_request_header_cannot_hold(string token)
     {
+        // A line break or another control character, or a character outside ASCII such as the zero-width space or the
+        // byte order mark that a paste can carry.
         var options = Options();
         options.Token = token;
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => Load(options));
 
-        Assert.Equal("Token holds a line break or another control character, so it cannot be sent in a request header. (Parameter 'options')", ex.Message);
+        Assert.Equal("Token holds a line break, another control character or a character outside ASCII, so it cannot be sent in a request header. (Parameter 'options')", ex.Message);
         Assert.Empty(_handler.Requests);
     }
 
