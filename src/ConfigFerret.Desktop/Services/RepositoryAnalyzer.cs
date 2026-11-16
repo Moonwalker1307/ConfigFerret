@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 using ConfigFerret.Desktop.Model;
 using ConfigFerret.Kubernetes;
 
@@ -59,11 +60,23 @@ public sealed record AnalysisConnections(
 /// </summary>
 public sealed partial class RepositoryAnalyzer
 {
-    private readonly Func<string, IReadOnlyList<string>, string?> _render;
+    // The most output read from a tool, in characters (64 MB as .NET holds them). A chart's templates can loop to write
+    // gigabytes, and the web app's server would hold all of it in memory.
+    private const int MaxToolOutput = 32 * 1024 * 1024;
+
+    private readonly Func<string, IReadOnlyList<string>, ToolRun> _render;
 
     /// <summary>Creates an analyzer.</summary>
     /// <param name="render">Runs a tool and returns its output, or null when the tool is not installed or fails. Defaults to running the real process.</param>
-    public RepositoryAnalyzer(Func<string, IReadOnlyList<string>, string?>? render = null) => _render = render ?? RunTool;
+    public RepositoryAnalyzer(Func<string, IReadOnlyList<string>, string?>? render = null)
+        : this(render is null ? (tool, arguments) => RunTool(tool, arguments) : (tool, arguments) => new ToolRun(render(tool, arguments)))
+    {
+    }
+
+    private RepositoryAnalyzer(Func<string, IReadOnlyList<string>, ToolRun> render) => _render = render;
+
+    /// <summary>Creates an analyzer whose tools can also say why they failed.</summary>
+    internal static RepositoryAnalyzer WithTools(Func<string, IReadOnlyList<string>, ToolRun> render) => new(render);
 
     /// <summary>Fills in choices the user hasn't made, from what the scan found.</summary>
     public static void SuggestChoices(RepositoryScan scan, AnalysisChoices choices, IReadOnlyList<string> gitHubEnvironments)
@@ -126,13 +139,18 @@ public sealed partial class RepositoryAnalyzer
                 arguments.AddRange(["-f", scan.Full(choices.HelmValues)]);
             }
 
-            if (_render("helm", arguments) is { } output)
+            var helm = _render("helm", arguments);
+            if (helm.Output is not null)
             {
-                rendered = ("helm-template.yaml", output);
+                rendered = ("helm-template.yaml", helm.Output);
+            }
+            else if (helm.Problem is null)
+            {
+                notes.Add("Install helm to render the chart, so its values link to the app's settings. Without it the chart's values are listed only where a ConfigMap or env entry in the repository uses them.");
             }
             else
             {
-                notes.Add("Install helm to render the chart, so its values link to the app's settings. Without it the chart's values are listed only where a ConfigMap or env entry in the repository uses them.");
+                notes.Add($"helm could not render the chart {chart.RelativePath}: {helm.Problem}. Run helm template on the chart to see why. Without the rendered chart its values are listed only where a ConfigMap or env entry in the repository uses them.");
             }
 
             profile.Sources.Add(new HelmSource { Name = $"Helm chart {chart.RelativePath}", ChartFolder = chart.Folder, ValuesFiles = valuesFiles });
@@ -143,13 +161,24 @@ public sealed partial class RepositoryAnalyzer
         {
             if (rendered is null)
             {
-                if ((_render("kubectl", ["kustomize", scan.Full(kustomization)]) ?? _render("kustomize", ["build", scan.Full(kustomization)])) is { } output)
+                // kustomize also when kubectl failed: kubectl bundles its own kustomize, often an older one. Not after a
+                // timeout or too much output, which kustomize would only repeat.
+                var kubectl = _render("kubectl", ["kustomize", scan.Full(kustomization)]);
+                var kustomize = kubectl.Output is null && (kubectl.Problem is null || kubectl.Failed) ? _render("kustomize", ["build", scan.Full(kustomization)]) : ToolRun.Missing;
+                if ((kubectl.Output ?? kustomize.Output) is { } output)
                 {
                     rendered = ("kustomize-build.yaml", output);
                 }
-                else
+                else if (kubectl.Problem is null && kustomize.Problem is null)
                 {
                     notes.Add("Install kubectl or kustomize to build the overlay, so its generators link to the app's settings.");
+                }
+                else
+                {
+                    var (tool, command, problem) = kubectl.Problem is not null ? ("kubectl", "kubectl kustomize", kubectl.Problem) : ("kustomize", "kustomize build", kustomize.Problem);
+                    notes.Add($"{tool} could not build the overlay {kustomization}: {problem}."
+                        + (kubectl.Problem is not null && kustomize.Problem is not null ? $" kustomize could not build it either: {kustomize.Problem}." : string.Empty)
+                        + $" Run {command} on the folder to see why. Remote bases (git or http URLs) are not fetched, so an overlay that needs one cannot be built.");
                 }
             }
 
@@ -346,12 +375,13 @@ public sealed partial class RepositoryAnalyzer
     ];
 
     /// <summary>
-    /// Runs <paramref name="tool"/> with no shell and returns its output, or null when it is missing, fails or takes over
-    /// a minute. The repository decides what the tool reads, so the tool gets no network: a kustomization may name remote
-    /// bases (git or http URLs), which would otherwise be fetched, with the user's git credentials, from any host. For the
-    /// same reason it gets only the environment variables it needs to run (see <see cref="StartInfo"/>).
+    /// Runs <paramref name="tool"/> with no shell and returns its output, or why there is none: missing, failed, over a
+    /// minute or over <paramref name="maxOutput"/> characters of output. The repository decides what the tool reads, so
+    /// the tool gets no network: a kustomization may name remote bases (git or http URLs), which would otherwise be
+    /// fetched, with the user's git credentials, from any host. For the same reason it gets only the environment
+    /// variables it needs to run (see <see cref="StartInfo"/>).
     /// </summary>
-    internal static string? RunTool(string tool, IReadOnlyList<string> arguments)
+    internal static ToolRun RunTool(string tool, IReadOnlyList<string> arguments, int maxOutput = MaxToolOutput)
     {
         var start = StartInfo(tool, arguments, Environment.GetEnvironmentVariable);
         try
@@ -359,23 +389,55 @@ public sealed partial class RepositoryAnalyzer
             using var process = Process.Start(start);
             if (process is null)
             {
-                return null;
+                return ToolRun.Missing;
             }
 
-            var output = process.StandardOutput.ReadToEndAsync();
-            _ = process.StandardError.ReadToEndAsync();
+            var output = ReadAtMostAsync(process.StandardOutput, maxOutput);
+            var error = ReadAtMostAsync(process.StandardError, 4096);
             if (!process.WaitForExit(TimeSpan.FromSeconds(60)))
             {
                 process.Kill(entireProcessTree: true);
-                return null;
+                return new ToolRun(null, "it took over a minute, so it was stopped");
             }
 
-            return process.ExitCode == 0 ? output.GetAwaiter().GetResult() : null;
+            if (process.ExitCode != 0)
+            {
+                return new ToolRun(null, $"it exited with code {process.ExitCode}" + Reason(error.GetAwaiter().GetResult().Text), Failed: true);
+            }
+
+            var (text, cut) = output.GetAwaiter().GetResult();
+            return cut ? new ToolRun(null, $"it wrote more than {maxOutput / 1024 / 1024} MB") : new ToolRun(text);
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
-            return null;
+            return ToolRun.Missing;
         }
+    }
+
+    // The error output is never shown: it quotes values from the repository (a template's fail message, an env file line)
+    // and paths on this machine. Only fixed text is, for errors that are easy to tell.
+    private static string Reason(string error) =>
+        error.Contains("missing in charts/", StringComparison.Ordinal) || error.Contains("helm dependency build", StringComparison.Ordinal)
+            ? ", because the chart's dependencies are not in its charts folder (helm dependency build fetches them)"
+            : error.Contains("127.0.0.1:9", StringComparison.Ordinal) || error.Contains("127.0.0.1 port 9", StringComparison.Ordinal) || error.Contains("transport '", StringComparison.Ordinal)
+                ? ", because it needs a remote base, which is not fetched"
+                : string.Empty;
+
+    // Reads to the end and keeps the first max characters, so a tool that writes without end cannot fill the memory.
+    private static async Task<(string Text, bool Cut)> ReadAtMostAsync(StreamReader reader, int max)
+    {
+        var text = new StringBuilder();
+        var buffer = new char[81920];
+        var cut = false;
+        int read;
+        while ((read = await reader.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+        {
+            var keep = Math.Min(read, max - text.Length);
+            text.Append(buffer, 0, keep);
+            cut |= keep < read;
+        }
+
+        return (text.ToString(), cut);
     }
 
     /// <summary>How <see cref="RunTool"/> starts <paramref name="tool"/>: the variables in <see cref="ToolEnvironment"/> that are set, and the offline settings.</summary>
@@ -409,4 +471,14 @@ public sealed partial class RepositoryAnalyzer
 
         return start;
     }
+}
+
+/// <summary>What running a tool gave.</summary>
+/// <param name="Output">The tool's output, or null when it is not installed or gave none.</param>
+/// <param name="Problem">Why a tool that is installed gave no output, such as "it exited with code 1", or null.</param>
+/// <param name="Failed">True when the tool ran to the end and exited with an error, not stopped by a limit.</param>
+internal sealed record ToolRun(string? Output, string? Problem = null, bool Failed = false)
+{
+    /// <summary>The tool is not installed.</summary>
+    public static ToolRun Missing { get; } = new(Output: null);
 }

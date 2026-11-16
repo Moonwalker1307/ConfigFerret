@@ -208,7 +208,7 @@ public class RepositoryAnalyzerTests : IDisposable
         // The argument reaches the tool as one argument, so $(...) in it is not run by a shell.
         var output = RepositoryAnalyzer.RunTool("/bin/sh", ["-c", "printf '%s|%s|%s|%s' \"$HTTPS_PROXY\" \"$http_proxy\" \"$GIT_ALLOW_PROTOCOL\" \"$1\"", "sh", "$(echo injected)"]);
 
-        Assert.Equal("http://127.0.0.1:9|http://127.0.0.1:9|file|$(echo injected)", output);
+        Assert.Equal("http://127.0.0.1:9|http://127.0.0.1:9|file|$(echo injected)", output.Output);
     }
 
     [Fact]
@@ -245,8 +245,8 @@ public class RepositoryAnalyzerTests : IDisposable
     }
 
     [Fact]
-    public void Returns_null_for_a_tool_that_is_not_installed() =>
-        Assert.Null(RepositoryAnalyzer.RunTool("configferret-no-such-tool", ["template"]));
+    public void Says_when_a_tool_is_not_installed() =>
+        Assert.Equal(ToolRun.Missing, RepositoryAnalyzer.RunTool("configferret-no-such-tool", ["template"]));
 
     private static AnalysisConnections Connections(string? gitHub) => NoConnections with { GitHubRepository = gitHub };
 
