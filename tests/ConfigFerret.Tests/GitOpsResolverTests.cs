@@ -1375,13 +1375,16 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal([("A", null), ("C", null)], GitOpsResolver.ReadVariables("${A}}$${B}${C}"));
     }
 
-    [Theory(Timeout = 10_000)]
+    [Theory(Timeout = 60_000)]
     [InlineData("")]
     [InlineData("}")]
     public async Task Reads_a_long_run_of_unclosed_placeholders_in_linear_time(string end)
     {
-        // 2 MB of ${A, where each ${ could start a placeholder that ends at the next }.
-        var value = string.Concat(Enumerable.Repeat("${A", 700_000)) + end;
+        // 10.5 MB of ${A, where each ${ could start a placeholder that ends at the next }. The scan takes a few
+        // milliseconds. A pattern that looks for the } from each ${ again took 8 s for 960 KB on a busy machine and
+        // grows with the square of the length, so it would need about 16 minutes here. The limit leaves room for a
+        // slow, busy runner.
+        var value = string.Concat(Enumerable.Repeat("${A", 3_500_000)) + end;
 
         var variables = await Task.Run(() => GitOpsResolver.ReadVariables(value), TestContext.Current.CancellationToken);
 
