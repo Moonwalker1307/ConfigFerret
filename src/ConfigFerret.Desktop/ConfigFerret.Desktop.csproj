@@ -47,6 +47,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The JSON checks the GitHub and Octopus packages make, for the app's own GitHub and Octopus calls. -->
+    <Compile Include="../Shared/JsonApi.cs" Link="Shared/JsonApi.cs" />
     <AvaloniaResource Include="Assets/icon.ico" />
     <AvaloniaResource Include="../../assets/icon.png" Link="Assets/icon.png" />
     <AvaloniaResource Include="../../assets/logo.png" Link="Assets/logo.png" />

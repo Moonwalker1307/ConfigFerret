@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using ConfigFerret.Shared;
 
 namespace ConfigFerret.Desktop.Services;
 
@@ -78,9 +79,12 @@ public sealed class OctopusAccount
         return _spaceId;
     }
 
+    // The body is read and checked as in the Octopus package: an answer larger than JsonApi.MaxResponseBytes, not JSON,
+    // or holding text JsonElement cannot read ends as HttpRequestException, and an unknown charset is read as UTF-8.
     private async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_server, path));
+        var uri = new Uri(_server, path);
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.Add("X-Octopus-ApiKey", _apiKey);
         using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -91,8 +95,17 @@ public sealed class OctopusAccount
             throw new HttpRequestException($"Could not read {path} from Octopus: {reason}.", null, response.StatusCode);
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var document = JsonApi.Parse(await JsonApi.ReadBodyAsync(response.Content, uri, "Octopus", cancellationToken).ConfigureAwait(false), uri, "Octopus");
+        try
+        {
+            JsonApi.RequireValidText(document, "Octopus", uri);
+            return document;
+        }
+        catch
+        {
+            document.Dispose();
+            throw;
+        }
     }
 
     private static List<JsonElement> Items(JsonDocument document) =>

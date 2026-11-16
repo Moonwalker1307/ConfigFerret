@@ -89,6 +89,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _ownsHttp = true;
         _http = httpHandler is null ? new HttpClient(CreateHttpHandler(), disposeHandler: true) : new HttpClient(httpHandler, disposeHandler: false);
         _http.Timeout = TimeSpan.FromMinutes(5);
+        // A GitHub or Octopus answer is buffered up to the packages' limit; the repository download streams and has its own.
+        _http.MaxResponseContentBufferSize = ConfigFerret.Shared.JsonApi.MaxResponseBytes;
         _traceHttp = httpHandler is null ? null : () => new HttpClient(httpHandler, disposeHandler: false);
         _runner = new TraceRunner(credentials, httpClientFactory: _traceHttp);
         _analyzer = analyzer ?? new RepositoryAnalyzer();
