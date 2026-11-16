@@ -49,6 +49,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     // Where the addresses the last Connect checked are kept: the workspace, or on a shared server this view model only.
     private readonly Workspace _addresses;
     private readonly bool _ownsDownloadRoot;
+    private bool _disposed;
     private string? _downloadRoot;
     private List<RepositoryRow> _allRepositories = [];
     private List<SettingRow> _allRows = [];
@@ -63,10 +64,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     // Counts the repositories and folders opened. An open that finds a newer one started when it resumes stops there, so
     // the one picked last is the one shown even when an earlier one was still scanning.
     private int _opening;
-
-    // The open the running work belongs to (0 for a trace), and the last open whose work a trace stopped.
-    private int _workOpening;
-    private int _stoppedOpening;
 
     // Counts the traces started, so one that a newer trace stopped leaves the view to the newer one.
     private int _tracing;
@@ -700,11 +697,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(IsIdle))]
     private async Task RefreshAsync()
     {
-        if (SelectedRepository is { } repository)
+        if (ShownRepository() is { } repository)
         {
             await AnalyzeRepositoryAsync(repository).ConfigureAwait(true);
         }
-        else if (_currentKey is not null && Directory.Exists(_currentKey))
+        else if (!IsGitHubSubject && _currentKey is not null && Directory.Exists(_currentKey))
         {
             await AnalyzeFolderAsync(_currentKey).ConfigureAwait(true);
         }
@@ -807,24 +804,18 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     internal async Task AnalyzeRepositoryAsync(RepositoryRow repository)
     {
         var opening = ++_opening;
+        string? fetched = null;
         var token = await RunAsync($"Downloading {repository.FullName}…", async cancellationToken =>
         {
             var github = CreateGitHub(ReadCredential(GitHubAccountName, out var serverToken) ?? throw new HttpRequestException("Connect GitHub first."), serverToken);
             var environments = await github.ListEnvironmentsAsync(repository.FullName, cancellationToken).ConfigureAwait(true);
-            var folder = await github.DownloadAsync(repository.FullName, repository.Info.DefaultBranch, DownloadRoot(), cancellationToken).ConfigureAwait(true);
-            DeleteDownload();
-            _currentDownload = folder;
-            return new Download(folder, environments);
-        }, opening).ConfigureAwait(true);
+            fetched = await github.DownloadAsync(repository.FullName, repository.Info.DefaultBranch, DownloadRoot(), cancellationToken).ConfigureAwait(true);
+            return new Download(fetched, environments);
+        }, isOpen: true).ConfigureAwait(true);
 
-        if (token is not { } downloaded)
+        if (token is not { } downloaded || opening != _opening)
         {
-            EndOpenWithoutScan(opening);
-            return;
-        }
-
-        if (opening != _opening)
-        {
+            EndOpenWithoutScan(opening, fetched);
             return;
         }
 
@@ -832,7 +823,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             repository.FullName,
             $"{repository.Info.DefaultBranch} · {(repository.IsPrivate ? "private" : "public")}{(repository.HasLanguage ? " · " + repository.Language : string.Empty)}",
             IsGitHub: true);
-        await OpenScanAsync(repository.FullName, downloaded.Folder, downloaded.Environments, subject, opening).ConfigureAwait(true);
+        await OpenScanAsync(repository.FullName, downloaded.Folder, downloaded.Environments, subject, opening, downloaded.Folder).ConfigureAwait(true);
     }
 
     internal async Task AnalyzeFolderAsync(string folder)
@@ -850,24 +841,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         var subject = new Subject(Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar)), folder, IsGitHub: false);
-        await OpenScanAsync(folder, folder, [], subject, opening).ConfigureAwait(true);
+        await OpenScanAsync(folder, folder, [], subject, opening, download: null).ConfigureAwait(true);
     }
 
-    private async Task OpenScanAsync(string key, string folder, IReadOnlyList<string> gitHubEnvironments, Subject subject, int opening)
+    // download is the folder this open downloaded, if any. It is deleted when the open stops, fails or a newer one takes
+    // its place. The download of the repository on show goes only when this open takes over, so until then a trace of
+    // that repository still finds its files.
+    private async Task OpenScanAsync(string key, string folder, IReadOnlyList<string> gitHubEnvironments, Subject subject, int opening, string? download)
     {
         RepositoryScan? scan = null;
-        await RunAsync("Looking for configuration…", _ => Task.FromResult(scan = RepositoryScanner.Scan(folder)), opening).ConfigureAwait(true);
-        if (scan is null)
+        await RunAsync("Looking for configuration…", _ => Task.FromResult(scan = RepositoryScanner.Scan(folder)), isOpen: true).ConfigureAwait(true);
+        if (scan is null || opening != _opening)
         {
-            EndOpenWithoutScan(opening);
+            EndOpenWithoutScan(opening, download);
             return;
         }
 
-        if (opening != _opening)
-        {
-            return;
-        }
-
+        DeleteDownload();
+        _currentDownload = download;
         SubjectTitle = subject.Title;
         SubjectDetail = subject.Detail;
         IsGitHubSubject = subject.IsGitHub;
@@ -907,33 +898,32 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    // The newest open got no download or scan. Its repository is no longer selected, so picking it again opens it again.
-    // When a trace (a changed choice) stopped it, the view keeps the repository it shows. When it failed, the view shows
-    // no repository rather than the one before, whose download a stopped open may already have deleted; the status line
-    // keeps the reason.
-    private void EndOpenWithoutScan(int opening)
+    // An open that got no download or scan, because it failed, a trace (a changed choice) stopped it or a newer open took
+    // its place. Its own download goes. When it was the newest, the view keeps the repository it shows, whose files are
+    // still there, and selects that one again, so picking the failed one opens it again and Refresh downloads the one on
+    // show; a failure's reason is in the status line.
+    private void EndOpenWithoutScan(int opening, string? download)
     {
+        DeleteFolder(download);
+        if (_disposed)
+        {
+            // A download stopped by closing can have made the download root again while it unpacked.
+            DeleteOwnedDownloadRoot();
+        }
+
         if (opening != _opening)
         {
             return;
         }
 
         _populating = true;
-        SelectedRepository = null;
+        SelectedRepository = ShownRepository() is { } shown && Repositories.Contains(shown) ? shown : null;
         _populating = false;
-        if (_stoppedOpening == opening)
-        {
-            return;
-        }
-
-        _scan = null;
-        _currentKey = null;
-        SubjectTitle = null;
-        SubjectDetail = null;
-        IsGitHubSubject = false;
-        ClearResult();
-        Discoveries.Clear();
     }
+
+    // The GitHub repository on show, or null when a folder or nothing is.
+    private RepositoryRow? ShownRepository() =>
+        IsGitHubSubject ? _allRepositories.FirstOrDefault(r => string.Equals(r.FullName, _currentKey, StringComparison.Ordinal)) : null;
 
     private async Task LoadOctopusChoicesAsync()
     {
@@ -1101,21 +1091,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         return (connections, new TraceRunner(credentials, httpClientFactory: _traceHttp));
     }
 
-    private async Task<T?> RunAsync<T>(string what, Func<CancellationToken, Task<T>> work, int opening = 0)
+    // isOpen: the work opens a repository or folder. Its failure goes to the status line only, because the problems
+    // belong to the repository on show, which stays.
+    private async Task<T?> RunAsync<T>(string what, Func<CancellationToken, Task<T>> work, bool isOpen = false)
     {
         if (_work is not null)
         {
-            if (_workOpening != 0 && opening == 0)
-            {
-                _stoppedOpening = _workOpening;
-            }
-
             await _work.CancelAsync().ConfigureAwait(true);
         }
 
         using var cancellation = new CancellationTokenSource();
         _work = cancellation;
-        _workOpening = opening;
         IsBusy = true;
         BusyText = what;
         try
@@ -1142,8 +1128,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             or ArgumentException or CredentialStoreException or JsonException or TaskCanceledException)
         {
             StatusText = ex.Message;
-            Problems.Add(new ProblemRow("error", ex.Message));
-            ProblemCount = Problems.Count;
+            if (!isOpen)
+            {
+                Problems.Add(new ProblemRow("error", ex.Message));
+                ProblemCount = Problems.Count;
+            }
+
             return default;
         }
         finally
@@ -1151,7 +1141,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             if (ReferenceEquals(_work, cancellation))
             {
                 _work = null;
-                _workOpening = 0;
                 IsBusy = false;
                 BusyText = null;
             }
@@ -1648,21 +1637,42 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private void DeleteDownload()
     {
-        if (_currentDownload is null)
+        DeleteFolder(_currentDownload);
+        _currentDownload = null;
+    }
+
+    private void DeleteOwnedDownloadRoot()
+    {
+        if (!_ownsDownloadRoot || _downloadRoot is null)
         {
             return;
         }
 
         try
         {
-            Directory.Delete(_currentDownload, recursive: true);
+            Directory.Delete(_downloadRoot, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Left for the system's temp cleanup.
+        }
+    }
+
+    private static void DeleteFolder(string? folder)
+    {
+        if (folder is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(folder, recursive: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // A leftover download in the temp folder is harmless.
         }
-
-        _currentDownload = null;
     }
 
     private sealed record Download(string Folder, IReadOnlyList<string> Environments);
@@ -1705,20 +1715,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        // An open still on its way then finds a newer one and deletes its own download rather than taking over.
+        _opening++;
+        _disposed = true;
         _work?.Cancel();
         DeleteDownload();
-        if (_ownsDownloadRoot && _downloadRoot is not null)
-        {
-            try
-            {
-                Directory.Delete(_downloadRoot, recursive: true);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Left for the system's temp cleanup.
-            }
-        }
-
+        DeleteOwnedDownloadRoot();
         if (_ownsHttp)
         {
             _http.Dispose();
