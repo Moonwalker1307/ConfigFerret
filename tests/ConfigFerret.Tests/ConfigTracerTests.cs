@@ -578,6 +578,36 @@ public class ConfigTracerTests
     }
 
     [Theory]
+    [InlineData("", "CFTRAW1_SQLCONNSTR_Db", "CFTRAW1_SQLCONNSTR_Db")]
+    [InlineData("", "CFTRAW2_REDISCACHECONNSTR_Cache", "CFTRAW2_REDISCACHECONNSTR_Cache")]
+    [InlineData("CFTRAW3_", "CFTRAW3_APP_CUSTOMCONNSTR_Db", "APP_CUSTOMCONNSTR_Db")]
+    public void Redacts_a_variable_with_a_connection_string_prefix_anywhere_in_its_name_without_a_key_pattern(string prefix, string variable, string key)
+    {
+        // A provider without a prefix keeps APP_SQLCONNSTR_Db as its own key; the variable name still makes it secret.
+        Environment.SetEnvironmentVariable(variable, "Server=db;Password=fake-raw");
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            var report = ConfigTracer.For(configuration)
+                .WithOptions(o =>
+                {
+                    o.Environment = new Dictionary<string, string?> { [variable] = "Server=db;Password=fake-raw" };
+                    o.SensitiveKeyPattern = null;
+                })
+                .Trace();
+
+            var setting = Assert.Single(report.Settings, s => s.Key == key);
+            Assert.Equal("environment variable " + variable, setting.EffectiveStep!.Source);
+            Assert.True(setting.IsSensitive);
+            Assert.Equal("***", setting.Value);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    [Theory]
     [InlineData("MYSQLCONNSTR_")]
     [InlineData("SQLAZURECONNSTR_")]
     [InlineData("SQLCONNSTR_")]

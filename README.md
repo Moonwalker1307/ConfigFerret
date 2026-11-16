@@ -567,11 +567,12 @@ Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and
 
 ## Secrets
 
-Values are redacted as `***` when they come from a Secret, user secrets, key-per-file or a `*CONNSTR_` environment
-variable, when the key looks secret, or when the setting's trace was cut off (see [Limits](#limits)). Every value set
-by the Azure Key Vault configuration provider (`Azure.Extensions.AspNetCore.Configuration.Secrets`, or the older
-`Microsoft.Extensions.Configuration.AzureKeyVault`), Kralizek's AWS Secrets Manager provider or the VaultSharp Vault
-provider is redacted too, with or without the extension package. A key looks secret when:
+Values are redacted as `***` when they come from a Secret, user secrets, key-per-file or an environment variable
+with a `*CONNSTR_` prefix anywhere in its name (`APP_SQLCONNSTR_Db` too), when the key looks secret, or when the
+setting's trace was cut off (see [Limits](#limits)). Every value set by the Azure Key Vault configuration provider
+(`Azure.Extensions.AspNetCore.Configuration.Secrets`, or the older `Microsoft.Extensions.Configuration.AzureKeyVault`),
+Kralizek's AWS Secrets Manager provider or the VaultSharp Vault provider is redacted too, with or without the extension
+package. A key looks secret when:
 
 - it contains, in any letter case, `password`, `passwd`, `pwd`, `passphrase`, `secret`, `token`, `credential`,
   `bearer`, `apikey`, `connectionstring`, `connstr`, `privatekey`, `accesskey` or `sharedaccess`, also with `_` or `-`
