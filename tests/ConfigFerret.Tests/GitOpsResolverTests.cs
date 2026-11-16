@@ -265,7 +265,7 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal("Flux Kustomization apps replaces ${A}, ${B} after kustomize build; a value with several variables is not traced further", two.Note);
 
         Assert.Equal(
-            "Flux Kustomization apps replaces ${MISSING} after kustomize build; no loaded substitute sets MISSING, so Flux uses the default 'fallback'",
+            "Flux Kustomization apps replaces ${MISSING} after kustomize build; no loaded substitute sets MISSING, so Flux uses the placeholder's default",
             Assert.Single(resolver.Resolve(ConfigMapKey("cfg", "Defaulted"), diagnostics)).Note);
         Assert.Equal(
             "Flux Kustomization apps replaces ${NOTHING} after kustomize build; no loaded substitute sets NOTHING, so Flux uses the placeholder's default, or an empty string",
@@ -342,6 +342,62 @@ public sealed class GitOpsResolverTests : IDisposable
 
         Assert.Empty(resolver.Warnings);
         Assert.Equal("cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
+    }
+
+    [Fact]
+    public void A_key_that_is_secret_by_name_never_shows_its_placeholder_default_in_a_note()
+    {
+        // Neither key comes from a Secret: only their names say they are secret.
+        Write("apps/app.yaml", """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Db__Password: ${DB_PASSWORD:=fake-default-pw}
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  env:
+                    - name: Api__Token
+                      value: ${API_TOKEN:-fake-default-token}
+            """);
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Db__Password: fake-default-pw
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - configMapRef: {name: cfg}
+                  env:
+                    - name: Api__Token
+                      value: fake-default-token
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests)
+            .WithGitOps(Kustomization("    substitute: {REGION: eu}"), new GitOpsOptions { RepositoryRoot = _root })
+            .Trace();
+        var output = report.ToText() + report.ToJson() + string.Join("\n", report.Warnings);
+
+        Assert.Equal(["Api__Token", "Db__Password"], report.Settings.Select(s => s.Key));
+        Assert.All(report.Settings, s => Assert.True(s.IsSensitive));
+        Assert.DoesNotContain("fake-default-pw", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-default-token", output, StringComparison.Ordinal);
+        Assert.All(report.Settings, s => Assert.EndsWith(
+            ", so Flux uses the placeholder's default",
+            Assert.Single(Assert.Single(s.Steps).Origins).Note,
+            StringComparison.Ordinal));
     }
 
     [Theory]

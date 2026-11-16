@@ -71,7 +71,7 @@
               "location": "line 16, workload billing, container billing env Billing__Mode",
               "value": "${MODE:=live}",
               "effective": true,
-              "note": "Flux Kustomization billing replaces ${MODE} after kustomize build; no loaded substitute sets MODE, so Flux uses the default 'live'"
+              "note": "Flux Kustomization billing replaces ${MODE} after kustomize build; no loaded substitute sets MODE, so Flux uses the placeholder's default"
             }
           ]
         }
@@ -174,7 +174,7 @@
               "location": "line 9, ConfigMap billing-config key Billing__Tier",
               "value": "${TIER:=standard}",
               "effective": true,
-              "note": "Flux Kustomization billing replaces ${TIER} after kustomize build; no loaded substitute sets TIER, so Flux uses the default 'standard'"
+              "note": "Flux Kustomization billing replaces ${TIER} after kustomize build; no loaded substitute sets TIER, so Flux uses the placeholder's default"
             }
           ]
         }
