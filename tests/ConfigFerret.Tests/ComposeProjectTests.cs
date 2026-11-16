@@ -1185,10 +1185,8 @@ public class ComposeProjectTests
     [Fact]
     public void Reads_a_project_behind_a_junction_to_another_drive()
     {
-        if (KustomizationGeneratorTests.FolderOnSecondDrive() is not { } other)
-        {
-            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
-        }
+        var other = KustomizationGeneratorTests.FolderOnSecondDrive();
+        Assert.SkipWhen(other is null, "Needs Windows and a second drive, such as D: on GitHub's runners.");
 
         using var folder = new TempFolder();
         try
@@ -1199,10 +1197,7 @@ public class ComposeProjectTests
             File.WriteAllText(Path.Join(src, "app", "app.envfile"), "B=from-env-file\n");
             File.WriteAllText(Path.Join(src, "app", "compose.yaml"), "services:\n  app:\n    env_file: app.envfile\n    environment:\n      A: $A\n");
             var junction = Path.Join(folder.Path, "src");
-            if (!KustomizationGeneratorTests.TryCreateJunction(junction, src))
-            {
-                return; // The junction could not be made here.
-            }
+            Assert.SkipUnless(KustomizationGeneratorTests.TryCreateJunction(junction, src), "The junction could not be made here.");
 
             var project = ComposeProject.Load(Path.Join(junction, "app", "compose.yaml"));
 
@@ -1222,19 +1217,14 @@ public class ComposeProjectTests
     [Fact]
     public void Warns_about_a_dotenv_that_is_a_junction_to_another_drive()
     {
-        if (KustomizationGeneratorTests.FolderOnSecondDrive() is not { } other)
-        {
-            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
-        }
+        var other = KustomizationGeneratorTests.FolderOnSecondDrive();
+        Assert.SkipWhen(other is null, "Needs Windows and a second drive, such as D: on GitHub's runners.");
 
         using var folder = new TempFolder();
         try
         {
             var compose = folder.Write("compose.yaml", "services:\n  app:\n    environment:\n      A: ${A:-default}\n");
-            if (!KustomizationGeneratorTests.TryCreateJunction(Path.Join(folder.Path, ".env"), other))
-            {
-                return; // The junction could not be made here.
-            }
+            Assert.SkipUnless(KustomizationGeneratorTests.TryCreateJunction(Path.Join(folder.Path, ".env"), other), "The junction could not be made here.");
 
             var project = ComposeProject.Load(compose);
 
