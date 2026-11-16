@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Globalization;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
@@ -13,8 +12,6 @@ namespace ConfigFerret.GitOps;
 /// </summary>
 internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
 {
-    private static readonly SearchValues<char> KustomizeHashAlphabet = SearchValues.Create("2456789bcdfghkmt"); // the characters of the hash kustomize appends to a generated name
-
     private readonly GitOpsApplication _app;
     private readonly HelmChart? _chart;
     private readonly HelmResolver? _helm;
@@ -195,9 +192,7 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     private static bool NameMatches(string name, string rendered, GitOpsKustomize kustomize)
     {
         var full = (kustomize.NamePrefix ?? "") + name + (kustomize.NameSuffix ?? "");
-        var dash = rendered.LastIndexOf('-');
-        var hashed = dash > 0 && rendered.Length - dash - 1 == 10 && rendered.AsSpan(dash + 1).IndexOfAnyExcept(KustomizeHashAlphabet) < 0;
-        var unhashed = hashed ? rendered[..dash] : rendered;
+        var unhashed = KustomizeHash.Strip(rendered) ?? rendered;
         return rendered == name || rendered == full || unhashed == name || unhashed == full;
     }
 

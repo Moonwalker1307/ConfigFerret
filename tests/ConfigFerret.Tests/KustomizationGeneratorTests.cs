@@ -32,14 +32,29 @@ public sealed class KustomizationGeneratorTests : IDisposable
         var k = Load();
 
         Assert.Equal("cfg", k.Find("cfg", isSecret: false)?.Name);
-        Assert.Equal("cfg", k.Find("cfg-abcdefghij", isSecret: false)?.Name);
-        Assert.Equal("sec", k.Find("sec-0123456789", isSecret: true)?.Name);
+        Assert.Equal("cfg", k.Find("cfg-5f7h8k9m2t", isSecret: false)?.Name);
+        Assert.Equal("sec", k.Find("sec-2456789bcd", isSecret: true)?.Name);
         Assert.Null(k.Find("cfg", isSecret: true));
-        Assert.Null(k.Find("cfg-abcdefghij", isSecret: true));
-        Assert.Null(k.Find("cfg-abcdefghi", isSecret: false));
-        Assert.Null(k.Find("cfg-abcdefghijk", isSecret: false));
-        Assert.Null(k.Find("other-abcdefghij", isSecret: false));
+        Assert.Null(k.Find("cfg-5f7h8k9m2t", isSecret: true));
+        Assert.Null(k.Find("cfg-5f7h8k9m2", isSecret: false));
+        Assert.Null(k.Find("cfg-5f7h8k9m2tk", isSecret: false));
+        Assert.Null(k.Find("other-5f7h8k9m2t", isSecret: false));
         Assert.Throws<ArgumentNullException>(() => k.Find(null!, isSecret: false));
+    }
+
+    [Fact]
+    public void A_last_word_of_ten_letters_is_not_a_hash_suffix()
+    {
+        Write("app/kustomization.yaml", """
+            configMapGenerator:
+              - name: billing-config
+                literals: [A=1]
+            """);
+        var k = Load();
+
+        // kustomize's hash uses only 2456789bcdfghkmt, so production is a word, and billing-config-production another ConfigMap.
+        Assert.Null(k.Find("billing-config-production", isSecret: false));
+        Assert.Equal("billing-config", k.Find("billing-config-5f7h8k9m2t", isSecret: false)?.Name);
     }
 
     [Fact]
@@ -569,7 +584,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
         var resolver = new KustomizeResolver(Load());
         var diagnostics = new TraceDiagnostics();
 
-        var secret = Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.KubernetesSecret, Source = "x", Reference = new SecretKeyRef("s-abcdefghij", "A") }, diagnostics));
+        var secret = Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.KubernetesSecret, Source = "x", Reference = new SecretKeyRef("s-5f7h8k9m2t", "A") }, diagnostics));
         var config = Assert.Single(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.KubernetesConfigMap, Source = "x", Reference = new ConfigMapKeyRef("c", "A") }, diagnostics));
 
         Assert.Equal(LayerKind.Kustomize, secret.Kind);

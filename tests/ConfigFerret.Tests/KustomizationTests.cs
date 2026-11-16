@@ -9,7 +9,7 @@ public class KustomizationTests
     {
         var k = Kustomization.Load(TestPaths.Data("kustomize", "overlays", "prod"));
 
-        var generated = k.Find("prod-api-config-abcdefghij", isSecret: false);
+        var generated = k.Find("prod-api-config-5f7h8k9m2t", isSecret: false);
 
         Assert.NotNull(generated);
         Assert.Equal("prod-api-config", generated.Name);
@@ -71,7 +71,7 @@ public class KustomizationTests
             var kustomization = Kustomization.Load(root.FullName);
 
             Assert.Equal("fast", kustomization.Find("api", isSecret: false)!.Keys["MODE"][^1].Value);
-            Assert.Equal("hunter2", kustomization.Find("api-0123456789", isSecret: true)!.Keys["PASSWORD"][^1].Value);
+            Assert.Equal("hunter2", kustomization.Find("api-2456789bcd", isSecret: true)!.Keys["PASSWORD"][^1].Value);
             Assert.Single(kustomization.ConfigMaps);
             Assert.Single(kustomization.Secrets);
         }

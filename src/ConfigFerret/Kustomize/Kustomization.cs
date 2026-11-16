@@ -100,8 +100,7 @@ public sealed class Kustomization
         }
 
         // kustomize appends "-" and a 10-character hash.
-        var dash = name.LastIndexOf('-');
-        if (dash > 0 && name.Length - dash - 1 == 10 && generated.TryGetValue(name[..dash], out var hashed))
+        if (KustomizeHash.Strip(name) is { } unhashed && generated.TryGetValue(unhashed, out var hashed))
         {
             return hashed;
         }
