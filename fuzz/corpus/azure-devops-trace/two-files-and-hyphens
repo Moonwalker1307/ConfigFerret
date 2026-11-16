@@ -1,0 +1,17 @@
+Hvariables:
+- group: shared
+- name: Db.Timeout
+  value: 20
+- name: Alias-Timeout
+  value: $(Db.Timeout)
+steps:
+- script: dotnet run
+  env:
+    DB_PASSWORD: $(Db.Password)
+    ALIAS: $(Alias-Timeout)
+    CONN: $(sql-connection-string)
+%%
+variables:
+- group: release
+- name: Db.Timeout
+  value: $(Release.Timeout)

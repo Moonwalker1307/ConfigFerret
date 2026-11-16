@@ -52,7 +52,7 @@ case "$target" in
   aws-secrets|aws-parameters) dict=(-dict="$here/dictionaries/aws.dict") ;;
   env-names|desktop-tar|dotenv|dotenv-layers|secret-audit) ;;
   gcp-secrets) dict=(-dict="$here/dictionaries/gcp.dict") ;;
-  azure-devops|gitlab) dict=(-dict="$here/dictionaries/cicd.dict") ;;
+  azure-devops|gitlab|azure-devops-trace|gitlab-trace) dict=(-dict="$here/dictionaries/cicd.dict") ;;
   *) dict=(-dict="$here/dictionaries/yaml.dict") ;;
 esac
 
