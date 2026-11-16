@@ -13,7 +13,8 @@ public sealed class AzureKeyVaultTraceOptions
     /// <summary>
     /// When true (the default), a value the Azure Key Vault configuration provider
     /// (<c>AddAzureKeyVault</c>) set in the app is linked to the secret it maps to the same key. These links are marked as
-    /// inferred, since the provider may read another vault.
+    /// inferred, since the provider may read another vault. This only decides the link: a value the provider set is hidden
+    /// either way.
     /// </summary>
     public bool MatchConfigurationProvider { get; set; } = true;
 

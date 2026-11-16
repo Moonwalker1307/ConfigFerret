@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration.EnvironmentVariables;
 
 namespace ConfigFerret.Azure.Tests;
 
@@ -32,6 +33,22 @@ internal static class TestLayers
 internal sealed class AzureAppConfigurationProvider(Dictionary<string, string?> data) : ConfigurationProvider, IConfigurationSource
 {
     public override void Load() => Data = new Dictionary<string, string?>(data, StringComparer.OrdinalIgnoreCase);
+
+    public IConfigurationProvider Build(IConfigurationBuilder builder) => this;
+}
+
+/// <summary>A Key Vault provider of the app's own, which the core does not know: only its type name says it reads Key Vault.</summary>
+internal sealed class CachedAzureKeyVaultProvider(Dictionary<string, string?> data) : ConfigurationProvider, IConfigurationSource
+{
+    public override void Load() => Data = new Dictionary<string, string?>(data, StringComparer.OrdinalIgnoreCase);
+
+    public IConfigurationProvider Build(IConfigurationBuilder builder) => this;
+}
+
+/// <summary>Environment variables from a dictionary instead of the test process, described as environment variables.</summary>
+internal sealed class FakeEnvironmentVariables(Dictionary<string, string?> variables) : EnvironmentVariablesConfigurationProvider, IConfigurationSource
+{
+    public override void Load() => Data = new Dictionary<string, string?>(variables, StringComparer.OrdinalIgnoreCase);
 
     public IConfigurationProvider Build(IConfigurationBuilder builder) => this;
 }
