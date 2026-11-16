@@ -158,9 +158,19 @@ public sealed class GitHubAccount
         var target = (OperatingSystem.IsWindows()
             ? Directory.CreateDirectory(folder)
             : Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)).FullName;
-        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await ExtractAsync(body, target, cancellationToken).ConfigureAwait(false);
-        return target;
+        try
+        {
+            await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            await ExtractAsync(body, target, cancellationToken).ConfigureAwait(false);
+            return target;
+        }
+        catch
+        {
+            // A download that is cancelled or fails leaves nothing behind. The folder is new, and Directory.Delete
+            // removes a link rather than what it points to, so nothing outside the folder is touched.
+            DeleteQuietly(target);
+            throw;
+        }
     }
 
     /// <summary>
@@ -231,6 +241,18 @@ public sealed class GitHubAccount
             {
                 await data.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
             }
+        }
+    }
+
+    private static void DeleteQuietly(string folder)
+    {
+        try
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The error that stopped the download matters more. What is left goes with the download folder.
         }
     }
 
