@@ -86,7 +86,8 @@ The messages never include the token.
 - **Pipeline files** (`AddPipeline`): every `NAME: $(Var)` line outside a `variables:` block, for example in a step's
   `env:` block, links `NAME` to `Var`. `$[variables.Var]` and `${{ variables.Var }}` work too. The report names a file
   by its path from the current directory (its full path when it is outside it), so pipeline files of one name in
-  different folders are told apart.
+  different folders are told apart. Variable names may hold `-`, as Key Vault secret names such as
+  `sql-connection-string` do, and inside `$(...)` and `variables['...']` spaces too.
 - **Same name** (on by default, `MatchByName`): a layer named like the variable, or named the way Azure Pipelines
   exposes it to scripts: upper case with `.` turned into `_`, so `Db.Timeout` matches `DB_TIMEOUT`. These links are
   marked as inferred.

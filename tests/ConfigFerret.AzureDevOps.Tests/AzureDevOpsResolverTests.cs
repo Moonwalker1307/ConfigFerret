@@ -122,6 +122,44 @@ public class AzureDevOpsResolverTests
     }
 
     [Fact]
+    public void Reads_variable_names_with_a_hyphen_or_a_space()
+    {
+        // Key Vault secret names hold hyphens, and Azure Pipelines variable names may hold spaces.
+        const string pipeline = "variables:\n- name: app-name\n  value: orders\n- name: Alias.Timeout\n  value: $(shared timeout)\n"
+            + "steps:\n- script: ./run.sh\n  env:\n    ConnectionStrings__Default: $(sql-connection-string)\n    Db__Password: $(Db--Password)\n"
+            + "    Cache__Mode: $[variables['cache mode']]\n    Db__Host: $(Db.Host)\n";
+        var options = new AzureDevOpsTraceOptions().AddPipelineText(pipeline, "azure-pipelines.yml");
+        var jobs = new AzureDevOpsTraceOptions().AddPipelineText("jobs:\n- job: run\n  variables:\n    feature-flag: on\n", "azure-pipelines.yml");
+
+        Assert.Equal(
+            ["ConnectionStrings__Default>sql-connection-string", "Db__Password>Db--Password", "Cache__Mode>cache mode", "Db__Host>Db.Host"],
+            options.Mappings.Select(m => $"{m.Name}>{m.VariableName}"));
+        Assert.Equal(["app-name=orders", "Alias.Timeout=$(shared timeout)"], options.Variables.Select(v => $"{v.Name}={v.Value}"));
+        Assert.Equal("shared timeout", AzureDevOpsTraceOptions.MacroTarget(options.Variables[1].Value));
+        var flag = Assert.Single(jobs.Variables);
+        Assert.Equal("feature-flag=on", $"{flag.Name}={flag.Value}");
+    }
+
+    [Fact]
+    public void Traces_an_env_link_to_a_key_vault_secret_with_hyphens()
+    {
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(9, "api-kv", AzureDevOpsGroupType.AzureKeyVault, null, "contoso-prod", null,
+            [
+                new("Db--Password", null, false, "api-kv", 9, AzureDevOpsGroupType.AzureKeyVault, "contoso-prod"),
+            ]),
+        ]);
+        const string pipeline = "variables:\n- group: api-kv\nsteps:\n- script: ./run.sh\n  env:\n    Db__Password: $(Db--Password)\n";
+
+        var step = Assert.Single(Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), groups).Resolve(EnvStep("Db__Password", "p"), new TraceDiagnostics()));
+
+        Assert.Equal("Azure DevOps variable group api-kv secret Db--Password", step.Source);
+        Assert.True(step.IsSensitive);
+        Assert.Contains("Azure Key Vault contoso-prod", step.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Notes_a_key_vault_group_whose_vault_is_unknown()
     {
         var groups = new AzureDevOpsVariableGroups("p", [new(1, "kv", AzureDevOpsGroupType.AzureKeyVault, null, null, null, [new("S", null, true, "kv", 1, AzureDevOpsGroupType.AzureKeyVault)])]);

@@ -259,21 +259,25 @@ public sealed partial class AzureDevOpsTraceOptions
     [GeneratedRegex("""^variables\s*:\s*(?:#.*)?$""", RegexOptions.CultureInvariant)]
     private static partial Regex VariablesKey();
 
+    // Variable names start with a letter or "_" and may hold letters, digits, "_", "." and "-", since a group linked to a
+    // Key Vault takes the vault's secret names, such as sql-connection-string or Db--Password. Inside $(...) and
+    // variables['...'] a name may hold spaces too; the dotted form variables.Var cannot hold "-", which would subtract.
+
     // KEY: VALUE inside a variables block. Keys that are template expressions (${{ if ... }}) do not match.
-    [GeneratedRegex("""^(?<kq>['"]?)(?<key>[A-Za-z_][A-Za-z0-9_.]*)\k<kq>\s*:(?:\s+(?<value>.*))?$""", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("""^(?<kq>['"]?)(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\k<kq>\s*:(?:\s+(?<value>.*))?$""", RegexOptions.CultureInvariant)]
     private static partial Regex KeyValue();
 
-    [GeneratedRegex("""^[A-Za-z_][A-Za-z0-9_.]*$""", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("""^[A-Za-z_][A-Za-z0-9_.-]*$""", RegexOptions.CultureInvariant)]
     private static partial Regex VariableName();
 
     // NAME: $(Var), NAME: $[variables.Var], NAME: ${{ variables.Var }}, or variables['Var'] in either expression,
     // name and value optionally quoted, optionally a "- " list item, optionally a trailing comment.
     [GeneratedRegex(
-        """^(?:-\s+)?(?<kq>['"]?)(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\k<kq>\s*:\s*(?<q>['"]?)(?:\$\((?<var>[A-Za-z_][A-Za-z0-9_.]*)\)|\$\[\s*variables(?:\.(?<var>[A-Za-z_][A-Za-z0-9_.]*)|\[\s*'(?<var>[A-Za-z_][A-Za-z0-9_.]*)'\s*\])\s*\]|\$\{\{\s*variables(?:\.(?<var>[A-Za-z_][A-Za-z0-9_.]*)|\[\s*'(?<var>[A-Za-z_][A-Za-z0-9_.]*)'\s*\])\s*\}\})\k<q>\s*(?:#.*)?$""",
+        """^(?:-\s+)?(?<kq>['"]?)(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\k<kq>\s*:\s*(?<q>['"]?)(?:\$\((?<var>[A-Za-z_](?:[A-Za-z0-9_. -]*[A-Za-z0-9_.-])?)\)|\$\[\s*variables(?:\.(?<var>[A-Za-z_][A-Za-z0-9_.]*)|\[\s*'(?<var>[A-Za-z_](?:[A-Za-z0-9_. -]*[A-Za-z0-9_.-])?)'\s*\])\s*\]|\$\{\{\s*variables(?:\.(?<var>[A-Za-z_][A-Za-z0-9_.]*)|\[\s*'(?<var>[A-Za-z_](?:[A-Za-z0-9_. -]*[A-Za-z0-9_.-])?)'\s*\])\s*\}\})\k<q>\s*(?:#.*)?$""",
         RegexOptions.CultureInvariant)]
     private static partial Regex Link();
 
-    [GeneratedRegex("""^\s*\$\((?<var>[A-Za-z_][A-Za-z0-9_.]*)\)\s*$""", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("""^\s*\$\((?<var>[A-Za-z_](?:[A-Za-z0-9_. -]*[A-Za-z0-9_.-])?)\)\s*$""", RegexOptions.CultureInvariant)]
     private static partial Regex WholeMacro();
 }
 
