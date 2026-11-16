@@ -640,6 +640,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
   args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret,
   directly or through other `${VAR}` references, is rejected, since paths and names are never redacted.
+- Docker Compose: like compose, an included file sees the environment of the project that includes it (the shell,
+  then that project's `.env`) first; its own `env_file` list, or its project directory's `.env`, only adds variables
+  that are not set there. One load reads at most 1,000 included projects, counting a file again for each environment
+  it is included with, and throws beyond that.
 - Docker Compose: a file that a compose file names (a config's or secret's `file`, an `env_file`, an `extends` file,
   an `include` and its env files) and the project's `.env` are read only from in or below the project directory,
   after following symbolic links (a link to another drive, share or device counts as outside, unless the project
