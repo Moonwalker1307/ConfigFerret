@@ -515,6 +515,19 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Names_a_feature_flag_stored_under_the_bare_prefix_by_that_key()
+    {
+        var handler = Handler()
+            .Respond(KeysPath(), Page(null))
+            .Respond(FlagsPath(), Page(null, Kv(".appconfig.featureflag/", """{"id":"Hidden","enabled":true}""", contentType: FeatureFlagType)));
+
+        var settings = await Load(handler);
+
+        var step = Assert.Single(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "FeatureManagement:Hidden", "True"), new TraceDiagnostics()));
+        Assert.Equal("Azure App Configuration feature flag .appconfig.featureflag/ (contoso)", step.Source);
+    }
+
+    [Fact]
     public async Task Names_a_feature_flag_by_its_stored_key_whatever_prefix_is_trimmed()
     {
         var handler = Handler()

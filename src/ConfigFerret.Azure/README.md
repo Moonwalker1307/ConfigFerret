@@ -130,8 +130,8 @@ label wins, as with the provider's `Select` calls. Feature flags (`.appconfig.fe
 `FeatureManagement:<name>`, and `TrimKeyPrefixes` trims that key as the provider does: with `FeatureManagement:`, the
 flag `Beta` is traced as `Beta`. The keys the provider writes under a flag that is on and has filters
 (`EnabledFor:<i>:Name`, `EnabledFor:<i>:Parameters:...` and `RequirementType`, such as `Beta:EnabledFor:0:Name`) lead
-to the flag, and other keys under it do not. A flag is
-always named by its stored key. Like
+to the flag, and other keys under it do not. A flag read from the store is named by its stored key: the part after
+`.appconfig.featureflag/`, or the whole key when nothing follows it, never the `id` in its JSON. Like
 `UseFeatureFlags()`, they are read with no label, whatever `Labels` holds; set
 `FeatureFlagLabels` to the labels the app gives `UseFeatureFlags` (`FeatureFlagOptions.Select`). Earlier versions read
 flags with the labels in `Labels`; to keep that, put the same labels in `FeatureFlagLabels`. A Key Vault reference
