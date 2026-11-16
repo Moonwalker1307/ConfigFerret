@@ -57,6 +57,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private string? _currentKey;
     private string? _currentDownload;
     private TraceResult? _lastResult;
+
+    // Whether the result on show was traced with secret values shown, which can differ from the switch: a trace after
+    // the switch changed may fail or not yet be done.
+    private bool _lastResultRevealed;
+
+    // The setting selected when the switch went off cleared the result, for the masked result to select again.
+    private string? _selectedKeyBeforeMasking;
+
     private bool _populating;
     private bool _clearing;
     private CancellationTokenSource? _work;
@@ -449,6 +457,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool RevealSecrets { get; set; }
 
+    /// <summary>
+    /// True when the last export wrote secret values in clear. It is the export's own, so it holds even when the switch
+    /// went off while the file was written or sent.
+    /// </summary>
+    public bool LastExportHoldsSecrets { get; private set; }
+
     /// <summary>A line about the last action.</summary>
     [ObservableProperty]
     public partial string? StatusText { get; set; }
@@ -569,7 +583,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         ApplyFilter();
     }
 
-    partial void OnRevealSecretsChanged(bool value) => RetraceOnChoice();
+    partial void OnRevealSecretsChanged(bool value)
+    {
+        // Secret values leave the view, the secrets panel and the export the moment the switch goes off, rather than when
+        // the next trace is done: that trace can fail, be refused or be stopped.
+        if (!value && _lastResultRevealed)
+        {
+            var selected = SelectedRow?.Key;
+            ClearResult();
+            _selectedKeyBeforeMasking = selected;
+            StatusText = null;
+        }
+
+        RetraceOnChoice();
+    }
 
     partial void OnIsSidebarOpenChanged(bool value)
     {
@@ -1077,7 +1104,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         ShowDiscoveries(scan, profile);
         if (result is not null)
         {
-            ShowResult(result, notes);
+            ShowResult(result, notes, reveal);
         }
     }
 
@@ -1177,7 +1204,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>The result on show, or null. For tests.</summary>
     internal TraceResult? LastResult => _lastResult;
 
-    internal void ShowResult(TraceResult result, IReadOnlyList<string> notes)
+    internal void ShowResult(TraceResult result, IReadOnlyList<string> notes, bool revealed)
     {
         // The result keeps its sources for the life of the tab, and nothing reads the rendered manifests after the trace.
         foreach (var kubernetes in result.Sources.Select(s => s.Source).OfType<KubernetesSource>())
@@ -1186,7 +1213,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         _lastResult = result;
-        var previousKey = SelectedRow?.Key;
+        _lastResultRevealed = revealed;
+        var previousKey = SelectedRow?.Key ?? _selectedKeyBeforeMasking;
+        _selectedKeyBeforeMasking = null;
         var dead = result.DeadSettings.ToDictionary(d => d.Key, d => d.Reason, StringComparer.OrdinalIgnoreCase);
         var ratings = result.Secrets.Where(s => s.Rating != SecretRating.NotSecret)
             .GroupBy(s => s.Key, StringComparer.Ordinal)
@@ -1271,7 +1300,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         var used = result.Sources.Count(s => s.Problem is null);
         StatusText = string.Create(
             CultureInfo.CurrentCulture,
-            $"Traced {TotalCount} settings from {used} of {result.Sources.Count} sources at {DateTime.Now:t}.{(RevealSecrets ? " Secret values are shown." : string.Empty)}");
+            $"Traced {TotalCount} settings from {used} of {result.Sources.Count} sources at {DateTime.Now:t}.{(revealed ? " Secret values are shown." : string.Empty)}");
     }
 
     // The kinds of source the Sources drop-down turns on and off. App settings are the trace's starting point, so null.
@@ -1352,10 +1381,18 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private void ClearResult()
     {
         _lastResult = null;
+        _lastResultRevealed = false;
+        _selectedKeyBeforeMasking = null;
         _allRows = [];
         Rows.Clear();
         Problems.Clear();
         SecretRows.Clear();
+
+        // The tick lists are built from the rows: the value one holds every value shown, secret ones too.
+        foreach (var filter in ColumnFilters)
+        {
+            filter.Load([]);
+        }
         TotalCount = RowCount = OverriddenCount = UpstreamCount = ProtectedCount = CheckCount = ExposedCount = ProblemCount = DeadCount = WorkflowOnlyCount = DuplicateCount = 0;
         DeadScanText = null;
         SelectedRow = null;
@@ -1561,10 +1598,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task ExportAsync(string suggestedName, Func<ProvenanceReport, string> render)
     {
-        if (Dialogs is null || _lastResult is null)
+        LastExportHoldsSecrets = false;
+        if (Dialogs is null || _lastResult is not { } result)
         {
             return;
         }
+
+        var holdsSecrets = _lastResultRevealed;
 
         var path = await Dialogs.SaveFileAsync("Export the report", suggestedName).ConfigureAwait(true);
         if (path is null)
@@ -1572,10 +1612,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // The result on show can change while the dialog is open, for example when the switch goes off. Then nothing is
+        // written, so the file holds no values the view no longer shows.
+        if (!ReferenceEquals(result, _lastResult))
+        {
+            StatusText = "The trace changed while you chose where to save. Export again.";
+            return;
+        }
+
+        LastExportHoldsSecrets = holdsSecrets;
         try
         {
-            await File.WriteAllTextAsync(path, render(_lastResult.Report)).ConfigureAwait(true);
-            StatusText = $"Saved {path}." + (RevealSecrets ? " It holds secret values: don't share it." : string.Empty);
+            await File.WriteAllTextAsync(path, render(result.Report)).ConfigureAwait(true);
+            StatusText = $"Saved {path}." + (holdsSecrets ? " It holds secret values: don't share it." : string.Empty);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -15,7 +15,7 @@ public sealed class VariableRowsTests : IDisposable
     private MainWindowViewModel Show(TraceResult result)
     {
         var viewModel = new MainWindowViewModel(new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")), new InMemoryCredentialStore());
-        viewModel.ShowResult(result, []);
+        viewModel.ShowResult(result, [], revealed: false);
         return viewModel;
     }
 
@@ -130,7 +130,7 @@ public sealed class VariableRowsTests : IDisposable
         Assert.True(viewModel.LayersFilter.IsActive);
         Assert.Equal("3 of 4 ticked", viewModel.LayersFilter.TickedText);
 
-        viewModel.ShowResult(Result(), []);
+        viewModel.ShowResult(Result(), [], revealed: false);
 
         Assert.False(viewModel.LayersFilter.AllChoices.Single(c => c.Text == "Octopus").IsChecked);
         Assert.DoesNotContain(viewModel.Rows, r => r.Key == "Legacy.Url");
