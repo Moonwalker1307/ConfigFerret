@@ -44,4 +44,8 @@ public sealed record AwsParameter(
 
 /// <summary>A pointer to an AWS Systems Manager Parameter Store parameter.</summary>
 /// <param name="Name">The full parameter name.</param>
-public sealed record AwsParameterRef(string Name) : SourceRef;
+public sealed record AwsParameterRef(string Name) : SourceRef
+{
+    /// <summary>The last part of the name: the folders above it are where the parameter is kept, not its name.</summary>
+    protected override string? ValueName() => Name[(Name.LastIndexOf('/') + 1)..];
+}

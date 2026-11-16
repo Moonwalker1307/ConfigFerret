@@ -23,12 +23,16 @@ public sealed class TraceOptions
 
     /// <summary>
     /// When false (the default), values that come from Secrets, user secrets or key-per-file mounts,
-    /// or whose key matches <see cref="SensitiveKeyPattern"/>, are replaced with <c>***</c> in the report. So are the
+    /// or whose key or upstream name (such as a ConfigMap key or a GitHub variable) matches <see cref="SensitiveKeyPattern"/>,
+    /// are replaced with <c>***</c> in the report. So are the
     /// values of a setting whose trace was cut off (see <see cref="MaxDepth"/>).
     /// </summary>
     public bool RevealSensitiveValues { get; set; }
 
-    /// <summary>Keys matching this pattern (case-insensitive) are treated as secret. Set to null to turn off.</summary>
+    /// <summary>
+    /// Keys matching this pattern (case-insensitive) are treated as secret, and so are upstream values whose own name
+    /// matches it (see <see cref="SourceRef"/>). Set to null to turn off.
+    /// </summary>
     public Regex? SensitiveKeyPattern { get; set; } = new(DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>

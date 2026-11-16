@@ -74,27 +74,56 @@ public enum LayerKind
 }
 
 /// <summary>A machine-readable pointer to where a step's value came from, used to look further upstream.</summary>
-public abstract record SourceRef;
+public abstract record SourceRef
+{
+    /// <summary>
+    /// The name of the value itself, such as a ConfigMap key, an environment variable or a GitHub variable, without the
+    /// folders it is kept in, or null when the pointer names only where values are kept, such as a file. Unless <see cref="TraceOptions.RevealSensitiveValues"/>
+    /// is on, a trace hides the value of a step whose name matches <see cref="TraceOptions.SensitiveKeyPattern"/>, as it
+    /// does for a key. Override it in a custom reference that points at a named value.
+    /// </summary>
+    protected internal virtual string? ValueName() => null;
+}
 
 /// <summary>An environment variable seen by the process.</summary>
 /// <param name="Name">The variable name, for example <c>DB__Timeout</c>.</param>
-public sealed record EnvironmentVariableRef(string Name) : SourceRef;
+public sealed record EnvironmentVariableRef(string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Name;
+}
 
 /// <summary>A file on disk, for example an appsettings file or a key-per-file secret.</summary>
 /// <param name="Path">The full path of the file.</param>
 public sealed record FileRef(string Path) : SourceRef;
 
 /// <summary>A key in a Kubernetes ConfigMap.</summary>
-public sealed record ConfigMapKeyRef(string Name, string Key) : SourceRef;
+public sealed record ConfigMapKeyRef(string Name, string Key) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Key;
+}
 
 /// <summary>A key in a Kubernetes Secret.</summary>
-public sealed record SecretKeyRef(string Name, string Key) : SourceRef;
+public sealed record SecretKeyRef(string Name, string Key) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Key;
+}
 
 /// <summary>A literal env entry written in a Kubernetes workload's container spec.</summary>
-public sealed record WorkloadEnvRef(string Workload, string Container, string Name) : SourceRef;
+public sealed record WorkloadEnvRef(string Workload, string Container, string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Name;
+}
 
 /// <summary>A path in the merged Helm values, for example <c>db.timeout</c>.</summary>
-public sealed record HelmValueRef(string Path) : SourceRef;
+public sealed record HelmValueRef(string Path) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Path;
+}
 
 /// <summary>
 /// A secret in an external store that an operator copies into a Kubernetes Secret key: an External Secrets Operator

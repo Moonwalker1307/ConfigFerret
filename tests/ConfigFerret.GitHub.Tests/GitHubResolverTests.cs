@@ -180,6 +180,38 @@ public class GitHubResolverTests
         }
     }
 
+    [Fact]
+    public void Redacts_a_value_a_workflow_takes_from_a_variable_named_like_a_secret_end_to_end()
+    {
+        const string prefix = "CFGHNAMETEST_";
+        const string secret = "fake-smtp-password";
+        Environment.SetEnvironmentVariable(prefix + "Mail__Login", secret);
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            var variables = new GitHubVariables([new("SMTP_PASSWORD", secret, GitHubVariableKind.Variable, GitHubVariableScope.Repository, "contoso/api")]);
+
+            var report = ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [prefix + "Mail__Login"] = secret })
+                .WithGitHub(variables, o => o.AddWorkflowText($"jobs:\n  deploy:\n    env:\n      {prefix}Mail__Login: ${{{{ vars.SMTP_PASSWORD }}}}\n", "deploy.yml"))
+                .Trace();
+
+            var login = report.Find("Mail:Login")!;
+            var github = Assert.Single(login.Steps[0].Origins);
+            Assert.Equal("GitHub repository variable SMTP_PASSWORD", github.Source);
+            Assert.True(github.IsSensitive);
+            Assert.Equal("***", github.Value);
+            Assert.True(login.IsSensitive);
+            Assert.Equal("***", login.Value);
+            Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(prefix + "Mail__Login", null);
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

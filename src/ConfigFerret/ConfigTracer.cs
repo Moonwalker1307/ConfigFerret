@@ -207,12 +207,27 @@ public sealed class ConfigTracer
             // A trace that was cut off may have stopped before the secret it would have found, so it is hidden like a
             // setting whose key looks secret.
             var keySensitive = budget.SettingCut || (Options.SensitiveKeyPattern?.IsMatch(key) ?? false);
-            var effectiveSensitive = enriched.Count > 0 && IsSensitiveDeep(enriched[^1]);
-            var sensitive = keySensitive || effectiveSensitive;
+            var ownNames = OwnNames(key, enriched);
+            var effectiveSensitive = false;
+            List<ProvenanceStep> redacted;
+            if (Options.RevealSensitiveValues)
+            {
+                redacted = enriched;
+                effectiveSensitive = enriched.Count > 0 && IsSensitiveDeep(enriched[^1], ownNames);
+            }
+            else
+            {
+                redacted = new List<ProvenanceStep>(enriched.Count);
+                foreach (var step in enriched)
+                {
+                    var (hidden, deep) = Redact(step, ownNames, keySensitive, inherited: false);
+                    redacted.Add(hidden);
+                    effectiveSensitive = deep;
+                }
+            }
 
-            var redacted = Options.RevealSensitiveValues
-                ? enriched
-                : enriched.Select(s => Redact(s, keySensitive, inherited: false)).ToList();
+            // The last step is the one that wins, so effectiveSensitive now says whether its winning chain is secret.
+            var sensitive = keySensitive || effectiveSensitive;
 
             var value = effectiveValue;
             if (sensitive && !Options.RevealSensitiveValues && value is not null)
@@ -337,24 +352,68 @@ public sealed class ConfigTracer
         return chain;
     }
 
-    private static bool IsSensitiveDeep(ProvenanceStep step) =>
-        step.IsSensitive || step.Origins.Any(o => o.IsEffective && IsSensitiveDeep(o));
+    // A layer is secret when its source says so, or when its value has a name of its own that looks secret, such as
+    // ConfigMap key smtp-password or GitHub variable SMTP_PASSWORD feeding a key that does not look secret. A .NET layer
+    // is named after the key, which the key rule tests already. So is an environment variable or env entry that goes by
+    // one of the setting's own names (ownNames): TOKENSVC_Db__Timeout, read by the .NET layer of Db:Timeout, says
+    // nothing more than the key. Any other variable upstream, such as ${INTERNAL_URL} in URL, is checked.
+    private bool IsSecretLayer(ProvenanceStep step, HashSet<string> ownNames) =>
+        step.IsSensitive
+        || (step.Kind != LayerKind.DotNetProvider
+            && step.Reference?.ValueName() is { } name
+            && !(step.Reference is EnvironmentVariableRef or WorkloadEnvRef && ownNames.Contains(EnvironmentName(name)))
+            && (Options.SensitiveKeyPattern?.IsMatch(name) ?? false));
+
+    // The names a setting goes by: its key, which is the variable itself in a container or Compose trace, and the
+    // environment variable each of its .NET layers reads it from, with its prefix. __ is read as : and case is ignored.
+    private static HashSet<string> OwnNames(string key, List<ProvenanceStep> steps)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { EnvironmentName(key) };
+        foreach (var step in steps)
+        {
+            if (step.Reference is EnvironmentVariableRef variable)
+            {
+                names.Add(EnvironmentName(variable.Name));
+            }
+        }
+
+        return names;
+    }
+
+    private static string EnvironmentName(string name) => name.Replace("__", ":", StringComparison.Ordinal);
+
+    private bool IsSensitiveDeep(ProvenanceStep step, HashSet<string> ownNames) =>
+        IsSecretLayer(step, ownNames) || step.Origins.Any(o => o.IsEffective && IsSensitiveDeep(o, ownNames));
 
     // Everything upstream of a secret layer holds the secret too, for example the Helm values file that rendered a
-    // Secret key, so a sensitive step passes its sensitivity down to its origins.
-    private ProvenanceStep Redact(ProvenanceStep step, bool keySensitive, bool inherited)
+    // Secret key, so a sensitive step passes its sensitivity down to its origins. A step is also hidden when its winning
+    // chain is secret (Deep), which is worked out on the way back, so each layer's name is matched once.
+    private (ProvenanceStep Step, bool Deep) Redact(ProvenanceStep step, HashSet<string> ownNames, bool keySensitive, bool inherited)
     {
-        var secretSource = inherited || step.IsSensitive;
-        var sensitive = keySensitive || secretSource || IsSensitiveDeep(step);
-        var origins = step.Origins.Count == 0
-            ? step.Origins
-            : step.Origins.Select(o => Redact(o, keySensitive, secretSource)).ToList();
-        return step with
+        var secretLayer = IsSecretLayer(step, ownNames);
+        var secretSource = inherited || secretLayer;
+        var deep = secretLayer;
+        var origins = step.Origins;
+        if (origins.Count > 0)
+        {
+            var hidden = new List<ProvenanceStep>(origins.Count);
+            foreach (var origin in origins)
+            {
+                var (redacted, originDeep) = Redact(origin, ownNames, keySensitive, secretSource);
+                hidden.Add(redacted);
+                deep |= origin.IsEffective && originDeep;
+            }
+
+            origins = hidden;
+        }
+
+        var sensitive = keySensitive || secretSource || deep;
+        return (step with
         {
             IsSensitive = sensitive,
             Value = sensitive && step.Value is not null ? Options.RedactedText : step.Value,
             Origins = origins,
-        };
+        }, deep);
     }
 
     private static Dictionary<string, string?> ReadProcessEnvironment()

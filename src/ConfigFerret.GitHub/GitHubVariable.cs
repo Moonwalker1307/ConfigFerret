@@ -43,4 +43,8 @@ public sealed record GitHubVariable(
 /// <param name="Scope">Organization, repository or environment.</param>
 /// <param name="Owner">The organization, <c>owner/repo</c>, or environment name.</param>
 /// <param name="Name">The variable or secret name.</param>
-public sealed record GitHubVariableRef(GitHubVariableKind Kind, GitHubVariableScope Scope, string Owner, string Name) : SourceRef;
+public sealed record GitHubVariableRef(GitHubVariableKind Kind, GitHubVariableScope Scope, string Owner, string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected override string? ValueName() => Name;
+}

@@ -93,6 +93,25 @@ public class ComposeTracerTests
     }
 
     [Fact]
+    public void A_shell_variable_named_like_a_secret_by_a_custom_pattern_is_redacted()
+    {
+        const string value = "https://fake-internal-host.example.test";
+        var options = new ComposeOptions();
+        options.Variables["INTERNAL_URL"] = value;
+        var project = ComposeProject.Parse([("compose.yaml", "services:\n  api:\n    environment: { URL: \"${INTERNAL_URL}\" }\n")], options);
+
+        var report = ConfigTracer.ForCompose(project, "api")
+            .WithOptions(o => o.SensitiveKeyPattern = new System.Text.RegularExpressions.Regex("internal", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Trace();
+
+        var url = report.Find("URL")!;
+        Assert.True(url.IsSensitive);
+        Assert.Equal("***", url.Value);
+        Assert.DoesNotContain(value, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(value, report.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WithCompose_links_environment_variables_and_secret_files()
     {
         var environment = new Dictionary<string, string?> { ["A"] = "api", ["DB_PASSWORD"] = "changed", ["NOT_IN_COMPOSE"] = "1" };

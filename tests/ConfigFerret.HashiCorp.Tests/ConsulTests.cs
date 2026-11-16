@@ -360,4 +360,26 @@ public class ConsulTests
             Environment.SetEnvironmentVariable(prefix + "Db__Password", null);
         }
     }
+
+    /// <summary>Links each .NET layer to one upstream step with the given reference.</summary>
+    private sealed class LinkTo(SourceRef reference) : IOriginResolver
+    {
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) =>
+            layer.ConfigurationKey is null ? [] : [new ProvenanceStep { Kind = LayerKind.Consul, Source = "Consul key", Value = layer.Value, Reference = reference }];
+    }
+
+    [Theory]
+    [InlineData("config/token-service/Smtp/Host", null, false)]
+    [InlineData("config/orders/smtp-password", null, true)]
+    [InlineData("config/orders/appsettings", "Smtp:Host", false)]
+    [InlineData("config/orders/appsettings", "Smtp:Password", true)]
+    public void Only_the_last_part_of_a_key_and_its_JSON_path_can_hide_its_value(string key, string? jsonPath, bool hidden)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Smtp:Host"] = "mail.example.test" }).Build();
+
+        var setting = ConfigTracer.For(configuration).WithResolver(new LinkTo(new ConsulKeyRef(null, key, jsonPath))).Trace().Find("Smtp:Host")!;
+
+        Assert.Equal(hidden, setting.IsSensitive);
+        Assert.Equal(hidden ? "***" : "mail.example.test", setting.Value);
+    }
 }

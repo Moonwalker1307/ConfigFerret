@@ -321,4 +321,8 @@ public sealed record TerraformDefinition(string Name, string File, int Line, str
 /// <summary>A pointer to a Terraform output or a value nested in one.</summary>
 /// <param name="Output">The output name.</param>
 /// <param name="Path">The path inside the output, or null for the output itself.</param>
-public sealed record TerraformOutputRef(string Output, string? Path = null) : SourceRef;
+public sealed record TerraformOutputRef(string Output, string? Path = null) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Path is null ? Output : Output + "." + Path;
+}

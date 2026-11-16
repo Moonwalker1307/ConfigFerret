@@ -107,7 +107,8 @@ Winton.Extensions.Configuration.Consul, it strips the prefix and turns `/` into 
 `Db:Timeout`. With `ExpandJson`, a value that is a JSON object or array is expanded like the .NET JSON provider reads
 it: `config/orders/Db` holding `{"Timeout": 30}` sets `Db:Timeout`, and the step notes the path inside the JSON.
 
-Consul values are not treated as secret. Set `IsSensitive = true` to redact them all. Layers are linked by explicit
+Consul values are not treated as secret, unless the last part of the key (with its JSON path) looks secret, such as
+`config/orders/smtp-password`. Set `IsSensitive = true` to redact them all. Layers are linked by explicit
 `Links` (a full key, or one relative to the prefix, optionally `#Json:Path`), and by same name like Vault (a .NET
 provider whose name contains `Consul` is matched by its configuration key). The token needs
 `key_prefix "config/orders/" { policy = "read" }`. Without ACLs, leave `Token` null (and set `AllowNoToken` for

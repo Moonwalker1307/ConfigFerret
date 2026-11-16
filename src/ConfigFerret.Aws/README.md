@@ -129,7 +129,8 @@ When a value is known on both sides and differs, the step's note says so without
 - Parameter Store needs `ssm:GetParametersByPath` on the path, and `kms:Decrypt` to decrypt `SecureString` values.
 - By default only names and metadata are read. Values are read only with `IncludeValues`, and secret values and
   `SecureString` values are always marked sensitive, so reports redact them and every layer in that chain. `String` and
-  `StringList` values are read and are not secret.
+  `StringList` values are read and are not secret, unless the last part of the name looks secret, such as
+  `/orders/prod/smtp-password`.
 - Requests are signed by the AWS SDK and never follow redirects. Credentials never appear in a report, a note or a
   warning.
 - Responses are checked before the SDK reads them, because the SDK's JSON readers never finish on some malformed
