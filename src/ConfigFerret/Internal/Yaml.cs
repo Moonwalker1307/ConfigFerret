@@ -128,14 +128,14 @@ internal static class Yaml
                     current.Clear();
                     break;
                 case AnchorAlias alias when !current.ContainsKey(alias.Value):
-                    throw new YamlException(alias.Start, alias.End, $"The alias *{alias.Value} is used before its anchor &{alias.Value} is defined.");
+                    throw new YamlException(alias.Start, alias.End, $"The alias at {Position(alias)} is used before its anchor is defined.");
                 case AnchorAlias alias when open.Contains(current[alias.Value]):
-                    throw new YamlException(alias.Start, alias.End, $"The alias *{alias.Value} is inside the node its anchor &{alias.Value} is on, so the node would contain itself.");
+                    throw new YamlException(alias.Start, alias.End, $"The alias at {Position(alias)} is inside the node its anchor is on, so the node would contain itself.");
                 case AnchorAlias alias when deepest.Count > 0:
                     var level = open.Count + heights.GetValueOrDefault(current[alias.Value]);
                     if (level > MaxNestingDepth)
                     {
-                        throw new YamlException(alias.Start, alias.End, string.Create(CultureInfo.InvariantCulture, $"The alias *{alias.Value} makes the collections in this YAML nest more than {MaxNestingDepth} levels deep."));
+                        throw new YamlException(alias.Start, alias.End, string.Create(CultureInfo.InvariantCulture, $"The alias at {Position(alias)} makes the collections in this YAML nest more than {MaxNestingDepth} levels deep."));
                     }
 
                     deepest.Push(Math.Max(deepest.Pop(), level));
@@ -177,6 +177,11 @@ internal static class Yaml
             }
         }
     }
+
+    // An unquoted value that starts with * is read as an alias, so the alias name may be a secret value. Messages
+    // reach warnings that are not redacted, so they say where the alias is instead of naming it.
+    private static string Position(AnchorAlias alias) =>
+        string.Create(CultureInfo.InvariantCulture, $"line {alias.Start.Line}, column {alias.Start.Column}");
 
     public static YamlNode? Get(this YamlNode? node, string key) =>
         node is YamlMappingNode map && map.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value : null;

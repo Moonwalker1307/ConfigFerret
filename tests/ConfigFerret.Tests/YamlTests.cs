@@ -121,6 +121,27 @@ public class YamlTests
         Assert.Contains($"nest more than {Yaml.MaxNestingDepth} levels deep", ex.Message, StringComparison.Ordinal);
     }
 
+    // An unquoted value that starts with * is an alias, so the alias name can be a secret value.
+    [Theory]
+    [InlineData("a: 1\nb: *fake-alias-s3cr3t\n", "The alias at line 2, column 4 is used before its anchor is defined.")]
+    [InlineData("a: &fake-alias-s3cr3t\n  b: *fake-alias-s3cr3t\n", "The alias at line 2, column 6 is inside the node its anchor is on, so the node would contain itself.")]
+    public void Alias_errors_give_the_position_but_not_the_alias_name(string text, string message)
+    {
+        var ex = Assert.Throws<YamlDotNet.Core.YamlException>(() => Yaml.LoadDocuments(text));
+
+        Assert.Equal(message, ex.Message);
+    }
+
+    [Fact]
+    public void The_nesting_error_for_an_alias_does_not_name_it()
+    {
+        var text = Nested("an alias", Yaml.MaxNestingDepth + 1).Replace("&a", "&fake-alias-s3cr3t", StringComparison.Ordinal).Replace("*a", "*fake-alias-s3cr3t", StringComparison.Ordinal);
+
+        var ex = Assert.Throws<YamlDotNet.Core.YamlException>(() => Yaml.LoadDocuments(text));
+
+        Assert.Matches($"^The alias at line 2, column [0-9]+ makes the collections in this YAML nest more than {Yaml.MaxNestingDepth} levels deep[.]$", ex.Message);
+    }
+
     // YAML whose collections nest depth levels deep, counting what an alias stands for as if it were written out.
     private static string Nested(string style, int depth) => style switch
     {

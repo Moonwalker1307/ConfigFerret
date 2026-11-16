@@ -541,6 +541,29 @@ public sealed class GitOpsHelmChartTests : IDisposable
     }
 
     [Fact]
+    public void A_secret_whose_values_break_with_an_alias_does_not_show_it_in_the_warning()
+    {
+        var release = Flux(
+            "      version: 1.0.0",
+            """
+              valuesFrom:
+                - {kind: Secret, name: s}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {name: s}
+            stringData:
+              values.yaml: "password: *fake-alias-s3cr3t"
+            """);
+
+        var warnings = HelmChart.ForGitOps(release, new GitOpsOptions { ChartFolder = _root }).Warnings;
+
+        var warning = Assert.Single(warnings);
+        Assert.StartsWith("Could not parse Helm values in Flux HelmRelease rel (valuesFrom Secret s, key values.yaml): ", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-alias-s3cr3t", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Binary_values_from_keys_are_reported_as_missing()
     {
         var release = Flux(
