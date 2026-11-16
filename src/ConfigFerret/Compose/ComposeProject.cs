@@ -24,7 +24,8 @@ namespace ConfigFerret.Compose;
 /// shell), then the project's env files (<see cref="ComposeOptions.EnvFiles"/>, else the project directory's
 /// <c>.env</c>). The process environment is read only when <see cref="ComposeOptions.UseProcessEnvironment"/> is set.
 /// An included file sees the environment of the project that includes it first; its own env files only add variables
-/// that are not set there.
+/// that are not set there. In a service's <c>env_file</c>, <c>${VAR}</c> and a bare key take a variable from that
+/// environment, then from the service's own <c>environment</c> entries.
 /// </para>
 /// <para>
 /// A file that compose would need but that is missing (a required <c>env_file</c>, an <c>extends</c> file or an
@@ -421,8 +422,19 @@ public sealed class ComposeProject
             }
         }
 
+        // Like compose, the service's environment entries are worked out first, and an env_file's ${VAR} and bare keys
+        // take a variable from the project's environment, then from those entries. Such a value's origin is the entry.
+        var fromEnvironment = new Dictionary<string, LookupResult>(StringComparer.Ordinal);
+        foreach (var (name, declarations) in environment)
+        {
+            if (declarations[^1] is { Value: { } value } last)
+            {
+                fromEnvironment[name] = new LookupResult(value, null) { Environment = new ComposeEnvironmentOrigin(service, name, last.At, last.References) };
+            }
+        }
+
         var layers = new Dictionary<string, List<ProvenanceStep>>(StringComparer.Ordinal);
-        foreach (var step in ReadEnvFiles(service, envFiles, warnings))
+        foreach (var step in ReadEnvFiles(service, envFiles, name => Lookup(name) ?? fromEnvironment.GetValueOrDefault(name), warnings))
         {
             Layer(layers, ((DotEnvEntryRef)step.Reference!).Name).Add(step);
         }
@@ -655,7 +667,7 @@ public sealed class ComposeProject
         return tag == "!reset";
     }
 
-    private List<ProvenanceStep> ReadEnvFiles(string service, List<EnvFileDeclaration> declarations, List<string> warnings)
+    private List<ProvenanceStep> ReadEnvFiles(string service, List<EnvFileDeclaration> declarations, Func<string, LookupResult?> lookup, List<string> warnings)
     {
         var steps = new List<ProvenanceStep>();
         var earlier = new Dictionary<string, DotEnvEntry>(StringComparer.Ordinal);
@@ -683,7 +695,7 @@ public sealed class ComposeProject
                 continue;
             }
 
-            var file = DotEnvFile.Parse(text, declaration.Display, declaration.FullPath, Lookup, declaration.Raw, v => earlier.TryGetValue(v, out var e) ? new LookupResult(e.Value, e) : null);
+            var file = DotEnvFile.Parse(text, declaration.Display, declaration.FullPath, lookup, declaration.Raw, v => earlier.TryGetValue(v, out var e) ? new LookupResult(e.Value, e) : null);
             warnings.AddRange(file.Warnings);
             steps.AddRange(file.Entries.Select(e => ComposeSteps.Entry(e, $"env_file {declaration.Display}", $"env_file of service {service} ({declaration.At})", _origins)));
             foreach (var entry in file.Entries)

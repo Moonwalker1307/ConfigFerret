@@ -153,7 +153,7 @@ public sealed class DotEnvFile
                     {
                         Path = path,
                         IsInherited = true,
-                        References = [new DotEnvReference(key, inherited.Entry, IsSet: true) { Value = inherited.Value }],
+                        References = [new DotEnvReference(key, inherited.Entry, IsSet: true) { Value = inherited.Value, Environment = inherited.Environment }],
                     });
                 }
 
@@ -383,6 +383,9 @@ public sealed record DotEnvReference(string Name, DotEnvEntry? From, bool IsSet,
     /// <summary>The variable's value, or null when it is not set.</summary>
     public string? Value { get; init; }
 
+    /// <summary>The compose <c>environment</c> entry that set it, for an <c>env_file</c> of that service.</summary>
+    internal ComposeEnvironmentOrigin? Environment { get; init; }
+
     /// <summary>The name and where it came from. The value is left out because it may be secret.</summary>
-    public override string ToString() => IsSet ? $"${{{Name}}} from {From?.ToString() ?? "the variables passed in"}" : $"${{{Name}}} (not set)";
+    public override string ToString() => IsSet ? $"${{{Name}}} from {From?.ToString() ?? Environment?.At ?? "the variables passed in"}" : $"${{{Name}}} (not set)";
 }
