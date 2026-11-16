@@ -5,6 +5,7 @@ namespace ConfigFerret.Helm;
 /// <summary>Links ConfigMap keys and workload env entries to Helm templates and values files.</summary>
 internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
 {
+    private readonly string[] _sensitivePaths = chart.SensitivePaths();
     private bool _warned;
 
     public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
@@ -37,11 +38,15 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
         }
 
         // Prefer the template line whose values path holds the value we actually see.
-        var use = uses.FirstOrDefault(u => renderedValue is not null && string.Equals(chart.GetValue(u.ValuesPath), renderedValue, StringComparison.Ordinal))
-            ?? uses[0];
+        var matched = uses.FirstOrDefault(u => renderedValue is not null && string.Equals(chart.GetValue(u.ValuesPath), renderedValue, StringComparison.Ordinal));
+        var use = matched ?? uses[0];
         var helmValue = chart.GetValue(use.ValuesPath);
         var note = $"renders .Values.{use.ValuesPath}";
-        var sensitive = chart.IsSensitivePath(use.ValuesPath);
+
+        // The value may be built from every values path on its line, and without a match from any line, so it is
+        // secret when any of those, or a value below one of them, comes from a Secret.
+        var sensitive = (matched is null ? uses : uses.Where(u => u.Template == use.Template && u.Line == use.Line))
+            .Any(u => HelmChart.HoldsSensitive(_sensitivePaths, u.ValuesPath));
         if (renderedValue is not null && helmValue is not null && !string.Equals(helmValue, renderedValue, StringComparison.Ordinal))
         {
             // Notes are not redacted, and whether the key is secret by its name is only decided after the resolvers ran,

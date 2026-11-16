@@ -144,6 +144,139 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    public void A_template_line_that_renders_a_parent_value_is_secret_when_a_value_below_it_comes_from_a_secret()
+    {
+        Write("chart/values.yaml", "db:\n  host: db.local\n  password: none\n");
+        Write("chart/templates/cm.yaml", """
+            data:
+              Db__Json: {{ .Values.db | toJson | quote }}
+              Db__Host: {{ .Values.db.host }}
+            """);
+        var release = GitOpsApplication.Parse("""
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata: {name: rel}
+            spec:
+              chart: {spec: {chart: orders, sourceRef: {kind: HelmRepository, name: repo}}}
+              valuesFrom:
+                - {kind: Secret, name: db, valuesKey: password, targetPath: db.password}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {name: db}
+            stringData: {password: fake-helm-json-s3cr3t}
+            """, "rel.yaml");
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Db__Json: '{"host":"db.local","password":"fake-helm-json-s3cr3t"}'
+              Db__Host: db.local
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - configMapRef: {name: cfg}
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests)
+            .WithGitOps(release, new GitOpsOptions { ChartFolder = Path.Join(_root, "chart") })
+            .Trace();
+        var output = report.ToText() + report.ToJson() + string.Join("\n", report.Warnings);
+
+        Assert.DoesNotContain("fake-helm-json-s3cr3t", output, StringComparison.Ordinal);
+        Assert.True(Assert.Single(report.Settings, s => s.Key == "Db__Json").IsSensitive);
+        Assert.Equal("db.local", Assert.Single(report.Settings, s => s.Key == "Db__Host").Value);
+    }
+
+    [Fact]
+    public void A_deep_secret_values_path_costs_memory_in_proportion_to_its_length()
+    {
+        // Every parent of a 10,000-level path written out as its own string would take about 200 MB.
+        var targetPath = string.Join('.', Enumerable.Repeat("a", 10_000));
+        Write("chart/templates/cm.yaml", "data:\n  Db__Json: {{ .Values.a | toJson | quote }}\n");
+        var release = GitOpsApplication.Parse($"""
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata: {"{"}name: rel{"}"}
+            spec:
+              chart: {"{"}spec: {"{"}chart: orders, sourceRef: {"{"}kind: HelmRepository, name: repo{"}"}{"}"}{"}"}
+              valuesFrom:
+                - {"{"}kind: Secret, name: s, valuesKey: k, targetPath: {targetPath}{"}"}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {"{"}name: s{"}"}
+            stringData: {"{"}k: fake-deep-s3cr3t{"}"}
+            """, "rel.yaml");
+        var options = new GitOpsOptions { ChartFolder = Path.Join(_root, "chart") };
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var resolver = new GitOpsResolver(release, options);
+        var step = Assert.Single(resolver.Resolve(ConfigMapKey("cfg", "Db__Json"), new TraceDiagnostics()));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(step.IsSensitive);
+        Assert.True(allocated < 20_000_000, $"Building the resolver allocated {allocated:N0} bytes.");
+    }
+
+    [Fact]
+    public void A_template_line_that_renders_several_values_is_secret_when_one_comes_from_a_secret()
+    {
+        Write("chart/values.yaml", "db:\n  host: db.local\n  route: none\n");
+        Write("chart/templates/cm.yaml", """
+            data:
+              Db__Route: "{{ .Values.db.host }}/{{ .Values.db.route }}"
+              Db__Host: {{ .Values.db.host }}
+            """);
+        var release = GitOpsApplication.Parse("""
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata: {name: rel}
+            spec:
+              chart: {spec: {chart: orders, sourceRef: {kind: HelmRepository, name: repo}}}
+              valuesFrom:
+                - {kind: Secret, name: route, valuesKey: route, targetPath: db.route}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {name: route}
+            stringData: {route: fake-helm-route-s3cr3t}
+            """, "rel.yaml");
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Db__Route: db.local/fake-helm-route-s3cr3t
+              Db__Host: db.local
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - configMapRef: {name: cfg}
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests)
+            .WithGitOps(release, new GitOpsOptions { ChartFolder = Path.Join(_root, "chart") })
+            .Trace();
+        var output = report.ToText() + report.ToJson() + string.Join("\n", report.Warnings);
+
+        Assert.DoesNotContain("fake-helm-route-s3cr3t", output, StringComparison.Ordinal);
+        Assert.True(Assert.Single(report.Settings, s => s.Key == "Db__Route").IsSensitive);
+        Assert.Equal("db.local", Assert.Single(report.Settings, s => s.Key == "Db__Host").Value);
+    }
+
+    [Fact]
     public void A_plain_argo_cd_path_is_a_chart_only_when_it_holds_a_chart_yaml()
     {
         var app = GitOpsApplication.Parse("""
@@ -398,6 +531,60 @@ public sealed class GitOpsResolverTests : IDisposable
             ", so Flux uses the placeholder's default",
             Assert.Single(Assert.Single(s.Steps).Origins).Note,
             StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_value_with_several_placeholders_is_secret_when_one_is_filled_from_a_secret()
+    {
+        Write("apps/cm.yaml", """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Billing__Route: ${HOST}/${ROUTE}
+              Billing__Region: ${HOST}-${REGION}
+            """);
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Billing__Route: billing.local/fake-flux-route-s3cr3t
+              Billing__Region: billing.local-eu
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - configMapRef: {name: cfg}
+            """);
+
+        // The Secret sets HOST too, but the inline substitute wins, so the region is not built from the Secret.
+        var report = ConfigTracer.ForContainer(manifests)
+            .WithGitOps(
+                Kustomization(
+                    """
+                        substitute: {HOST: billing.local, REGION: eu}
+                        substituteFrom:
+                          - {kind: Secret, name: route}
+                    """,
+                    """
+                    ---
+                    apiVersion: v1
+                    kind: Secret
+                    metadata: {name: route}
+                    stringData: {ROUTE: fake-flux-route-s3cr3t, HOST: fake-flux-host-s3cr3t}
+                    """),
+                new GitOpsOptions { RepositoryRoot = _root })
+            .Trace();
+        var output = report.ToText() + report.ToJson() + string.Join("\n", report.Warnings);
+
+        Assert.DoesNotContain("fake-flux-route-s3cr3t", output, StringComparison.Ordinal);
+        Assert.True(Assert.Single(report.Settings, s => s.Key == "Billing__Route").IsSensitive);
+        Assert.Equal("billing.local-eu", Assert.Single(report.Settings, s => s.Key == "Billing__Region").Value);
     }
 
     [Fact]
