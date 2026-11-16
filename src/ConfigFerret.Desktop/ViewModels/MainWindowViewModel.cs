@@ -60,6 +60,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _clearing;
     private CancellationTokenSource? _work;
 
+    // Counts the repositories and folders opened. An open that finds a newer one started when it resumes stops there, so
+    // the one picked last is the one shown even when an earlier one was still scanning.
+    private int _opening;
+
+    // The open the running work belongs to (0 for a trace), and the last open whose work a trace stopped.
+    private int _workOpening;
+    private int _stoppedOpening;
+
+    // Counts the traces started, so one that a newer trace stopped leaves the view to the newer one.
+    private int _tracing;
+
     /// <summary>Creates the view model and loads the saved workspace.</summary>
     /// <param name="store">Where the workspace is saved.</param>
     /// <param name="credentials">Where tokens and API keys are kept.</param>
@@ -794,6 +805,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     internal async Task AnalyzeRepositoryAsync(RepositoryRow repository)
     {
+        var opening = ++_opening;
         var token = await RunAsync($"Downloading {repository.FullName}…", async cancellationToken =>
         {
             var github = CreateGitHub(ReadCredential(GitHubAccountName, out var serverToken) ?? throw new HttpRequestException("Connect GitHub first."), serverToken);
@@ -802,28 +814,33 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             DeleteDownload();
             _currentDownload = folder;
             return new Download(folder, environments);
-        }).ConfigureAwait(true);
+        }, opening).ConfigureAwait(true);
 
         if (token is not { } downloaded)
+        {
+            EndOpenWithoutScan(opening);
+            return;
+        }
+
+        if (opening != _opening)
         {
             return;
         }
 
-        SubjectTitle = repository.FullName;
-        SubjectDetail = $"{repository.Info.DefaultBranch} · {(repository.IsPrivate ? "private" : "public")}{(repository.HasLanguage ? " · " + repository.Language : string.Empty)}";
-        IsGitHubSubject = true;
-        await OpenScanAsync(repository.FullName, downloaded.Folder, downloaded.Environments).ConfigureAwait(true);
+        var subject = new Subject(
+            repository.FullName,
+            $"{repository.Info.DefaultBranch} · {(repository.IsPrivate ? "private" : "public")}{(repository.HasLanguage ? " · " + repository.Language : string.Empty)}",
+            IsGitHub: true);
+        await OpenScanAsync(repository.FullName, downloaded.Folder, downloaded.Environments, subject, opening).ConfigureAwait(true);
     }
 
     internal async Task AnalyzeFolderAsync(string folder)
     {
         folder = Path.GetFullPath(folder);
+        var opening = ++_opening;
         _populating = true;
         SelectedRepository = null;
         _populating = false;
-        SubjectTitle = Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar));
-        SubjectDetail = folder;
-        IsGitHubSubject = false;
         _workspace.RecentFolders.Remove(folder);
         _workspace.RecentFolders.Insert(0, folder);
         if (_workspace.RecentFolders.Count > 10)
@@ -831,18 +848,28 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             _workspace.RecentFolders.RemoveRange(10, _workspace.RecentFolders.Count - 10);
         }
 
-        await OpenScanAsync(folder, folder, []).ConfigureAwait(true);
+        var subject = new Subject(Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar)), folder, IsGitHub: false);
+        await OpenScanAsync(folder, folder, [], subject, opening).ConfigureAwait(true);
     }
 
-    private async Task OpenScanAsync(string key, string folder, IReadOnlyList<string> gitHubEnvironments)
+    private async Task OpenScanAsync(string key, string folder, IReadOnlyList<string> gitHubEnvironments, Subject subject, int opening)
     {
         RepositoryScan? scan = null;
-        await RunAsync("Looking for configuration…", _ => Task.FromResult(scan = RepositoryScanner.Scan(folder))).ConfigureAwait(true);
+        await RunAsync("Looking for configuration…", _ => Task.FromResult(scan = RepositoryScanner.Scan(folder)), opening).ConfigureAwait(true);
         if (scan is null)
+        {
+            EndOpenWithoutScan(opening);
+            return;
+        }
+
+        if (opening != _opening)
         {
             return;
         }
 
+        SubjectTitle = subject.Title;
+        SubjectDetail = subject.Detail;
+        IsGitHubSubject = subject.IsGitHub;
         _scan = scan;
         _currentKey = key;
         if (!_workspace.Repositories.TryGetValue(key, out var choices))
@@ -873,12 +900,45 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         await LoadOctopusChoicesAsync().ConfigureAwait(true);
-        await RetraceAsync().ConfigureAwait(true);
+        if (opening == _opening)
+        {
+            await RetraceAsync().ConfigureAwait(true);
+        }
+    }
+
+    // The newest open got no download or scan. Its repository is no longer selected, so picking it again opens it again.
+    // When a trace (a changed choice) stopped it, the view keeps the repository it shows. When it failed, the view shows
+    // no repository rather than the one before, whose download a stopped open may already have deleted; the status line
+    // keeps the reason.
+    private void EndOpenWithoutScan(int opening)
+    {
+        if (opening != _opening)
+        {
+            return;
+        }
+
+        _populating = true;
+        SelectedRepository = null;
+        _populating = false;
+        if (_stoppedOpening == opening)
+        {
+            return;
+        }
+
+        _scan = null;
+        _currentKey = null;
+        SubjectTitle = null;
+        SubjectDetail = null;
+        IsGitHubSubject = false;
+        ClearResult();
+        Discoveries.Clear();
     }
 
     private async Task LoadOctopusChoicesAsync()
     {
-        if (!IsOctopusConnected || _currentKey is null || !_workspace.Repositories.TryGetValue(_currentKey, out var choices))
+        // Another repository can open while Octopus answers; its choices and lists are then left alone.
+        var current = _currentKey;
+        if (!IsOctopusConnected || current is null || !_workspace.Repositories.TryGetValue(current, out var choices))
         {
             return;
         }
@@ -894,10 +954,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
             var octopus = new OctopusAccount(_http, OctopusAddress(OctopusServer, serverKey), key, OctopusSpace);
             var projects = await octopus.ListProjectsAsync().ConfigureAwait(true);
+            if (!string.Equals(_currentKey, current, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             var environments = await octopus.ListEnvironmentsAsync().ConfigureAwait(true);
+            if (!string.Equals(_currentKey, current, StringComparison.Ordinal))
+            {
+                return;
+            }
 
             // A project named like the repository is most likely the one that deploys it.
-            var repoName = _currentKey.Split('/', '\\').Last();
+            var repoName = current.Split('/', '\\').Last();
             choices.OctopusProject ??= projects.FirstOrDefault(p => string.Equals(p.Name, repoName, StringComparison.OrdinalIgnoreCase) || string.Equals(p.Slug, repoName, StringComparison.OrdinalIgnoreCase))?.Name;
             choices.OctopusEnvironment ??= environments.FirstOrDefault(e => string.Equals(e, choices.Environment, StringComparison.OrdinalIgnoreCase));
 
@@ -970,6 +1039,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         Profile? profile = null;
+        var tracing = ++_tracing;
         var result = await RunAsync("Tracing the configuration…", async cancellationToken =>
         {
             profile = _analyzer.BuildProfile(scan, choices, connections, notes);
@@ -980,6 +1050,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
             return await runner.RunAsync(profile, reveal, cancellationToken).ConfigureAwait(false);
         }).ConfigureAwait(true);
+
+        if (tracing != _tracing || !ReferenceEquals(_scan, scan))
+        {
+            return;
+        }
 
         ShowDiscoveries(scan, profile);
         if (result is not null)
@@ -1025,22 +1100,32 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         return (connections, new TraceRunner(credentials, httpClientFactory: _traceHttp));
     }
 
-    private async Task<T?> RunAsync<T>(string what, Func<CancellationToken, Task<T>> work)
+    private async Task<T?> RunAsync<T>(string what, Func<CancellationToken, Task<T>> work, int opening = 0)
     {
         if (_work is not null)
         {
+            if (_workOpening != 0 && opening == 0)
+            {
+                _stoppedOpening = _workOpening;
+            }
+
             await _work.CancelAsync().ConfigureAwait(true);
         }
 
         using var cancellation = new CancellationTokenSource();
         _work = cancellation;
+        _workOpening = opening;
         IsBusy = true;
         BusyText = what;
         try
         {
-            return await Task.Run(() => work(cancellation.Token), cancellation.Token).ConfigureAwait(true);
+            var result = await Task.Run(() => work(cancellation.Token), cancellation.Token).ConfigureAwait(true);
+
+            // Newer work took over while this finished: what it found belongs to a view that is gone.
+            return cancellation.IsCancellationRequested ? default : result;
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        catch (Exception ex) when (cancellation.IsCancellationRequested && ex is OperationCanceledException or TraceSetupException or HttpRequestException
+            or IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or CredentialStoreException or JsonException)
         {
             return default;
         }
@@ -1065,6 +1150,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             if (ReferenceEquals(_work, cancellation))
             {
                 _work = null;
+                _workOpening = 0;
                 IsBusy = false;
                 BusyText = null;
             }
@@ -1543,6 +1629,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     private sealed record Download(string Folder, IReadOnlyList<string> Environments);
+
+    // What an open shows as its title once its scan is done.
+    private sealed record Subject(string Title, string Detail, bool IsGitHub);
 
     private static void Fill(ObservableCollection<string> target, IEnumerable<string> items)
     {
