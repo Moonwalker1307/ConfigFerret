@@ -17,6 +17,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
     private readonly HelmChart? _chart;
     private readonly HelmResolver? _helm;
     private readonly List<string> _warnings = [];
+    private HashSet<string>? _named; // the warnings given so far, so that a skipped object is named once
     private readonly List<KubernetesData?> _substituteFrom = [];
     private readonly Dictionary<(char Kind, string Object, string Key), SubstitutionTemplate> _templates = [];
     private readonly Dictionary<string, bool> _fromSecret = new(StringComparer.Ordinal); // whether the value that wins for a variable is from a Secret
@@ -260,6 +261,17 @@ internal sealed partial class GitOpsResolver : IOriginResolver
     /// <summary>Finds the ConfigMap, Secret and env values in source manifests that hold <c>${VAR}</c> placeholders.</summary>
     internal void AddTemplates(KubernetesManifests manifests)
     {
+        // Objects the manifests left out, such as one whose name holds a slash, are named once. The set keeps that
+        // linear however many objects a folder holds.
+        _named ??= new HashSet<string>(_warnings, StringComparer.Ordinal);
+        foreach (var warning in manifests.Warnings)
+        {
+            if (_named.Add(warning))
+            {
+                _warnings.Add(warning);
+            }
+        }
+
         var data = manifests.ConfigMaps.Values.Select(d => (Kind: 'c', Data: d))
             .Concat(manifests.Secrets.Values.Select(d => (Kind: 's', Data: d)))
             .SelectMany(x => x.Data.Data.Select(kv => (x.Kind, Object: x.Data.Name, Key: kv.Key, Value: kv.Value.Value, kv.Value.Line, File: x.Data.SourceName)));
