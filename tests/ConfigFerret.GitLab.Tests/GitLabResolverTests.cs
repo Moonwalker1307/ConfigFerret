@@ -582,6 +582,44 @@ public class GitLabResolverTests
         Assert.InRange(resolver.Examined, jobs, 20L * jobs);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task Does_not_look_at_self_references_it_leaves_out()
+    {
+        // Each job sets X from Y and links MAIL_AUTH to X; every hidden job sets Y: $Y. Following each job's X to Y
+        // leaves every hidden Y out, so looking at them is wasted.
+        const int jobs = 999;
+        const int hidden = 999;
+        var yaml = new StringBuilder();
+        for (var i = 0; i < hidden; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $".h-{i}:\n  variables:\n    Y: $Y\n");
+        }
+
+        for (var i = 0; i < jobs; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"job-{i}:\n  variables:\n    X: $Y\n  script:\n    - export MAIL_AUTH=$X\n");
+        }
+
+        var resolver = Resolver(o => o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml"), new GitLabVariables([]));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = await Task.Run(
+            () =>
+            {
+                var found = resolver.Resolve(EnvStep("MAIL_AUTH", "v"), diagnostics);
+                foreach (var step in found)
+                {
+                    resolver.Resolve(step, diagnostics);
+                }
+
+                return found;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(jobs, steps.Count);
+        Assert.InRange(resolver.Examined, jobs, 20L * (jobs + hidden));
+    }
+
     [Fact]
     public void Keeps_the_job_own_definition_when_the_bound_cuts_the_hidden_ones()
     {

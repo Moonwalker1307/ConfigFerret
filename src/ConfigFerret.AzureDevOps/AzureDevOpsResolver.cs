@@ -27,6 +27,7 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         groups.Variables.Select((v, i) => (v, i)).ToLookup(g => AzureDevOpsVariableGroups.ToEnvironmentName(g.v.Name), StringComparer.OrdinalIgnoreCase);
     private readonly ConditionalWeakTable<ProvenanceStep, string> _seen = new();
     private ILookup<string, AzurePipelinesVariable> _byScope = Array.Empty<AzurePipelinesVariable>().ToLookup(v => v.Name);
+    private ILookup<string, AzurePipelinesVariable> _byScopeNotSelf = Array.Empty<AzurePipelinesVariable>().ToLookup(v => v.Name);
     private ILookup<string, AzurePipelinesVariable> _byEnvironmentScope = Array.Empty<AzurePipelinesVariable>().ToLookup(v => v.Name);
     private ILookup<string, AzurePipelinesGroupLink> _groupLinks = Array.Empty<AzurePipelinesGroupLink>().ToLookup(g => g.Group);
     private ILookup<string, AzurePipelinesGroupLink> _groupLinksByScope = Array.Empty<AzurePipelinesGroupLink>().ToLookup(g => g.Group);
@@ -285,7 +286,8 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         {
             // Looked at from the narrowest scope and from the end, so that the bound keeps the ones that win, as the
             // tracer's own bound keeps the end of a chain.
-            foreach (var variable in VisibleKeys(view).Reverse().SelectMany(k => YamlBackward(name, byEnvironmentName, k)))
+            // A variable that refers back to name, left out below when except is set, is not even looked at.
+            foreach (var variable in VisibleKeys(view).Reverse().SelectMany(k => YamlBackward(name, byEnvironmentName, k, leaveOutSelf: except is not null)))
             {
                 Examined++;
                 if (++looked > limit)
@@ -445,9 +447,9 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         _ => [Everywhere, Exactly(scope), Stage(scope.Stage), Job(scope.Job)],
     };
 
-    private IEnumerable<AzurePipelinesVariable> YamlBackward(string name, bool byEnvironmentName, string scopeKey)
+    private IEnumerable<AzurePipelinesVariable> YamlBackward(string name, bool byEnvironmentName, string scopeKey, bool leaveOutSelf)
     {
-        var exact = Backward(_byScope[Key(name, scopeKey)]);
+        var exact = Backward((leaveOutSelf ? _byScopeNotSelf : _byScope)[Key(name, scopeKey)]);
         return byEnvironmentName
             ? exact.Concat(Backward(_byEnvironmentScope[Key(name, scopeKey)]).Where(v => !string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)))
             : exact;
@@ -536,6 +538,8 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         var all = options.Variables;
         var ranked = all.OrderBy(v => Level(options.ScopeOf(v))).ToList();
         _byScope = ranked.SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k)).ToLookup(p => Key(p.v.Name, p.k), p => p.v, StringComparer.OrdinalIgnoreCase);
+        _byScopeNotSelf = ranked.Where(v => !string.Equals(AzureDevOpsTraceOptions.MacroTarget(v.Value), v.Name, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k)).ToLookup(p => Key(p.v.Name, p.k), p => p.v, StringComparer.OrdinalIgnoreCase);
         _byEnvironmentScope = ranked.SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k))
             .ToLookup(p => Key(AzureDevOpsVariableGroups.ToEnvironmentName(p.v.Name), p.k), p => p.v, StringComparer.OrdinalIgnoreCase);
         _groupLinks = options.GroupLinks.ToLookup(g => g.Group, StringComparer.OrdinalIgnoreCase);
