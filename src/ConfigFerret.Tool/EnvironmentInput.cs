@@ -10,13 +10,14 @@ internal static class EnvironmentInput
     public static (string Name, string Value) ParsePair(string text, string optionName, int position = 1)
     {
         var eq = text.IndexOf('=', StringComparison.Ordinal);
-        if (eq <= 0)
+        var name = eq < 0 ? string.Empty : text[..eq].Trim();
+        if (name.Length == 0)
         {
             // Only the position: the text may be a value, given without its name or its =.
             throw new UsageException($"{optionName} expects NAME=VALUE, and {optionName} number {position} is not.");
         }
 
-        return (text[..eq].Trim(), text[(eq + 1)..]);
+        return (name, text[(eq + 1)..]);
     }
 
     /// <summary>
