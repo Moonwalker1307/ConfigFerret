@@ -156,6 +156,37 @@ public class AzureDevOpsResolverTests
         Assert.Equal("feature-flag=on", $"{flag.Name}={flag.Value}");
     }
 
+    [Theory(Timeout = 60_000)]
+    [InlineData("$(")]
+    [InlineData("$[variables['")]
+    [InlineData("${{ variables['")]
+    [InlineData("key")]
+    [InlineData("- name:")]
+    [InlineData("value")]
+    public async Task Reads_a_long_line_with_no_end_to_its_name_quickly(string shape)
+    {
+        // Each line starts a name and never ends it, which a scan that begins again at every character would read in time
+        // quadratic in its length. Such a scan of the same name pattern took 20 seconds for 80,000 characters of "a ",
+        // and about four times as long for twice as many, so the 400,000 characters here would take several minutes and
+        // the 2,000,000 of the key and name lines far longer. Read in one pass, each line takes milliseconds.
+        var names = string.Concat(Enumerable.Repeat("a ", 200_000));
+        var keys = "a" + string.Concat(Enumerable.Repeat("a-", 500_000)) + new string(' ', 1_000_000) + "b";
+        var pipeline = shape switch
+        {
+            "key" => $"variables:\n  {keys}\n  C: 1\n",
+            "- name:" => $"variables:\n- name: {keys}\n  value: 1\n- name: C\n  value: 1\n",
+            "value" => $"variables:\n- name: C\n  value: $(a{names}\n",
+            _ => $"steps:\n- script: ./run.sh\n  env:\n    A: {shape}a{names}\n    C: $(C)\n",
+        };
+
+        // Resolving C also asks whether each value is a whole $(...) reference.
+        var options = await Task.Run(() => new AzureDevOpsTraceOptions().AddPipelineText(pipeline, "azure-pipelines.yml"), TestContext.Current.CancellationToken);
+        await Task.Run(() => Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml")).Resolve(EnvStep("C", "1"), new TraceDiagnostics()), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["C"], options.Variables.Select(v => v.Name).Concat(options.Mappings.Select(m => m.Name)));
+        Assert.All(options.Variables, v => Assert.Null(AzureDevOpsTraceOptions.MacroTarget(v.Value)));
+    }
+
     [Fact]
     public void Traces_an_env_link_to_a_key_vault_secret_with_hyphens()
     {

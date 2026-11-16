@@ -261,7 +261,8 @@ public sealed partial class AzureDevOpsTraceOptions
 
     // Variable names start with a letter or "_" and may hold letters, digits, "_", "." and "-", since a group linked to a
     // Key Vault takes the vault's secret names, such as sql-connection-string or Db--Password. Inside $(...) and
-    // variables['...'] a name may hold spaces too; the dotted form variables.Var cannot hold "-", which would subtract.
+    // variables['...'] a name may hold spaces too. The dotted form variables.Var takes no "-": property syntax allows
+    // only letters, digits and "_" after the first character.
 
     // KEY: VALUE inside a variables block. Keys that are template expressions (${{ if ... }}) do not match.
     [GeneratedRegex("""^(?<kq>['"]?)(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\k<kq>\s*:(?:\s+(?<value>.*))?$""", RegexOptions.CultureInvariant)]
