@@ -394,6 +394,195 @@ public class HelmValueUsageTests
         Assert.All(patterns, p => Assert.True(p.Regex.MatchTimeout != System.Text.RegularExpressions.Regex.InfiniteMatchTimeout, p.Name));
     }
 
+    private const string LibraryValues = "image:\n  repository: example/app\n  tag: \"1.0\"\nreplicas: 2\nunused: 1\n";
+
+    private const string LibraryTemplate = "{{- define \"base.deployment\" -}}\nimage: {{ .Values.image.repository }}:{{ .Values.image.tag }}\nreplicas: {{ .Values.replicas }}\n{{- end }}\n";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_chart_that_includes_a_template_it_does_not_have_has_no_dead_values(bool packed)
+    {
+        using var temp = new TempFolder();
+        temp.Write("Chart.yaml", "apiVersion: v2\nname: app\nversion: 1.0.0\ndependencies:\n  - name: base\n    version: 1.0.0\n    repository: https://charts.example.invalid\n");
+        temp.Write("values.yaml", "image:\n  repository: example/app\n  tag: \"1.0\"\nreplicas: 2\ndb:\n  host: db.example.invalid\nconfig: \"host={{ .Values.db.host }}\"\n");
+        temp.Write("templates/all.yaml", "{{ include \"base.deployment\" . }}\n---\napiVersion: v1\nkind: ConfigMap\ndata:\n  config: {{ tpl .Values.config . | quote }}\n");
+        if (packed)
+        {
+            temp.Write("charts/base-1.0.0.tgz", "not read");
+        }
+
+        Assert.Empty(HelmValueUsage.FindDead(temp.Path, []));
+    }
+
+    [Fact]
+    public void A_chart_that_defines_every_template_it_includes_still_has_dead_values()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "nameOverride: x\nimage: example/app\nunused: 1\n");
+        temp.Write("templates/_helpers.tpl", "{{/* Helpers, see _helpers.tpl */}}\n{{- define \"app.name\" -}}{{ .Values.nameOverride | default .Chart.Name }}{{- end }}\n");
+        temp.Write("templates/deploy.yaml", "name: {{ include \"app.name\" . }}\nimage: {{ .Values.image }}\nlabel: {{- template \"app.name\" . }}\nchecksum: {{ include (print $.Template.BasePath \"/deploy.yaml\") . | sha256sum }}\n");
+
+        Assert.Equal(["unused"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void Values_a_library_chart_under_charts_reads_for_the_chart_count_as_read()
+    {
+        using var temp = new TempFolder();
+        temp.Write("Chart.yaml", "apiVersion: v2\nname: app\nversion: 1.0.0\ndependencies:\n  - name: base\n    version: 1.0.0\n");
+        temp.Write("values.yaml", LibraryValues);
+        temp.Write("templates/all.yaml", "{{ include \"base.deployment\" . }}\n");
+        temp.Write("charts/base/Chart.yaml", "apiVersion: v2\nname: base\ntype: library\nversion: 1.0.0\n");
+        temp.Write("charts/base/templates/_deployment.tpl", LibraryTemplate);
+
+        Assert.Equal(["unused"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void A_subchart_template_the_chart_does_not_include_reads_only_the_subchart_values()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", LibraryValues + "redis:\n  port: 1\n");
+        temp.Write("templates/cm.yaml", "replicas: {{ .Values.replicas }}\n");
+        temp.Write("charts/redis/Chart.yaml", "apiVersion: v2\nname: redis\nversion: 1.0.0\n");
+        temp.Write("charts/redis/templates/deployment.yaml", "image: {{ .Values.image.repository }}:{{ .Values.image.tag }}\n");
+
+        Assert.Equal(["image.repository", "image.tag", "unused"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void Values_read_through_tpl_count_as_read()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "config: \"host={{ .Values.db.host }}\"\ndb:\n  host: h\n  port: 1\nunused: 1\nextra: 1\n");
+        temp.Write("files/app.conf", "port={{ .Values.db.port }}\n");
+        temp.Write("values-prod.yaml", "note: \"{{ .Values.extra }}\"\n");
+        temp.Write("templates/cm.yaml", "a: {{ tpl .Values.config . }}\nb: {{ tpl (.Files.Get \"files/app.conf\") $ }}\nc: {{ tpl .Values.note . }}\n");
+
+        Assert.Equal(["unused"], HelmValueUsage.FindDead(temp.Path, [temp.Full("values-prod.yaml")]).Select(d => d.Path).Distinct());
+    }
+
+    [Fact]
+    public void Without_tpl_text_in_values_and_chart_files_reads_nothing()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "config: \"host={{ .Values.db.host }}\"\ndb:\n  host: h\n");
+        temp.Write("files/app.conf", "{{ .Values.db.host }}\n");
+        temp.Write("templates/cm.yaml", "a: {{ .Values.config }}\nb: {{ .Files.Get \"files/app.conf\" }}\n");
+
+        Assert.Equal(["db.host"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Theory]
+    [InlineData("{{ include (printf \"%s.labels\" .Chart.Name) . }}")]
+    [InlineData("{{ include $name . }}")]
+    [InlineData("{{- template .Values.which . }}")]
+    public void A_template_included_by_a_name_worked_out_at_render_time_gives_no_dead_values(string template)
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\nunused: 1\n");
+        temp.Write("templates/_helpers.tpl", "{{- define \"app.labels\" -}}{{ .Values.a }}{{- end }}\n");
+        temp.Write("templates/cm.yaml", template);
+
+        Assert.Empty(HelmValueUsage.FindDead(temp.Path, []));
+    }
+
+    [Theory]
+    [InlineData("undefined")]
+    [InlineData("worked out")]
+    [InlineData("big Chart.yaml")]
+    [InlineData("undefined in a value")]
+    public void Says_why_a_chart_has_no_dead_values(string reason)
+    {
+        using var temp = new TempFolder();
+
+        // A name tpl finds in a values file is part of a value, which may be a secret, so the note doesn't quote it.
+        temp.Write("values.yaml", reason == "undefined in a value"
+            ? "password: not-a-real-secret\nx: '{{ include \"s3cr3t-abc\" . }}'\nunused: 1\n"
+            : "password: not-a-real-secret\nunused: 1\n");
+        temp.Write("templates/cm.yaml", reason switch
+        {
+            "undefined" => "{{ include \"base.\u202Edeploy\u0007ment\" . }}",
+            "worked out" => "{{ include $name . }}",
+            "undefined in a value" => "{{ tpl .Values.x . }}",
+            _ => "kind: ConfigMap",
+        });
+        if (reason == "big Chart.yaml")
+        {
+            temp.Write("Chart.yaml", "apiVersion: v2\n#" + new string('x', 2 * 1024 * 1024));
+        }
+
+        // Control and format characters in a name could hide or reorder the text of the note.
+        var dead = HelmValueUsage.FindDead(temp.Path, [], "Helm chart deploy/\u2066app\u001b[0m", out var notes);
+
+        Assert.Empty(dead);
+        var note = Assert.Single(notes);
+        Assert.Equal(
+            reason switch
+            {
+                "undefined" => "The templates of Helm chart deploy/app[0m include \"base.deployment\", which isn't in the chart, so no Helm value is marked dead: that template may read any of them. Put the dependency that defines it under charts/, unpacked, to check them.",
+                "worked out" => "The templates of Helm chart deploy/app[0m include a template whose name is worked out when the chart is rendered, so no Helm value is marked dead: that template may read any of them.",
+                "undefined in a value" => "The templates of Helm chart deploy/app[0m include a template that isn't in the chart, so no Helm value is marked dead: that template may read any of them. Put the dependency that defines it under charts/, unpacked, to check them.",
+                _ => "The dependencies of Helm chart deploy/app[0m in Chart.yaml, requirements.yaml or charts/ can't be read, so no Helm value is marked dead: without them a subchart's values can't be told from the chart's own.",
+            },
+            note);
+        Assert.DoesNotContain("not-a-real-secret", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void No_note_when_the_scan_knows_what_the_templates_read()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\nunused: 1\n");
+        temp.Write("templates/cm.yaml", "{{ .Values.a }}");
+
+        Assert.Equal(["unused"], HelmValueUsage.FindDead(temp.Path, [], string.Empty, out var notes).Select(d => d.Path));
+        Assert.Empty(notes);
+    }
+
+    [Fact]
+    public void Without_a_source_name_a_note_names_the_chart_folder()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        temp.Write("templates/cm.yaml", "{{ include $name . }}");
+
+        HelmValueUsage.FindDead(temp.Path, [], " ", out var notes);
+
+        Assert.StartsWith($"The templates of Helm chart {System.IO.Path.GetFileName(temp.Path)} include", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_template_that_text_rendered_with_tpl_includes_counts(bool committed)
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "extra: '{{ include \"lib.sidecar\" . }}'\nsidecar:\n  image: x\nunused: 1\n");
+        temp.Write("templates/cm.yaml", "data: {{ tpl .Values.extra . }}\n");
+        if (committed)
+        {
+            temp.Write("charts/lib/Chart.yaml", "apiVersion: v2\nname: lib\ntype: library\nversion: 1.0.0\n");
+            temp.Write("charts/lib/templates/_s.tpl", "{{- define \"lib.sidecar\" -}}image: {{ .Values.sidecar.image }}{{- end }}\n");
+        }
+
+        string[] expected = committed ? ["unused"] : [];
+        Assert.Equal(expected, HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void A_chart_file_in_a_dot_folder_that_tpl_renders_counts()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "port: 1\nunused: 1\n");
+        temp.Write(".config/app.tpl", "port={{ .Values.port }}\n");
+        temp.Write("templates/cm.yaml", "data: {{ tpl (.Files.Get \".config/app.tpl\") . }}\n");
+
+        Assert.Equal(["unused"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
     [Fact]
     public void Malformed_values_YAML_is_a_YamlException_whatever_YamlDotNet_throws()
     {

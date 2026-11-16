@@ -810,6 +810,21 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Contains(AllSteps(setting.Steps), s => s.Kind == LayerKind.Helm);
     }
 
+    [Fact]
+    public async Task A_helm_chart_that_includes_a_template_it_does_not_have_says_why_no_value_is_dead()
+    {
+        Write("chart/Chart.yaml", "name: demo\nversion: 0.1.0\ndependencies:\n  - name: base\n    version: 1.0.0\n");
+        Write("chart/values.yaml", "image: example/app\n");
+        Write("chart/templates/all.yaml", "{{ include \"base.deployment\" . }}\n");
+        var helm = new HelmSource { Name = "Helm chart deploy/demo", ChartFolder = Path.Join(_temp.FullName, "chart") };
+
+        var result = await Run(ProfileOf(App("{}"), helm));
+
+        Assert.Null(ProblemOf(result, helm));
+        Assert.Empty(result.DeadHelmValues);
+        Assert.Contains(result.Notes, n => n.StartsWith("The templates of Helm chart deploy/demo include \"base.deployment\"", StringComparison.Ordinal));
+    }
+
     private static IEnumerable<ProvenanceStep> AllSteps(IEnumerable<ProvenanceStep> steps) =>
         steps.SelectMany(s => new[] { s }.Concat(AllSteps(s.Origins)));
 
