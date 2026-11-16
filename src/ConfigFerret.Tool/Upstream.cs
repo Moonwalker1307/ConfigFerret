@@ -62,7 +62,8 @@ internal static class Upstream
         var parts = repository.Split('/');
         if (parts.Length != 2 || parts.Any(string.IsNullOrWhiteSpace))
         {
-            throw new UsageException($"--github-repo expects owner/name, got '{repository}'.");
+            // Not the text itself: a token pasted into the wrong option would be printed.
+            throw new UsageException("--github-repo expects owner/name.");
         }
 
         var token = FirstVariable(host, GitHubTokenVariables)
@@ -74,9 +75,13 @@ internal static class Upstream
             Environment = result.GetValue(options.GitHubEnvironment),
             Token = token,
         };
-        if ((result.GetValue(options.GitHubApiUrl) ?? host.GetEnvironmentVariable("GITHUB_API_URL")) is { } apiUrl)
+        if (result.GetValue(options.GitHubApiUrl) is { } apiUrl)
         {
             github.ApiBaseAddress = ParseUrl(apiUrl, "--github-api-url");
+        }
+        else if (host.GetEnvironmentVariable("GITHUB_API_URL") is { } apiUrlVariable)
+        {
+            github.ApiBaseAddress = ParseUrl(apiUrlVariable, "GITHUB_API_URL");
         }
 
         var workflows = result.GetValue(options.GitHubWorkflow) ?? [];
@@ -118,13 +123,17 @@ internal static class Upstream
             return;
         }
 
-        var server = result.GetValue(options.OctopusServer) ?? FirstVariable(host, OctopusServerVariables)
+        // Where the address came from, for an error that can't quote it.
+        var serverSource = result.GetValue(options.OctopusServer) is not null
+            ? "--octopus-server"
+            : OctopusServerVariables.FirstOrDefault(name => host.GetEnvironmentVariable(name) is not null)
             ?? throw new UsageException("--octopus-project needs the server address in --octopus-server or the OCTOPUS_URL environment variable.");
+        var server = result.GetValue(options.OctopusServer) ?? host.GetEnvironmentVariable(serverSource)!;
         var apiKey = FirstVariable(host, OctopusApiKeyVariables)
             ?? throw new UsageException("--octopus-project needs an API key in the OCTOPUS_API_KEY environment variable. API keys are never read from options.");
         var octopus = new OctopusVariablesOptions
         {
-            ServerUri = ParseUrl(server, "--octopus-server"),
+            ServerUri = ParseUrl(server, serverSource),
             ApiKey = apiKey,
             Project = project,
             Space = result.GetValue(options.OctopusSpace),
@@ -162,12 +171,13 @@ internal static class Upstream
     private static string? FirstVariable(CliHost host, IEnumerable<string> names) =>
         names.Select(host.GetEnvironmentVariable).FirstOrDefault(v => v is not null);
 
-    // Relative API paths resolve under the base address only when it ends with a slash.
-    private static Uri ParseUrl(string text, string optionName)
+    // Relative API paths resolve under the base address only when it ends with a slash. The error names the option or
+    // variable the text came from, but not the text: an API key or token put there by mistake would be printed.
+    private static Uri ParseUrl(string text, string source)
     {
         if (!Uri.TryCreate(text.EndsWith('/') ? text : text + "/", UriKind.Absolute, out var uri))
         {
-            throw new UsageException($"{optionName} expects an absolute URL, got '{text}'.");
+            throw new UsageException($"{source} is not an absolute URL.");
         }
 
         return uri;

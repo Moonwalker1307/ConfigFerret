@@ -142,7 +142,7 @@ internal static partial class AppConfiguration
             && (inputs.UserSecretsId is not null || string.Equals(environmentName, "Development", StringComparison.OrdinalIgnoreCase));
         if (loadSecrets)
         {
-            var secretsFile = UserSecretsPath(secretsId!, host);
+            var secretsFile = UserSecretsPath(secretsId!, inputs.UserSecretsId is not null ? "--user-secrets-id" : "the project file", host);
             if (secretsFile is not null && File.Exists(secretsFile))
             {
                 builder.AddJsonFile(secretsFile, optional: false);
@@ -258,12 +258,15 @@ internal static partial class AppConfiguration
         return string.IsNullOrEmpty(value) ? null : value;
     }
 
-    /// <summary>Where <c>dotnet user-secrets</c> keeps the secrets for <paramref name="id"/> on this machine.</summary>
-    internal static string? UserSecretsPath(string id, CliHost host)
+    /// <summary>
+    /// Where <c>dotnet user-secrets</c> keeps the secrets for <paramref name="id"/> on this machine. An id that is not
+    /// valid is refused naming <paramref name="source"/>, but not the id, which could be a value pasted there by mistake.
+    /// </summary>
+    internal static string? UserSecretsPath(string id, string source, CliHost host)
     {
         if (!SafeUserSecretsId().IsMatch(id) || id.Trim('.').Length == 0)
         {
-            throw new UsageException($"'{id}' is not a valid UserSecretsId.");
+            throw new UsageException($"The UserSecretsId from {source} is not valid: it can hold only letters, digits, '.', '_' and '-', and not only dots.");
         }
 
         var appData = host.GetEnvironmentVariable("APPDATA");
