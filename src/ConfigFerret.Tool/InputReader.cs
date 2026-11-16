@@ -7,6 +7,13 @@ internal sealed class InputReader(CliHost host)
 {
     public const string StandardInput = "-";
 
+    /// <summary>
+    /// The most the tool reads from a file it finds by itself: <c>appsettings.json</c>,
+    /// <c>appsettings.{Environment}.json</c> and the files in a manifest folder. Files named on the command line have
+    /// no limit.
+    /// </summary>
+    public const long MaxFoundFileBytes = 64 * 1024 * 1024;
+
     private bool _stdinUsed;
 
     public string ReadText(string path)
@@ -58,7 +65,21 @@ internal sealed class InputReader(CliHost host)
                     || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
                     || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 .Order(StringComparer.Ordinal)
+                .Select(RequireFoundFileSize)
             : [path];
+
+    /// <summary>Refuses a file the tool found by itself that is bigger than <see cref="MaxFoundFileBytes"/>.</summary>
+    public static string RequireFoundFileSize(string path)
+    {
+        // The length of the open file, not FileInfo.Length: for a link that is the size of the link itself.
+        using var handle = File.OpenHandle(path);
+        if (RandomAccess.GetLength(handle) > MaxFoundFileBytes)
+        {
+            throw new UsageException($"{path} is bigger than {MaxFoundFileBytes / (1024 * 1024)} MB, the most the tool reads from a file it finds by itself.");
+        }
+
+        return path;
+    }
 
     public static string RequireFile(string path)
     {

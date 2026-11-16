@@ -261,6 +261,126 @@ public class TraceCommandTests
     }
 
     [Fact]
+    public async Task Refuses_a_settings_file_that_links_outside_the_app_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            var app = Directory.CreateDirectory(Path.Join(root.FullName, "repo", "app")).FullName;
+            await File.WriteAllTextAsync(Path.Join(app, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", ct);
+            Directory.CreateDirectory(Path.Join(root.FullName, "outside", "deep"));
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "outside", "secret.json"), """{ "Outside": { "Region": "fake-outside-value" } }""", ct);
+
+            // The link names a file in a folder inside the app folder, but that folder leads out of it.
+            Directory.CreateSymbolicLink(Path.Join(app, "config"), Path.Join(root.FullName, "outside", "deep"));
+            File.CreateSymbolicLink(Path.Join(app, "appsettings.Production.json"), Path.Join("config", "..", "secret.json"));
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app, "--no-user-secrets");
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("appsettings.Production.json", result.Error, StringComparison.Ordinal);
+            Assert.Contains("outside the app folder", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake-outside-value", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Reads_a_settings_file_that_links_inside_the_app_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        // The layout of a mounted ConfigMap: the file links to ..data, which links to a folder beside it.
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", ct);
+            Directory.CreateDirectory(Path.Join(app.FullName, "..2026_01_01"));
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "..2026_01_01", "appsettings.Production.json"), """{ "Db": { "Host": "db.prod" } }""", ct);
+            Directory.CreateSymbolicLink(Path.Join(app.FullName, "..data"), "..2026_01_01");
+            File.CreateSymbolicLink(Path.Join(app.FullName, "appsettings.Production.json"), Path.Join("..data", "appsettings.Production.json"));
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--no-user-secrets", "Db:Host");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Db:Host = "db.prod""", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Refuses_a_settings_file_over_the_size_limit()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            using (var file = File.Create(Path.Join(app.FullName, "appsettings.json")))
+            {
+                file.SetLength(InputReader.MaxFoundFileBytes + 1);
+            }
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--no-user-secrets");
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("appsettings.json", result.Error, StringComparison.Ordinal);
+            Assert.Contains("64 MB", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Refuses_a_linked_settings_file_over_the_size_limit()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        // The link itself is a few bytes; the file it leads to, inside the app folder, is over the limit.
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", TestContext.Current.CancellationToken);
+            Directory.CreateDirectory(Path.Join(app.FullName, "..data"));
+            using (var file = File.Create(Path.Join(app.FullName, "..data", "appsettings.Production.json")))
+            {
+                file.SetLength(InputReader.MaxFoundFileBytes + 1);
+            }
+
+            File.CreateSymbolicLink(Path.Join(app.FullName, "appsettings.Production.json"), Path.Join("..data", "appsettings.Production.json"));
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--no-user-secrets");
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("appsettings.Production.json", result.Error, StringComparison.Ordinal);
+            Assert.Contains("64 MB", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Reads_user_secrets_in_Development_and_redacts_them()
     {
         var home = Directory.CreateTempSubdirectory("configferret-home-");
