@@ -1,10 +1,17 @@
+using System.Text.RegularExpressions;
+using ConfigFerret.Compose;
+
 namespace ConfigFerret.Kubernetes;
 
 /// <summary>Links environment variables and mounted files to the workload spec, ConfigMaps and Secrets.</summary>
-internal sealed class KubernetesResolver(KubernetesManifests manifests, string? workloadName, string? containerName) : IOriginResolver
+internal sealed partial class KubernetesResolver(KubernetesManifests manifests, string? workloadName, string? containerName) : IOriginResolver
 {
+    // How many $(VAR) hops are shown below a step. Deeper chains still pass on their sensitivity, but not their origins.
+    private const int MaxReferenceDepth = 8;
+
     private (Workload Workload, Container Container)? _target;
     private bool _selected;
+    private (Container Container, List<ProvenanceStep> Steps)? _entrySteps;
 
     public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
     {
@@ -241,7 +248,12 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         return _target;
     }
 
-    private List<ProvenanceStep> ResolveEnv(Workload workload, Container container, string name)
+    private List<ProvenanceStep> ResolveEnv(Workload workload, Container container, string name) =>
+        ResolveEnv(workload, container, name, EntrySteps(workload, container));
+
+    // The layers that set name from envFrom and from the env entries whose steps are given: all of them, or the ones
+    // before the entry whose $(VAR) references are being looked up.
+    private List<ProvenanceStep> ResolveEnv(Workload workload, Container container, string name, List<ProvenanceStep> entries)
     {
         var where = $"{workload.DisplayName}, container {container.Name}";
         var chain = new List<ProvenanceStep>();
@@ -273,32 +285,12 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
             }
         }
 
-        foreach (var entry in container.Env.Where(e => string.Equals(e.Name, name, StringComparison.Ordinal)))
+        for (var i = 0; i < entries.Count; i++)
         {
-            chain.Add(entry.Source switch
+            if (string.Equals(container.Env[i].Name, name, StringComparison.Ordinal))
             {
-                EnvValueSource.Literal literal => new ProvenanceStep
-                {
-                    Kind = LayerKind.KubernetesWorkload,
-                    Source = $"{workload.DisplayName} env {name}",
-                    Location = $"{workload.SourceName}:{entry.Line}",
-                    Value = literal.Value,
-                    Note = literal.Value.Contains("$(", StringComparison.Ordinal)
-                        ? $"container {container.Name}; Kubernetes expands $(VAR) references in this value"
-                        : $"container {container.Name}",
-                    Reference = new WorkloadEnvRef(workload.Name, container.Name, name),
-                },
-                EnvValueSource.FromConfigMap cm => KeyRefStep(isSecret: false, cm.Name, cm.Key, $"configMapKeyRef on {where}"),
-                EnvValueSource.FromSecret s => KeyRefStep(isSecret: true, s.Name, s.Key, $"secretKeyRef on {where}"),
-                EnvValueSource.FromField f => new ProvenanceStep
-                {
-                    Kind = LayerKind.KubernetesField,
-                    Source = $"downward API {f.FieldPath}",
-                    Location = $"{workload.SourceName}:{entry.Line}",
-                    Note = $"fieldRef on {where}",
-                },
-                _ => throw new InvalidOperationException("Unknown env value source."),
-            });
+                chain.Add(entries[i]);
+            }
         }
 
         if (chain.Count == 0)
@@ -336,6 +328,133 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
         }
 
         return chain;
+    }
+
+    // The kubelet builds a container's environment in this order (makeEnvironmentVariables in pkg/kubelet/kubelet_pods.go):
+    // each envFrom source in turn, every key with its prefix, a later source overriding an earlier one; then each env
+    // entry in list order, a later entry overriding an earlier one. Only an env entry's literal value is expanded, never
+    // a value from envFrom or valueFrom. A $(NAME) in the value of an entry sees NAME as it is at that point: from
+    // envFrom, or from an env entry before it, whose own value was already expanded, so references chain. An entry later
+    // in the list, or the entry itself, is not seen, unless envFrom sets the same name. The kubelet also sees the
+    // service link variables (such as DB_SERVICE_HOST); they are not in the manifests, so they are not looked up here.
+    // Each variable a value refers to is an origin of that value, and when any of them may be secret, so is the value.
+    private List<ProvenanceStep> EntrySteps(Workload workload, Container container)
+    {
+        if (_entrySteps is { } cached && ReferenceEquals(cached.Container, container))
+        {
+            return cached.Steps;
+        }
+
+        var where = $"{workload.DisplayName}, container {container.Name}";
+        var steps = new List<ProvenanceStep>(container.Env.Count);
+        var depths = new List<int>(container.Env.Count);
+        foreach (var entry in container.Env)
+        {
+            var depth = 0;
+            steps.Add(entry.Source switch
+            {
+                EnvValueSource.Literal literal => LiteralStep(workload, container, entry, literal.Value, steps, depths, out depth),
+                EnvValueSource.FromConfigMap cm => KeyRefStep(isSecret: false, cm.Name, cm.Key, $"configMapKeyRef on {where}"),
+                EnvValueSource.FromSecret s => KeyRefStep(isSecret: true, s.Name, s.Key, $"secretKeyRef on {where}"),
+                EnvValueSource.FromField f => new ProvenanceStep
+                {
+                    Kind = LayerKind.KubernetesField,
+                    Source = $"downward API {f.FieldPath}",
+                    Location = $"{workload.SourceName}:{entry.Line}",
+                    Note = $"fieldRef on {where}",
+                },
+                _ => throw new InvalidOperationException("Unknown env value source."),
+            });
+            depths.Add(depth);
+        }
+
+        _entrySteps = (container, steps);
+        return steps;
+    }
+
+    // A literal env entry, with the variables its $(VAR) references see as origins. earlier and depths hold the
+    // entries before it; depth is how many reference hops are below the step.
+    private ProvenanceStep LiteralStep(Workload workload, Container container, EnvEntry entry, string value, List<ProvenanceStep> earlier, List<int> depths, out int depth)
+    {
+        var origins = new List<ProvenanceStep>();
+        depth = 0;
+        var names = EnvReference().Matches(value)
+            .Where(m => m.Groups["name"].Success)
+            .Select(m => m.Groups["name"].Value)
+            .Distinct(StringComparer.Ordinal);
+        foreach (var name in names)
+        {
+            if (ReferencedStep(workload, container, entry, name, earlier, depths) is (var origin, var originDepth))
+            {
+                origins.Add(origin);
+                depth = Math.Max(depth, originDepth + 1);
+            }
+        }
+
+        return new ProvenanceStep
+        {
+            Kind = LayerKind.KubernetesWorkload,
+            Source = $"{workload.DisplayName} env {entry.Name}",
+            Location = $"{workload.SourceName}:{entry.Line}",
+            Value = value,
+            IsSensitive = origins.Exists(o => o.IsSensitive),
+            Note = value.Contains("$(", StringComparison.Ordinal)
+                ? $"container {container.Name}; Kubernetes expands $(VAR) references in this value"
+                : $"container {container.Name}",
+            Reference = new WorkloadEnvRef(workload.Name, container.Name, entry.Name),
+            Origins = origins,
+        };
+    }
+
+    // The step that sets the variable a $(NAME) reference in entry sees, with how many reference hops are below it, or
+    // null when no variable of that name is set before the entry. The step is sensitive when the variable may hold a
+    // secret: it comes from a Secret, it refers to one itself, or its name looks like a secret.
+    private (ProvenanceStep Step, int Depth)? ReferencedStep(Workload workload, Container container, EnvEntry entry, string name, List<ProvenanceStep> earlier, List<int> depths)
+    {
+        var chain = ResolveEnv(workload, container, name, earlier);
+        if (chain.Count == 0)
+        {
+            return null;
+        }
+
+        var step = chain[^1];
+        var depth = 0;
+        for (var i = earlier.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(container.Env[i].Name, name, StringComparison.Ordinal))
+            {
+                depth = depths[i];
+                break;
+            }
+        }
+
+        if (depth >= MaxReferenceDepth)
+        {
+            (step, depth) = (step with { Origins = [] }, 0);
+        }
+
+        // A guess names one of the unloaded sources that may set the variable; any of them may be the one. Nothing is
+        // known to set the name then, so the text between $( and ) may be only a part of the value, which may be
+        // secret: the step says where the reference is written, and leaves out the text and the key it would be.
+        if (step.IsInferred)
+        {
+            return (step with
+            {
+                Location = null,
+                Reference = null,
+                IsSensitive = chain.Exists(s => s.IsSensitive) || ComposeSteps.IsSensitiveName(name),
+                IsEffective = true,
+                Note = ComposeSteps.Join(step.Note, $"a reference in {workload.SourceName}:{entry.Line} may take its value from here"),
+            }, depth);
+        }
+
+        var sensitive = step.IsSensitive || ComposeSteps.IsSensitiveName(name);
+        return (step with
+        {
+            IsSensitive = sensitive,
+            IsEffective = true,
+            Note = ComposeSteps.Join(step.Note, $"referenced as $({name}) in {workload.SourceName}:{entry.Line}"),
+        }, depth);
     }
 
     private ProvenanceStep KeyRefStep(bool isSecret, string sourceName, string key, string note)
@@ -474,4 +593,9 @@ internal sealed class KubernetesResolver(KubernetesManifests manifests, string? 
 
         return [];
     }
+
+    // Kubernetes' $(VAR) syntax (third_party/forked/golang/expansion in kubernetes/kubernetes): $$ is an escaped $, and
+    // $(NAME) runs to the first closing parenthesis. Any other $, including a $( that is never closed, is plain text.
+    [GeneratedRegex(@"\$\$|\$\((?<name>[^)]*)\)", RegexOptions.CultureInvariant)]
+    private static partial Regex EnvReference();
 }
