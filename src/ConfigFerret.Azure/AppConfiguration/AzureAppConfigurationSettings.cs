@@ -156,7 +156,6 @@ public sealed class AzureAppConfigurationSettings
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clientOptions);
         var (client, store) = CreateClient(options, credential, clientOptions);
-        var labels = options.Labels.Count == 0 ? [null] : options.Labels.Select(l => string.IsNullOrEmpty(l) || l == "\0" ? null : l).Distinct().ToList();
         var settings = new List<AzureAppConfigurationSetting>();
         var flattened = new Dictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>>(ReferenceEqualityComparer.Instance);
         var warnings = new List<string>();
@@ -165,11 +164,16 @@ public sealed class AzureAppConfigurationSettings
         // longer one is tried first, and it compares them with case ignored.
         var prefixes = options.TrimKeyPrefixes.Where(p => !string.IsNullOrEmpty(p)).OrderDescending(StringComparer.OrdinalIgnoreCase).ToList();
         var json = new JsonBudget();
-        foreach (var label in labels)
+        var keyFilter = string.IsNullOrWhiteSpace(options.KeyFilter) ? SettingSelector.Any : options.KeyFilter.Trim();
+        foreach (var label in ReadLabels(options.Labels))
         {
-            var keyFilter = string.IsNullOrWhiteSpace(options.KeyFilter) ? SettingSelector.Any : options.KeyFilter.Trim();
             await ReadAsync(client, store, keyFilter, label, options, prefixes, json, settings, flattened, warnings, cancellationToken).ConfigureAwait(false);
-            if (options.IncludeFeatureFlags)
+        }
+
+        // As in the provider, feature flags have their own labels, which default to no label whatever Labels holds.
+        if (options.IncludeFeatureFlags)
+        {
+            foreach (var label in ReadLabels(options.FeatureFlagLabels))
             {
                 await ReadAsync(client, store, FeatureFlagPrefix + "*", label, options, prefixes, json, settings, flattened, warnings, cancellationToken).ConfigureAwait(false);
             }
@@ -181,6 +185,10 @@ public sealed class AzureAppConfigurationSettings
     /// <summary>The values a stored JSON key-value was flattened to, or null when it sets its own key as it is.</summary>
     internal IReadOnlyList<AzureAppConfigurationSetting>? Flattened(AzureAppConfigurationSetting setting) =>
         _flattened.TryGetValue(setting, out var values) ? values : null;
+
+    // An empty entry or \0 is no label (null), and an empty list reads only keys with no label.
+    private static List<string?> ReadLabels(IList<string> labels) =>
+        labels.Count == 0 ? [null] : labels.Select(l => string.IsNullOrEmpty(l) || l == "\0" ? null : l).Distinct().ToList();
 
     internal static AzureAppConfigurationSettingRef Reference(AzureAppConfigurationSetting setting) =>
         new(setting.Store, setting.Key, setting.Label, setting.SecretId);

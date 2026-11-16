@@ -26,6 +26,7 @@ public sealed class AzureAppConfigurationSourceProvider : IConfigSourceProvider
         new(nameof(AzureAppConfigurationOptions.TrimKeyPrefixes), "Trimmed key prefixes", SourceSettingKind.Lines, Help: "Key prefixes the app trims (TrimKeyPrefix), one per line."),
         new(nameof(AzureAppConfigurationOptions.IncludeKeyVaultReferences), "Include Key Vault references", SourceSettingKind.Boolean, Help: "Also list Key Vault references. The secrets themselves are not read.", DefaultValue: "true"),
         new(nameof(AzureAppConfigurationOptions.IncludeFeatureFlags), "Include feature flags", SourceSettingKind.Boolean, Help: "Also list feature flags, as FeatureManagement:<name>.", DefaultValue: "true"),
+        new(nameof(AzureAppConfigurationOptions.FeatureFlagLabels), "Feature flag labels", SourceSettingKind.Lines, Help: "Labels to read feature flags with, one per line, as the app gives them to UseFeatureFlags. Empty reads flags with no label, whatever the labels above."),
         new(nameof(AzureAppConfigurationTraceOptions.MatchByName), "Match by name", SourceSettingKind.Boolean, Help: "Link environment variables and ConfigMap or Secret keys to key-values with the same key.", DefaultValue: "true"),
         new(nameof(AzureAppConfigurationOptions.TenantId), "Tenant ID", Help: "The Microsoft Entra tenant. Optional."),
         new(nameof(AzureAppConfigurationOptions.ClientId), "Client ID", Help: "A service principal, or the managed or workload identity to use. Optional."),
@@ -51,6 +52,11 @@ public sealed class AzureAppConfigurationSourceProvider : IConfigSourceProvider
         foreach (var label in AzureAuth.ReadLines(values, nameof(AzureAppConfigurationOptions.Labels)))
         {
             options.Labels.Add(label);
+        }
+
+        foreach (var label in AzureAuth.ReadLines(values, nameof(AzureAppConfigurationOptions.FeatureFlagLabels)))
+        {
+            options.FeatureFlagLabels.Add(label);
         }
 
         foreach (var prefix in AzureAuth.ReadLines(values, nameof(AzureAppConfigurationOptions.TrimKeyPrefixes)))

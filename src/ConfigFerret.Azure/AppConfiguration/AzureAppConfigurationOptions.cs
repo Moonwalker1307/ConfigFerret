@@ -43,6 +43,14 @@ public sealed class AzureAppConfigurationOptions
     /// <summary>Also read feature flags (default true), which the .NET provider maps to <c>FeatureManagement:&lt;name&gt;</c>.</summary>
     public bool IncludeFeatureFlags { get; set; } = true;
 
+    /// <summary>
+    /// The labels to read feature flags with, in the order the app reads them, like the labels the app gives
+    /// <c>UseFeatureFlags</c> (<c>FeatureFlagOptions.Select</c>, or the older <c>FeatureFlagOptions.Label</c>). They do not
+    /// follow <see cref="Labels"/>. An empty entry or <c>\0</c> means no label. Empty (the default) reads only flags with
+    /// no label, as <c>UseFeatureFlags()</c> does.
+    /// </summary>
+    public IList<string> FeatureFlagLabels { get; } = [];
+
     /// <summary>The Microsoft Entra tenant to sign in to. Optional.</summary>
     public string? TenantId { get; set; }
 
