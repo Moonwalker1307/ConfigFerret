@@ -14,6 +14,24 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
     private static readonly string[] ConnectionStringPrefixes =
         ["MYSQLCONNSTR_", "SQLAZURECONNSTR_", "SQLCONNSTR_", "CUSTOMCONNSTR_", "POSTGRESQLCONNSTR_"];
 
+    // Configuration providers that read only secrets, so every value they set is secret whatever its key. They are
+    // matched by type name so the package does not have to depend on them. Stores that also hold plain settings, such
+    // as App Configuration, Parameter Store and Consul, do not belong here.
+    private static readonly HashSet<string> SecretStoreProviders = new(StringComparer.Ordinal)
+    {
+        // Azure Key Vault: Azure.Extensions.AspNetCore.Configuration.Secrets, and the older
+        // Microsoft.Extensions.Configuration.AzureKeyVault.
+        "Azure.Extensions.AspNetCore.Configuration.Secrets.AzureKeyVaultConfigurationProvider",
+        "Microsoft.Extensions.Configuration.AzureKeyVault.AzureKeyVaultConfigurationProvider",
+        // AWS Secrets Manager: Kralizek.Extensions.Configuration.AWSSecretsManager 1.x, then 2.x.
+        "Kralizek.Extensions.Configuration.Internal.SecretsManagerConfigurationProvider",
+        "Kralizek.Extensions.Configuration.Internal.SecretsManagerDiscoveryConfigurationProvider",
+        "Kralizek.Extensions.Configuration.Internal.SecretsManagerKnownSecretConfigurationProvider",
+        "Kralizek.Extensions.Configuration.Internal.SecretsManagerKnownSecretsConfigurationProvider",
+        // HashiCorp Vault: VaultSharp.Extensions.Configuration.
+        "VaultSharp.Extensions.Configuration.VaultConfigurationProvider",
+    };
+
     private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, int>> _jsonLines = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -62,8 +80,23 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
             Kind = LayerKind.DotNetProvider,
             Source = provider.ToString() ?? provider.GetType().Name,
             Value = value,
+            IsSensitive = IsSecretStoreProvider(provider.GetType()),
         },
     };
+
+    /// <summary>True for a known secret-store provider, or a class derived from one.</summary>
+    private static bool IsSecretStoreProvider(Type type)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            if (current.FullName is { } name && SecretStoreProviders.Contains(name))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private ProvenanceStep DescribeEnvironment(EnvironmentVariablesConfigurationProvider provider, string key, string? value)
     {

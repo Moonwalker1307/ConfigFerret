@@ -184,6 +184,7 @@ public sealed class ProviderDescriberTests : IDisposable
 
         Assert.Equal("my provider", step.Source);
         Assert.Equal("v", step.Value);
+        Assert.False(step.IsSensitive);
     }
 
     [Fact]

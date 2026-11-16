@@ -85,6 +85,55 @@ public class DotNetLayerTests
         Assert.Equal("dev-password", shown.Value);
     }
 
+    [Theory]
+    [InlineData("Azure.Extensions.AspNetCore.Configuration.Secrets.AzureKeyVaultConfigurationProvider")]
+    [InlineData("Microsoft.Extensions.Configuration.AzureKeyVault.AzureKeyVaultConfigurationProvider")]
+    [InlineData("Kralizek.Extensions.Configuration.Internal.SecretsManagerConfigurationProvider")]
+    [InlineData("Kralizek.Extensions.Configuration.Internal.SecretsManagerDiscoveryConfigurationProvider")]
+    [InlineData("Kralizek.Extensions.Configuration.Internal.SecretsManagerKnownSecretConfigurationProvider")]
+    [InlineData("Kralizek.Extensions.Configuration.Internal.SecretsManagerKnownSecretsConfigurationProvider")]
+    [InlineData("VaultSharp.Extensions.Configuration.VaultConfigurationProvider")]
+    [InlineData("ConfigFerret.Tests.CachingKeyVaultConfigurationProvider")]
+    public void Redacts_every_value_from_a_secret_store_provider(string typeName)
+    {
+        const string value = "fake-greeting-from-the-store";
+        var config = new ConfigurationBuilder().Add(FakeStoreProvider.Create(typeName, "Greeting", value)).Build();
+
+        var report = config.TraceProvenance();
+        var setting = report.Find("Greeting")!;
+        var revealed = config.TraceProvenance(new TraceOptions { RevealSensitiveValues = true }).Find("Greeting")!;
+
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        var step = Assert.Single(setting.Steps);
+        Assert.Equal("***", step.Value);
+        Assert.Equal(typeName[(typeName.LastIndexOf('.') + 1)..], step.Source);
+        foreach (var output in new[] { report.ToText(), report.ToJson(), report.Explain("Greeting") })
+        {
+            Assert.Contains("***", output, StringComparison.Ordinal);
+            Assert.DoesNotContain(value, output, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(value, revealed.Value);
+        Assert.Equal(value, Assert.Single(revealed.Steps).Value);
+    }
+
+    [Fact]
+    public void Shows_values_from_a_provider_it_does_not_know()
+    {
+        var config = new ConfigurationBuilder()
+            .Add(FakeStoreProvider.Create("ConfigFerret.Tests.SettingsServiceConfigurationProvider", "Greeting", "hello"))
+            .Build();
+
+        var report = config.TraceProvenance();
+        var setting = report.Find("Greeting")!;
+
+        Assert.False(setting.IsSensitive);
+        Assert.Equal("hello", setting.Value);
+        Assert.Equal("SettingsServiceConfigurationProvider", Assert.Single(setting.Steps).Source);
+        Assert.Contains("hello", report.Explain("Greeting"), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Explain_says_when_a_key_is_not_set()
     {
