@@ -212,7 +212,7 @@ public class KeyVaultResolverTests
     }
 
     [Fact]
-    public void Warns_about_a_matched_secret_that_cannot_be_read()
+    public void Warns_about_a_matched_secret_that_is_disabled_expired_or_not_yet_valid()
     {
         var diagnostics = new TraceDiagnostics();
         Resolve(Env("Api__Key"), diagnostics: diagnostics);
@@ -224,8 +224,8 @@ public class KeyVaultResolverTests
         [
             "load warning",
             "Azure Key Vault secret Api--Key (contoso-prod), linked to Api__Key, is disabled, so it cannot be read.",
-            "Azure Key Vault secret Old--Token (contoso-prod), linked to Old:Token, expired on 2026-05-31, so it cannot be read.",
-            "Azure Key Vault secret Future--Token (contoso-prod), linked to Future--Token, is not valid until 2026-06-02, so it cannot be read yet.",
+            "Azure Key Vault secret Old--Token (contoso-prod), linked to Old:Token, expired on 2026-05-31; Key Vault still returns it and the Key Vault configuration provider still loads it.",
+            "Azure Key Vault secret Future--Token (contoso-prod), linked to Future--Token, is not valid until 2026-06-02; Key Vault already returns it and the Key Vault configuration provider loads it.",
         ], diagnostics.Warnings);
         Assert.Equal("matched by configuration key; disabled; value not read", Assert.Single(Resolve(Env("Api__Key"))).Note);
     }
