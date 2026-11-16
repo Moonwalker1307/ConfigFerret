@@ -165,6 +165,25 @@ public class VaultResolverTests
     }
 
     [Fact]
+    public void Hides_a_value_from_a_Vault_configuration_provider_whose_secret_was_not_loaded()
+    {
+        const string value = "fake-orders-connection-value";
+        var configuration = new ConfigurationBuilder()
+            .Add(new VaultSharp.Extensions.Configuration.VaultConfigurationProvider(new() { ["Orders:Connection"] = value }))
+            .Build();
+
+        var report = ConfigTracer.For(configuration).WithOptions(o => o.Environment = new Dictionary<string, string?>()).WithVault(WithValues).Trace();
+
+        var setting = report.Find("Orders:Connection")!;
+        Assert.Equal("VaultConfigurationProvider", setting.EffectiveStep!.Source);
+        Assert.Empty(setting.EffectiveStep.Origins);
+        Assert.True(setting.IsSensitive);
+        Assert.DoesNotContain(value, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(value, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(value, report.Explain("Orders:Connection"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Matches_whole_secrets_and_sections_when_values_were_not_read()
     {
         var exact = Assert.Single(Resolve(NamesOnly, EnvStep("Api__Key")));
