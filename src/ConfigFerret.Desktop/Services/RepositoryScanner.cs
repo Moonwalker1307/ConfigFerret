@@ -131,8 +131,9 @@ public static partial class RepositoryScanner
             Relative(root, chart),
             new SharedValuesFiles(sorted, leftOut[i] is { } left ? [.. left.Select(v => position[v]).Order()] : []))).ToList();
 
+        // As in Walk, a linked folder is not followed, and its link is checked before anything looks at its target.
         var workflowsFolder = Path.Join(root, ".github", "workflows");
-        var workflows = Directory.Exists(workflowsFolder)
+        var workflows = !IsLink(Path.Join(root, ".github")) && !IsLink(workflowsFolder) && Directory.Exists(workflowsFolder)
             ? Directory.EnumerateFiles(workflowsFolder)
                 .Where(f => f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
                 .Select(f => Relative(root, f))
@@ -147,7 +148,7 @@ public static partial class RepositoryScanner
             kustomizations.Select(k => Relative(root, k)).OrderBy(k => k.Contains("overlay", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(k => k, StringComparer.OrdinalIgnoreCase).ToList(),
             manifests.Order(StringComparer.OrdinalIgnoreCase).ToList(),
             workflows,
-            Directory.Exists(Path.Join(root, ".octopus")));
+            !IsLink(Path.Join(root, ".octopus")) && Directory.Exists(Path.Join(root, ".octopus")));
     }
 
     private static void Walk(string root, string folder, int depth, List<AppFolder> apps, List<string> charts, List<string> kustomizations, List<string> yamlFiles)
@@ -211,6 +212,8 @@ public static partial class RepositoryScanner
             Walk(root, child, depth + 1, apps, charts, kustomizations, yamlFiles);
         }
     }
+
+    private static bool IsLink(string path) => new DirectoryInfo(path).LinkTarget is not null;
 
     private static bool IsValuesFile(string path)
     {

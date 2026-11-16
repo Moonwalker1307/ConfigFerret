@@ -200,7 +200,7 @@ public sealed partial class TraceRunner
         }
         else
         {
-            tracer = BuildAppTracer(sources, manifests, kubernetes.FirstOrDefault(), github, results, notes, out environmentName);
+            tracer = BuildAppTracer(sources, manifests, kubernetes.FirstOrDefault(), github, results, notes, profile.RepositoryRoot, out environmentName);
         }
 
         tracer.WithOptions(o => o.RevealSensitiveValues = revealSecrets);
@@ -495,6 +495,7 @@ public sealed partial class TraceRunner
         Dictionary<GitHubSource, GitHubVariables> github,
         Dictionary<SourceSettings, string?> results,
         List<string> notes,
+        string? root,
         out string environmentName)
     {
         var apps = sources.OfType<AppSettingsSource>().ToList();
@@ -567,7 +568,7 @@ public sealed partial class TraceRunner
         var traced = new List<string>();
         foreach (var app in apps)
         {
-            traced.Add(AddAppSettings(builder, app, environment, sensitive, notes));
+            traced.Add(AddAppSettings(builder, app, environment, sensitive, notes, root));
             results[app] = null;
         }
 
@@ -600,8 +601,8 @@ public sealed partial class TraceRunner
         return tracer;
     }
 
-    // Adds the app's settings files and returns the environment they are for.
-    private string AddAppSettings(ConfigurationBuilder builder, AppSettingsSource app, Dictionary<string, string?> environment, HashSet<string> sensitive, List<string> notes)
+    // Adds the app's settings files and returns the environment they are for. root is the repository's folder, if any.
+    private string AddAppSettings(ConfigurationBuilder builder, AppSettingsSource app, Dictionary<string, string?> environment, HashSet<string> sensitive, List<string> notes, string? root)
     {
         if (string.IsNullOrWhiteSpace(app.Folder) || !Directory.Exists(app.Folder))
         {
@@ -610,9 +611,23 @@ public sealed partial class TraceRunner
 
         var directory = Path.GetFullPath(app.Folder);
         var environmentName = PickEnvironment(app, environment, sensitive, directory, notes);
-        var files = new[] { Path.Join(directory, "appsettings.json"), Path.Join(directory, $"appsettings.{environmentName}.json") }
-            .Where(File.Exists)
-            .ToList();
+        // A settings file that leads out of the repository through a symbolic link is not read: it would show what the
+        // link leads to, such as a file of the server.
+        var files = new List<string>();
+        string? linkedOut = null;
+        foreach (var file in new[] { Path.Join(directory, "appsettings.json"), Path.Join(directory, $"appsettings.{environmentName}.json") })
+        {
+            if (root is not null && RepositoryAnalyzer.LinkedOutName(root, file) is { } linked)
+            {
+                linkedOut = $"{linked} is a symbolic link that leads out of the repository, so it was not read.";
+                notes.Add(linkedOut);
+            }
+            else if (File.Exists(file))
+            {
+                files.Add(file);
+            }
+        }
+
         foreach (var extra in app.ExtraFiles)
         {
             if (!File.Exists(extra))
@@ -625,7 +640,7 @@ public sealed partial class TraceRunner
 
         if (files.Count == 0)
         {
-            throw new TraceSetupException($"{app.Name}: there is no appsettings.json in {directory}.");
+            throw new TraceSetupException(linkedOut is null ? $"{app.Name}: there is no appsettings.json in {directory}." : $"{app.Name}: {linkedOut}");
         }
 
         foreach (var file in files)

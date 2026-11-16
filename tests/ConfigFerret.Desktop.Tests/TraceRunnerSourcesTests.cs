@@ -781,6 +781,38 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
     }
 
+    [Fact]
+    public async Task An_app_settings_file_that_links_out_of_the_repository_is_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        var outside = Write("outside/settings.json", """{"Leak": {"Value": "fake-outside-value"}}""");
+        var app = App("""{"Db": {"Host": "base"}}""", folder: "repo/app");
+        File.CreateSymbolicLink(Path.Join(app.Folder, "appsettings.Production.json"), outside);
+        var profile = ProfileOf(app);
+        profile.RepositoryRoot = Path.Join(_temp.FullName, "repo");
+
+        var result = await Run(profile);
+
+        Assert.Equal("base", result.Report.Find("Db:Host")!.Value);
+        Assert.Null(result.Report.Find("Leak:Value"));
+        Assert.Contains("app/appsettings.Production.json is a symbolic link that leads out of the repository, so it was not read.", result.Notes);
+    }
+
+    [Fact]
+    public async Task An_app_whose_only_settings_file_links_out_of_the_repository_is_not_traced()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        var outside = Write("outside/settings.json", """{"Leak": {"Value": "fake-outside-value"}}""");
+        var folder = Dir("repo/app");
+        File.CreateSymbolicLink(Path.Join(folder, "appsettings.json"), outside);
+        var profile = ProfileOf(new AppSettingsSource { Name = "app", Folder = folder, UseUserSecrets = false });
+        profile.RepositoryRoot = Path.Join(_temp.FullName, "repo");
+
+        var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(profile));
+
+        Assert.Equal("app: app/appsettings.json is a symbolic link that leads out of the repository, so it was not read.", ex.Message);
+    }
+
     private const string FakeAccountKey = "hunter2-fake-account-key";
 
     private const string FakeGitHubToken = "ghp" + "_FakeTokenForTestsOnly000000000000";

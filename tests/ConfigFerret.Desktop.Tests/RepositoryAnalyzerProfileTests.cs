@@ -243,6 +243,99 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         Assert.StartsWith("helm was not run for the chart chart: chart/files is a symbolic link that leads out of the repository", Assert.Single(notes), StringComparison.Ordinal);
     }
 
+    // A file of the repository that is a symbolic link to outside it, which holds the given text.
+    private void LinkOut(string relativePath, string text)
+    {
+        var outside = Path.Join(_temp.FullName, "outside", Path.GetFileName(relativePath));
+        Directory.CreateDirectory(Path.GetDirectoryName(outside)!);
+        File.WriteAllText(outside, text);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(_root.FullName, relativePath))!);
+        File.CreateSymbolicLink(Path.Join(_root.FullName, relativePath), outside);
+    }
+
+    [Fact]
+    public void A_chart_whose_values_file_links_out_of_the_repository_is_left_out()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        LinkOut("chart/values.yaml", "db:\n  password: fake-outside-password\n");
+
+        var (profile, notes) = Build(NoTools(), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.Empty(profile.Sources.OfType<HelmSource>());
+        Assert.Contains("chart/values.yaml is a symbolic link that leads out of the repository, so it was not read, and the chart was left out.", notes);
+    }
+
+    [Fact]
+    public void A_chart_whose_templates_folder_links_out_of_the_repository_is_left_out()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        var outside = Directory.CreateDirectory(Path.Join(_temp.FullName, "outside", "templates")).FullName;
+        File.WriteAllText(Path.Join(outside, "cm.yaml"), "data:\n  a: {{ .Values.fake }}\n");
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "chart", "templates"), outside);
+
+        var (profile, notes) = Build(NoTools(), new AnalysisChoices { HelmChart = "chart" });
+
+        Assert.Empty(profile.Sources.OfType<HelmSource>());
+        Assert.Contains("chart/templates is a symbolic link that leads out of the repository, so it was not read, and the chart was left out.", notes);
+    }
+
+    [Fact]
+    public void An_overlay_with_a_link_out_of_the_repository_is_left_out()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("k8s/overlays/prod/kustomization.yaml", "resources:\n  - ../../base\n");
+        Write("k8s/base/kustomization.yaml", "configMapGenerator:\n  - name: cm\n    envs:\n      - shared/app.env\n");
+        var outside = Directory.CreateDirectory(Path.Join(_temp.FullName, "outside", "shared")).FullName;
+        File.WriteAllText(Path.Join(outside, "app.env"), "Db__Password=fake-outside-password\n");
+        Directory.CreateSymbolicLink(Path.Join(_root.FullName, "k8s", "base", "shared"), outside);
+        var called = false;
+
+        var (profile, notes) = Build(new RepositoryAnalyzer((_, _) => { called = true; return null; }), new AnalysisChoices { Kustomization = "k8s/overlays/prod" });
+
+        Assert.False(called);
+        Assert.Empty(profile.Sources.OfType<KustomizeSource>());
+        Assert.Contains("The overlay k8s/overlays/prod was left out: k8s/base/shared is a symbolic link that leads out of the repository, and kustomize would read what it leads to.", notes);
+    }
+
+    [Fact]
+    public void A_picked_values_file_that_links_out_of_the_repository_is_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("chart/Chart.yaml", "name: demo\n");
+        LinkOut("deploy/values-prod.yaml", "db:\n  password: fake-outside-password\n");
+        var calls = new List<string[]>();
+
+        var (profile, notes) = Build(new RepositoryAnalyzer((_, arguments) => { calls.Add([.. arguments]); return null; }), new AnalysisChoices { HelmChart = "chart", HelmValues = "deploy/values-prod.yaml" });
+
+        Assert.Empty(profile.Sources.OfType<HelmSource>().Single().ValuesFiles);
+        Assert.Equal(["template", "release", Path.Join(_root.FullName, "chart")], Assert.Single(calls));
+        Assert.Contains("deploy/values-prod.yaml is a symbolic link that leads out of the repository, so it was not read.", notes);
+    }
+
+    [Fact]
+    public void A_workflow_that_links_out_of_the_repository_is_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write(".github/workflows/ci.yml", "name: ci\n");
+        LinkOut(".github/workflows/deploy.yml", "jobs:\n  deploy:\n    env:\n      Db__Password: fake-outside-password\n");
+
+        var (profile, notes) = Build(NoTools(), connections: NoConnections with { GitHubRepository = "contoso/orders" });
+
+        Assert.Equal([Path.Join(_root.FullName, ".github", "workflows", "ci.yml")], profile.Sources.OfType<GitHubSource>().Single().Workflows);
+        Assert.Contains(".github/workflows/deploy.yml is a symbolic link that leads out of the repository, so it was not read.", notes);
+    }
+
+    [Fact]
+    public void A_code_file_that_links_out_of_the_repository_gives_no_prefix()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        LinkOut("src/Orders/Leak.cs", "config.AddEnvironmentVariables(\"LEAK_\")");
+
+        Assert.Empty(AppFor("src/Orders/Program.cs", "var app = 1;").EnvironmentPrefixes);
+    }
+
     [Fact]
     public void A_link_out_of_the_repository_behind_a_link_inside_it_is_found()
     {

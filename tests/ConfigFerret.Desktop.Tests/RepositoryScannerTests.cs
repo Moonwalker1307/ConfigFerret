@@ -119,6 +119,31 @@ public class RepositoryScannerTests : IDisposable
         Assert.Equal(["env/values-test.yaml"], Assert.Single(scan.HelmCharts).ValuesFiles);
     }
 
+    [Theory]
+    [InlineData(".github")]
+    [InlineData(".github/workflows")]
+    public void Lists_no_workflow_behind_a_linked_folder(string linked)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        using var outside = new TempFolder();
+        outside.Write(linked == ".github" ? "workflows/deploy.yml" : "deploy.yml", "name: deploy\n");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(_temp.FullName, linked))!);
+        Directory.CreateSymbolicLink(Path.Join(_temp.FullName, linked), outside.Path);
+
+        Assert.Empty(RepositoryScanner.Scan(_temp.FullName).Workflows);
+    }
+
+    [Fact]
+    public void Does_not_take_a_linked_octopus_folder_for_config_as_code()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        using var outside = new TempFolder();
+        outside.Write("deployment_process.ocl", "step");
+        Directory.CreateSymbolicLink(Path.Join(_temp.FullName, ".octopus"), outside.Path);
+
+        Assert.False(RepositoryScanner.Scan(_temp.FullName).HasOctopusConfigAsCode);
+    }
+
     [Fact]
     public void Lists_overlays_before_bases_and_finds_octopus_config_as_code()
     {

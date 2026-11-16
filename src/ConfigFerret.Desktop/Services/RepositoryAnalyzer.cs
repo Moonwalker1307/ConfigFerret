@@ -201,7 +201,7 @@ public sealed partial class RepositoryAnalyzer
 
             var arguments = new List<string> { "template", "release", chart.Folder };
             var valuesFiles = new List<string>();
-            if (choices.HelmValues is not null)
+            if (choices.HelmValues is not null && !LinkedOut(scan.Root, scan.Full(choices.HelmValues), notes))
             {
                 valuesFiles.Add(scan.Full(choices.HelmValues));
                 arguments.AddRange(["-f", scan.Full(choices.HelmValues)]);
@@ -226,11 +226,28 @@ public sealed partial class RepositoryAnalyzer
                 notes.Add($"helm could not render the chart {chart.RelativePath}: {helm.Problem}. Run helm template on the chart to see why. Without the rendered chart its values are listed only where a ConfigMap or env entry in the repository uses them.");
             }
 
-            profile.Sources.Add(new HelmSource { Name = $"Helm chart {chart.RelativePath}", ChartFolder = chart.Folder, ValuesFiles = valuesFiles });
+            // The trace reads the chart's own values file and templates too.
+            if ((LinkedOutName(scan.Root, Path.Join(chart.Folder, "values.yaml")) ?? LinkedOutName(scan.Root, Path.Join(chart.Folder, "templates"))) is { } linked)
+            {
+                notes.Add($"{linked} is a symbolic link that leads out of the repository, so it was not read, and the chart was left out.");
+            }
+            else
+            {
+                profile.Sources.Add(new HelmSource { Name = $"Helm chart {chart.RelativePath}", ChartFolder = chart.Folder, ValuesFiles = valuesFiles });
+            }
         }
 
         var kustomization = choices.Kustomization;
-        if (kustomization is not null)
+
+        // kustomize and the trace follow links in the overlay and in the bases it names, which are kustomizations of the
+        // repository too, so all of them are checked before either reads anything.
+        var overlayRefusal = kustomization is null ? null
+            : scan.Kustomizations.Prepend(kustomization).Distinct(StringComparer.Ordinal).Select(k => ChartLinkProblem(scan.Root, scan.Full(k), reader: "kustomize")).FirstOrDefault(r => r is not null);
+        if (overlayRefusal is not null)
+        {
+            notes.Add($"The overlay {kustomization} was left out: {overlayRefusal}.");
+        }
+        else if (kustomization is not null)
         {
             if (rendered is null)
             {
@@ -304,7 +321,7 @@ public sealed partial class RepositoryAnalyzer
                 Repository = connections.GitHubRepository,
                 Environment = choices.GitHubEnvironment ?? string.Empty,
                 ApiUrl = connections.GitHubApiUrl,
-                Workflows = scan.Workflows.Select(scan.Full).ToList(),
+                Workflows = scan.Workflows.Select(scan.Full).Where(w => !LinkedOut(scan.Root, w, notes)).ToList(),
                 CredentialAccountName = connections.GitHubCredentialAccount,
             });
         }
@@ -381,7 +398,9 @@ public sealed partial class RepositoryAnalyzer
         IEnumerable<string> files;
         try
         {
-            files = Directory.EnumerateFiles(folder, "*.cs", new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 2 }).Take(200).ToList();
+            // Links are skipped, as in the code scan: one could lead to a file anywhere on this machine.
+            var options = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 2, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint };
+            files = Directory.EnumerateFiles(folder, "*.cs", options).Take(200).ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -444,6 +463,26 @@ public sealed partial class RepositoryAnalyzer
         return null;
     }
 
+    /// <summary>
+    /// The path in the repository of <paramref name="path"/>, a file or folder, when a symbolic link along it leads out
+    /// of <paramref name="root"/>, or null. Reading it would show what the link leads to, such as a file of the server.
+    /// The path is judged from the links' own text before anything looks at what they lead to.
+    /// </summary>
+    internal static string? LinkedOutName(string root, string path) =>
+        !Kustomization.IsInFolder(path, root) ? Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/') : null;
+
+    // True when file leads out of the repository through a symbolic link, after adding a note that names it.
+    private static bool LinkedOut(string root, string file, List<string> notes)
+    {
+        if (LinkedOutName(root, file) is not { } linked)
+        {
+            return false;
+        }
+
+        notes.Add($"{linked} is a symbolic link that leads out of the repository, so it was not read.");
+        return true;
+    }
+
     // As many files and folders as are checked for links in one chart. A chart with more is not rendered.
     private const int MaxChartEntries = 10_000;
 
@@ -452,12 +491,12 @@ public sealed partial class RepositoryAnalyzer
     /// chart folder and reads what they lead to, so a link to ~/.kube/config, or in the web image to /proc/1/environ,
     /// would put that file into the rendered chart the app shows. A link that stays inside <paramref name="root"/> is
     /// allowed, and a folder it leads to is checked too. The reason names a link by its path in the repository, never
-    /// by where it leads.
+    /// by where it leads, and <paramref name="reader"/> as the tool that would read it, such as kustomize for an overlay.
     /// </summary>
-    internal static string? ChartLinkProblem(string root, string chartFolder, int maxEntries = MaxChartEntries)
+    internal static string? ChartLinkProblem(string root, string chartFolder, int maxEntries = MaxChartEntries, string reader = "helm")
     {
         string Leaves(string path) =>
-            $"{Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/')} is a symbolic link that leads out of the repository, and helm would read what it leads to";
+            $"{Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/')} is a symbolic link that leads out of the repository, and {reader} would read what it leads to";
 
         if (!Kustomization.IsInFolder(chartFolder, root, orFolder: true))
         {
