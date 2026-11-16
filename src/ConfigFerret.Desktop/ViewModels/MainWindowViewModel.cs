@@ -995,6 +995,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // Counted before the choices are checked, so a trace still running for earlier choices leaves a refusal alone.
+        var tracing = ++_tracing;
         if (RefuseChoices(scan, out var environment, out var valuesFile) is { } refusal)
         {
             ClearResult();
@@ -1002,6 +1004,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             StatusText = refusal;
             Problems.Add(new ProblemRow("error", refusal));
             ProblemCount = Problems.Count;
+
+            // Like any changed choice, a refused one stops the work still running, whose answer would no longer be shown.
+            if (_work is not null)
+            {
+                await _work.CancelAsync().ConfigureAwait(true);
+            }
+
             return;
         }
 
@@ -1030,7 +1039,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         Profile? profile = null;
-        var tracing = ++_tracing;
         var result = await RunAsync("Tracing the configuration…", async cancellationToken =>
         {
             profile = _analyzer.BuildProfile(scan, choices, connections, notes, cancellationToken);

@@ -563,6 +563,88 @@ public sealed class RepositorySwitchTests : IDisposable
         });
     }
 
+    [Fact]
+    public void A_refused_pick_drops_the_trace_of_the_choice_before_it()
+    {
+        Write("orders/src/Orders/appsettings.json", """{ "From": "ORDERS" }""");
+        Write("orders/deploy/chart/Chart.yaml", "apiVersion: v2\nname: orders\nversion: 1.0.0\n");
+        Write("orders/deploy/chart/values.yaml", "replicas: 1\n");
+        using var rendering = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var hold = 0;
+        string? Render(string tool, IReadOnlyList<string> arguments)
+        {
+            if (Interlocked.Exchange(ref hold, 0) == 1)
+            {
+                rendering.Set();
+                Assert.True(release.Wait(Timeout));
+            }
+
+            return null;
+        }
+
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                new InMemoryCredentialStore(),
+                analyzer: new RepositoryAnalyzer(render: Render),
+                downloadRoot: Path.Join(_temp.FullName, "downloads"));
+            var opened = viewModel.AnalyzeFolderAsync(Path.Join(_temp.FullName, "orders"));
+            Assert.True(context.RunUntil(() => opened.IsCompleted));
+            Assert.True(viewModel.HasResult, string.Join(Environment.NewLine, viewModel.Problems.Select(p => p.Text)));
+
+            // A trace for Staging is held while an environment the app does not have is picked.
+            Volatile.Write(ref hold, 1);
+            viewModel.SelectedEnvironment = "Staging";
+            Assert.True(context.RunUntil(() => rendering.IsSet));
+            viewModel.SelectedEnvironment = "Nowhere";
+            Assert.False(viewModel.HasResult);
+            var refusal = viewModel.StatusText;
+
+            release.Set();
+            Assert.True(context.RunUntil(() => !viewModel.IsBusy));
+            context.RunQueued();
+
+            Assert.False(viewModel.HasResult);
+            Assert.Empty(viewModel.Rows);
+            Assert.Equal(refusal, viewModel.StatusText);
+            Assert.Contains(viewModel.Problems, p => p.Severity == "error" && p.Text == refusal);
+        });
+    }
+
+    [Fact]
+    public void A_refused_pick_stops_the_work_still_running()
+    {
+        using var handler = new SlowDotfiles(_temp.FullName);
+        var credentials = new InMemoryCredentialStore();
+        credentials.Write(MainWindowViewModel.GitHubAccountName, FakeGitHub.Token);
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                credentials,
+                handler,
+                new RepositoryAnalyzer(render: (_, _) => null),
+                Path.Join(_temp.FullName, "downloads"));
+            var loading = viewModel.LoadRepositoriesAsync();
+            Assert.True(context.RunUntil(() => loading.IsCompleted), viewModel.StatusText);
+            var shown = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "contoso/orders"));
+            Assert.True(context.RunUntil(() => shown.IsCompleted));
+
+            // Pick ferret-fan/dotfiles, whose download waits until it is stopped, and an environment contoso/orders does not have.
+            var opening = viewModel.AnalyzeRepositoryAsync(viewModel.Repositories.Single(r => r.FullName == "ferret-fan/dotfiles"));
+            Assert.StartsWith("Downloading", viewModel.BusyText, StringComparison.Ordinal);
+            viewModel.SelectedEnvironment = "Nowhere";
+            var refusal = viewModel.StatusText;
+
+            Assert.True(context.RunUntil(() => opening.IsCompleted && !viewModel.IsBusy));
+            Assert.Equal("contoso/orders", viewModel.SubjectTitle);
+            Assert.False(viewModel.HasResult);
+            Assert.Equal(refusal, viewModel.StatusText);
+        });
+    }
+
     /// <summary>An Octopus server whose first project list waits until the test lets it go.</summary>
     private sealed class SlowOctopus : HttpMessageHandler
     {
