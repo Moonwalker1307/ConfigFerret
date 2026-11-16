@@ -202,9 +202,11 @@ public static partial class RepositoryScanner
         return Path.GetFullPath(path).StartsWith(full, StringComparison.Ordinal);
     }
 
+    // Paths from the root use "/" everywhere. Only the system's own separator is replaced: on Linux and macOS a "\" is
+    // part of a file name, and turned into "/" it would point somewhere else, even outside the repository.
     private static string Relative(string root, string path)
     {
-        var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+        var relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
         return relative.Length == 0 ? "." : relative;
     }
 
