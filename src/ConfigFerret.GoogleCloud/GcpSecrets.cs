@@ -199,6 +199,7 @@ public sealed class GcpSecrets
             var filter = string.IsNullOrWhiteSpace(options.Filter) ? string.Empty : "&filter=" + Escape(options.Filter.Trim());
             var secrets = new List<GcpSecret>();
             var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+            var refused = 0;
             string? pageToken = null;
             for (var page = 0; page < MaxPages; page++)
             {
@@ -216,45 +217,57 @@ public sealed class GcpSecrets
                     throw new HttpRequestException($"Google Cloud Secret Manager returned an unexpected response for {parent}/secrets: no 'secrets' array.");
                 }
 
-                var refused = 0;
                 foreach (var item in JsonRead.Items(items))
                 {
-                    if (ReadSecret(item, ref refused) is not { } secret
-                        || (!string.IsNullOrEmpty(options.Prefix) && !secret.Id.StartsWith(options.Prefix, StringComparison.OrdinalIgnoreCase)))
+                    var before = refused;
+                    var secret = ReadSecret(item, ref refused);
+                    var counts = refused > before
+                        || (secret is not null && (string.IsNullOrEmpty(options.Prefix) || secret.Id.StartsWith(options.Prefix, StringComparison.OrdinalIgnoreCase)));
+                    if (!counts)
                     {
                         continue;
                     }
 
-                    if (secrets.Count >= options.MaxSecrets)
+                    // A secret that is left out uses up one of MaxSecrets as well, so a server cannot make this run on.
+                    if (secrets.Count + before >= options.MaxSecrets)
                     {
                         warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Stopped after {options.MaxSecrets} Google Cloud secrets (MaxSecrets); the rest were not read."));
-                        return secrets;
+                        refused = before;
+                        return Finish();
                     }
 
-                    secrets.Add(secret);
-                }
-
-                if (refused > 0)
-                {
-                    // Never print what a refused id was called: it came from the server.
-                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Left out {refused} Google Cloud secret(s) whose project, location or id is not valid for Secret Manager."));
+                    if (refused == before)
+                    {
+                        secrets.Add(secret!);
+                    }
                 }
 
                 pageToken = JsonRead.String(JsonRead.Property(root, "nextPageToken"));
                 if (string.IsNullOrEmpty(pageToken))
                 {
-                    return secrets;
+                    return Finish();
                 }
 
                 if (!seenTokens.Add(pageToken))
                 {
                     warnings.Add("Google Cloud Secret Manager sent the same page token twice, so listing stopped there.");
-                    return secrets;
+                    return Finish();
                 }
             }
 
             warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Stopped listing Google Cloud secrets after {MaxPages} pages."));
-            return secrets;
+            return Finish();
+
+            List<GcpSecret> Finish()
+            {
+                if (refused > 0)
+                {
+                    // One warning for the whole listing, with a count: never print what a refused name was, it came from the server.
+                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Left out {refused} Google Cloud secret(s) whose project, location or id is not valid for Secret Manager."));
+                }
+
+                return secrets;
+            }
         }
 
         public async Task<IReadOnlyList<GcpSecretVersion>?> TryReadVersionsAsync(GcpSecret secret, List<string> warnings, CancellationToken cancellationToken)
