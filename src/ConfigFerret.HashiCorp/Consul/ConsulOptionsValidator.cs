@@ -22,9 +22,9 @@ internal sealed class ConsulOptionsValidator(string sectionPath, IConfiguration?
                 failures.Add(CredentialGuard.Missing(tokenKey) + $" If the Consul agent has no ACLs, set {CredentialGuard.Key(sectionPath, nameof(options.AllowNoToken))} to true instead.");
             }
         }
-        else if (CredentialGuard.FindAppSettingsFile(configuration, tokenKey) is { } file)
+        else if (CredentialGuard.CheckSource(configuration, tokenKey) is { } source)
         {
-            failures.Add(CredentialGuard.InAppSettings(tokenKey, file));
+            failures.Add(source);
         }
 
         if (CredentialGuard.CheckAddress(options.Address, options.AllowUnencryptedHttp, CredentialGuard.Key(sectionPath, nameof(options.Address))) is { } address)

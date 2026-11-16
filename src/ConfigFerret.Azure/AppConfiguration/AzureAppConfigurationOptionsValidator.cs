@@ -21,9 +21,9 @@ internal sealed class AzureAppConfigurationOptionsValidator(string sectionPath, 
             failures.Add(target);
         }
 
-        if (!string.IsNullOrWhiteSpace(options.ConnectionString) && CredentialGuard.FindAppSettingsFile(configuration, connectionKey) is { } file)
+        if (!string.IsNullOrWhiteSpace(options.ConnectionString) && CredentialGuard.CheckSource(configuration, connectionKey) is { } source)
         {
-            failures.Add(CredentialGuard.InAppSettings(connectionKey, file));
+            failures.Add(source);
         }
 
         AzureOptionsChecks.CheckSignIn(sectionPath, configuration, options.TenantId, options.ClientId, options.ClientSecret, failures);

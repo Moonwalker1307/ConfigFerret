@@ -24,9 +24,9 @@ internal sealed class GitLabOptionsValidator(string sectionPath, IConfiguration?
         {
             failures.Add(CredentialGuard.Missing(tokenKey));
         }
-        else if (CredentialGuard.FindAppSettingsFile(configuration, tokenKey) is { } file)
+        else if (CredentialGuard.CheckSource(configuration, tokenKey) is { } source)
         {
-            failures.Add(CredentialGuard.InAppSettings(tokenKey, file));
+            failures.Add(source);
         }
 
         if (CredentialGuard.CheckAddress(options.BaseAddress, options.AllowUnencryptedHttp, CredentialGuard.Key(sectionPath, nameof(options.BaseAddress))) is { } address)

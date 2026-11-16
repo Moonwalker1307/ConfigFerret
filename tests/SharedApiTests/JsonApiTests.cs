@@ -6,8 +6,8 @@ using Microsoft.Extensions.Configuration;
 namespace ConfigFerret.Tests.Common;
 
 /// <summary>
-/// Tests for the helpers in src/Shared, which are compiled into both the GitHub and the Octopus package. This file is
-/// compiled into the GitHub and Octopus test projects only, so each copy is tested.
+/// Tests for the helpers in src/Shared, which are compiled into every extension package that compiles src/Shared. This
+/// file is compiled into the test project of each of those packages, so each copy is tested.
 /// </summary>
 public class JsonApiTests
 {
@@ -335,11 +335,11 @@ public class JsonApiTests
         var blank = folder.Write("appsettings.Development.json", """{ "A": { "Token": " " } }""");
         var configuration = new ConfigurationBuilder().AddJsonFile(other).AddJsonFile(json).AddJsonFile(blank).Build();
 
-        Assert.Null(CredentialGuard.FindAppSettingsFile(configuration, "A:Token"));
+        Assert.Null(CredentialGuard.CheckSource(configuration, "A:Token"));
 
         var appsettings = folder.Write("APPSETTINGS.Staging.JSON", """{ "A": { "Token": "x" } }""");
         var withFile = new ConfigurationBuilder().AddJsonFile(other).AddJsonFile(appsettings).Build();
-        Assert.Equal("APPSETTINGS.Staging.JSON", CredentialGuard.FindAppSettingsFile(withFile, "A:Token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "APPSETTINGS.Staging.JSON"), CredentialGuard.CheckSource(withFile, "A:Token"));
     }
 
     [Fact]
@@ -351,9 +351,141 @@ public class JsonApiTests
 
         var configuration = new ConfigurationBuilder().AddConfiguration(clean).AddConfiguration(dirty).Build();
 
-        Assert.Equal("appsettings.json", CredentialGuard.FindAppSettingsFile(configuration, "A:Token"));
-        Assert.Null(CredentialGuard.FindAppSettingsFile(configuration.GetSection("A"), "A:Token"));
-        Assert.Null(CredentialGuard.FindAppSettingsFile(null, "A:Token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(configuration, "A:Token"));
+        Assert.Null(CredentialGuard.CheckSource(configuration.GetSection("A"), "A:Token"));
+        Assert.Null(CredentialGuard.CheckSource(null, "A:Token"));
+    }
+
+    [Fact]
+    public void Looks_inside_providers_that_wrap_another_one()
+    {
+        using var folder = new TempSettingsFolder();
+        var file = folder.Write("appsettings.json", """{ "A": { "Token": "fake-token" } }""");
+        var recorded = new ConfigurationBuilder().AddJsonFile(file);
+        var reads = recorded.RecordReads();
+        var wrapped = new ConfigurationBuilder().Add(new WrappingSource(new ConfigurationBuilder().AddJsonFile(file).Sources[0]));
+
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(recorded.Build(), "A:Token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(wrapped.Build(), "A:Token"));
+        Assert.False(reads.WasRead("A:Token"));
+    }
+
+    [Fact]
+    public void Checks_a_chained_section_through_the_root_it_reads_from()
+    {
+        using var folder = new TempSettingsFolder();
+        var file = folder.Write("appsettings.json", """{ "Outer": { "A": { "Token": "fake-token" } } }""");
+        var fromFile = new ConfigurationBuilder().AddJsonFile(file).Build();
+        using var manager = new ConfigurationManager();
+        manager.AddJsonFile(file);
+        var fromMemory = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Outer:A:Token"] = "fake-token" }).Build();
+
+        Assert.Equal(
+            CredentialGuard.InAppSettings("A:Token", "appsettings.json"),
+            CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(fromFile.GetSection("Outer")).Build(), "A:Token"));
+        Assert.Equal(
+            CredentialGuard.InAppSettings("A:Token", "appsettings.json"),
+            CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(manager.GetSection("Outer")).Build(), "A:Token"));
+        Assert.Null(CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(fromMemory.GetSection("Outer")).Build(), "A:Token"));
+    }
+
+    [Fact]
+    public void Refuses_a_credential_from_a_configuration_whose_sources_cannot_be_seen()
+    {
+        var lone = new LoneSection("Outer", new Dictionary<string, string?> { ["A:Token"] = "fake-token" });
+        var chained = new ConfigurationBuilder().AddConfiguration(lone).Build();
+        var settings = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Own:Setting"] = "1" }).Build();
+        var keeping = new ConfigurationBuilder().Add(new SettingsKeepingSource(settings.GetSection("Own"))).Build();
+
+        var message = CredentialGuard.CheckSource(chained, "A:Token");
+
+        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(ChainedConfigurationProvider)), message);
+        Assert.DoesNotContain("fake-token", message, StringComparison.Ordinal);
+        Assert.Null(CredentialGuard.CheckSource(chained, "A:Other"));
+        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(SettingsKeepingProvider)), CredentialGuard.CheckSource(keeping, "A:Token"));
+    }
+
+    [Fact]
+    public void Refuses_a_credential_from_a_chained_section_that_keeps_a_root_it_does_not_read_from()
+    {
+        using var folder = new TempSettingsFolder();
+        var host = new ConfigurationBuilder().AddJsonFile(folder.Write("appsettings.json", """{ "Outer": { "A": { "Token": "fake-token" } } }""")).Build();
+        var defaults = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Unrelated"] = "1" }).Build();
+        var configuration = new ConfigurationBuilder().AddConfiguration(new FallbackSection(host.GetSection("Outer"), defaults)).Build();
+
+        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(ChainedConfigurationProvider)), CredentialGuard.CheckSource(configuration, "A:Token"));
+    }
+
+    [Fact]
+    public void Finds_the_root_only_of_a_root_or_a_section_that_GetSection_made()
+    {
+        var root = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["X:Y"] = "1" }).Build();
+        using var manager = new ConfigurationManager();
+        var defaults = new ConfigurationBuilder().Build();
+
+        Assert.Same(root, CredentialGuard.RootOf(root));
+        Assert.Same(root, CredentialGuard.RootOf(root.GetSection("X")));
+        Assert.Same(root, CredentialGuard.RootOf(root.GetSection("X").GetSection("Y")));
+        Assert.Same(manager, CredentialGuard.RootOf(manager.GetSection("X")));
+        Assert.Null(CredentialGuard.RootOf(new FallbackSection(root.GetSection("X"), defaults)));
+        Assert.Null(CredentialGuard.RootOf(new LoneSection("X", [])));
+        Assert.Null(CredentialGuard.RootOf(null));
+    }
+
+    // A section of a type of its own, which keeps no configuration root.
+    private sealed class LoneSection(string path, Dictionary<string, string?> values) : IConfigurationSection
+    {
+        public string? this[string key]
+        {
+            get => values.GetValueOrDefault(key);
+            set => values[key] = value;
+        }
+
+        public string Key => path.Split(':')[^1];
+
+        public string Path => path;
+
+        public string? Value { get; set; }
+
+        public IEnumerable<IConfigurationSection> GetChildren() => [];
+
+        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() => new Microsoft.Extensions.Primitives.CancellationChangeToken(CancellationToken.None);
+
+        public IConfigurationSection GetSection(string key) => new LoneSection($"{path}:{key}", []);
+    }
+
+    // Keeps a section for its own settings and serves the credential, as an in-house provider might.
+    private sealed class SettingsKeepingSource(IConfiguration settings) : IConfigurationSource
+    {
+        public IConfigurationProvider Build(IConfigurationBuilder builder) => new SettingsKeepingProvider(settings);
+    }
+
+    private sealed class SettingsKeepingProvider(IConfiguration settings) : ConfigurationProvider
+    {
+        private readonly IConfiguration _settings = settings;
+
+        public override void Load() => Data["A:Token"] = _settings["Setting"] is null ? null : "fake-token";
+    }
+
+    // Keeps the provider it wraps in a private field, as a decorator from another library might.
+    private sealed class WrappingSource(IConfigurationSource inner) : IConfigurationSource
+    {
+        public IConfigurationProvider Build(IConfigurationBuilder builder) => new WrappingProvider(inner.Build(builder));
+    }
+
+    private sealed class WrappingProvider(IConfigurationProvider inner) : IConfigurationProvider
+    {
+        private readonly IConfigurationProvider _inner = inner;
+
+        public bool TryGet(string key, out string? value) => _inner.TryGet(key, out value);
+
+        public void Set(string key, string? value) => _inner.Set(key, value);
+
+        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() => _inner.GetReloadToken();
+
+        public void Load() => _inner.Load();
+
+        public IEnumerable<string> GetChildKeys(IEnumerable<string> earlierKeys, string? parentPath) => _inner.GetChildKeys(earlierKeys, parentPath);
     }
 
     [Fact]

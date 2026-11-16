@@ -29,9 +29,9 @@ internal sealed class VaultOptionsValidator(string sectionPath, IConfiguration? 
         {
             failures.Add(CredentialGuard.Missing(tokenKey));
         }
-        else if (CredentialGuard.FindAppSettingsFile(configuration, tokenKey) is { } file)
+        else if (CredentialGuard.CheckSource(configuration, tokenKey) is { } source)
         {
-            failures.Add(CredentialGuard.InAppSettings(tokenKey, file));
+            failures.Add(source);
         }
 
         if (string.IsNullOrWhiteSpace(options.Mount))
