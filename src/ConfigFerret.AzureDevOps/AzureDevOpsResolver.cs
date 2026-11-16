@@ -261,13 +261,6 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
                 return null;
             }
 
-            // Without a limit of its own, what is looked at counts toward the bound for the step.
-            if (limit is null && --_room < 0)
-            {
-                _cut = true;
-                break;
-            }
-
             if (group is not null && !string.Equals(variable.Group, group, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -290,7 +283,9 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         var fromYaml = new List<Candidate>();
         if (group is null)
         {
-            foreach (var variable in VisibleKeys(view).SelectMany(k => Yaml(name, byEnvironmentName, k)))
+            // Looked at from the narrowest scope and from the end, so that the bound keeps the ones that win, as the
+            // tracer's own bound keeps the end of a chain.
+            foreach (var variable in VisibleKeys(view).Reverse().SelectMany(k => YamlBackward(name, byEnvironmentName, k)))
             {
                 Examined++;
                 if (++looked > limit)
@@ -298,24 +293,46 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
                     return null;
                 }
 
-                if (limit is null && --_room < 0)
+                var scope = options.ScopeOf(variable);
+                if (ReferenceEquals(variable, except) || !Visible(scope, view)
+                    || (except is not null && string.Equals(AzureDevOpsTraceOptions.MacroTarget(variable.Value), name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                // Without a limit of its own, what is kept counts toward the bound for the step.
+                if (limit is null && _room <= 0)
                 {
                     _cut = true;
                     break;
                 }
 
-                var scope = options.ScopeOf(variable);
-                if (!ReferenceEquals(variable, except) && Visible(scope, view)
-                    && (except is null || !string.Equals(AzureDevOpsTraceOptions.MacroTarget(variable.Value), name, StringComparison.OrdinalIgnoreCase)))
+                if (limit is null)
                 {
-                    fromYaml.Add(new Candidate(variable.Name, null, variable, variable.Order, 0, scope, self));
+                    _room--;
                 }
+
+                fromYaml.Add(new Candidate(variable.Name, null, variable, variable.Order, 0, scope, self));
             }
         }
 
         // A job's variables win over its stage's, and a stage's over the pipeline's, wherever they are written; file order
         // decides only within one of them.
-        return fromGroups.Concat(fromYaml).OrderBy(c => Level(c.Scope)).ThenBy(c => c.Order).ThenBy(c => c.Index).ToList();
+        var candidates = fromGroups.Concat(fromYaml).OrderBy(c => Level(c.Scope)).ThenBy(c => c.Order).ThenBy(c => c.Index).ToList();
+
+        // The groups that apply count toward the bound too. Past it the first ones go, groups no file links among them.
+        if (limit is null)
+        {
+            _room -= fromGroups.Count;
+            if (_room < 0)
+            {
+                _cut = true;
+                candidates.RemoveRange(0, Math.Min(-_room, candidates.Count));
+                _room = 0;
+            }
+        }
+
+        return candidates;
     }
 
     // When the trace cannot tell which stage or job it is about, the stages and jobs below view that set the name to
@@ -398,9 +415,11 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
     }
 
     // The keys that find what view sees: everything for the pipeline, or the pipeline's, the stage's and the job's own.
+    // A job outside stages sees the pipeline's and its own, and passes on what that job sets in any stage.
     private static IEnumerable<string> VisibleKeys(PipelineScope view) => view switch
     {
-        { IsPipeline: true } or { Stage: null } => [Everywhere],
+        { IsPipeline: true } => [Everywhere],
+        { Stage: null } => [Exactly(default), Job(view.Job)],
         { Job: null } => [Exactly(default), Stage(view.Stage)],
         _ => [Exactly(default), Exactly(new PipelineScope(view.Stage, null)), Exactly(view), Exactly(new PipelineScope(null, view.Job))],
     };
@@ -411,19 +430,44 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
 
     private static string Stage(string? stage) => $"+{stage}";
 
+    private static string Job(string? job) => $"-{job}";
+
     private static string Key(string name, string scopeKey) => $"{name}\u0001{scopeKey}";
 
     private static string GroupKey(string group, string scopeKey) => $"{group}\u0001{scopeKey}";
 
     // The keys a pipeline variable or group link in scope is found by.
-    private static IEnumerable<string> ScopeKeys(PipelineScope scope) =>
-        scope.Stage is null ? [Everywhere, Exactly(scope)] : [Everywhere, Exactly(scope), Stage(scope.Stage)];
+    private static IEnumerable<string> ScopeKeys(PipelineScope scope) => scope switch
+    {
+        { Job: null, Stage: null } => [Everywhere, Exactly(scope)],
+        { Job: null } => [Everywhere, Exactly(scope), Stage(scope.Stage)],
+        { Stage: null } => [Everywhere, Exactly(scope), Job(scope.Job)],
+        _ => [Everywhere, Exactly(scope), Stage(scope.Stage), Job(scope.Job)],
+    };
 
+    private IEnumerable<AzurePipelinesVariable> YamlBackward(string name, bool byEnvironmentName, string scopeKey)
+    {
+        var exact = Backward(_byScope[Key(name, scopeKey)]);
+        return byEnvironmentName
+            ? exact.Concat(Backward(_byEnvironmentScope[Key(name, scopeKey)]).Where(v => !string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)))
+            : exact;
+    }
+
+    private static IEnumerable<T> Backward<T>(IEnumerable<T> items)
+    {
+        var list = items as IList<T> ?? items.ToList();
+        for (var i = list.Count - 1; i >= 0; i--)
+        {
+            yield return list[i];
+        }
+    }
+
+    // In file order, although the lookups keep each level together.
     private IEnumerable<AzurePipelinesVariable> Yaml(string name, bool byEnvironmentName, string scopeKey)
     {
-        var exact = _byScope[Key(name, scopeKey)];
+        var exact = _byScope[Key(name, scopeKey)].OrderBy(v => v.Order);
         return byEnvironmentName
-            ? exact.Concat(_byEnvironmentScope[Key(name, scopeKey)].Where(v => !string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)))
+            ? exact.Concat(_byEnvironmentScope[Key(name, scopeKey)].Where(v => !string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)).OrderBy(v => v.Order))
             : exact;
     }
 
@@ -488,9 +532,11 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
             return;
         }
 
+        // Lowest level first, so that looking at a key from the end looks at what wins first.
         var all = options.Variables;
-        _byScope = all.SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k)).ToLookup(p => Key(p.v.Name, p.k), p => p.v, StringComparer.OrdinalIgnoreCase);
-        _byEnvironmentScope = all.SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k))
+        var ranked = all.OrderBy(v => Level(options.ScopeOf(v))).ToList();
+        _byScope = ranked.SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k)).ToLookup(p => Key(p.v.Name, p.k), p => p.v, StringComparer.OrdinalIgnoreCase);
+        _byEnvironmentScope = ranked.SelectMany(v => ScopeKeys(options.ScopeOf(v)), (v, k) => (v, k))
             .ToLookup(p => Key(AzureDevOpsVariableGroups.ToEnvironmentName(p.v.Name), p.k), p => p.v, StringComparer.OrdinalIgnoreCase);
         _groupLinks = options.GroupLinks.ToLookup(g => g.Group, StringComparer.OrdinalIgnoreCase);
         _groupLinksByScope = options.GroupLinks.SelectMany(g => ScopeKeys(options.ScopeOf(g)), (g, k) => (g, k)).ToLookup(p => GroupKey(p.g.Group, p.k), p => p.g, StringComparer.OrdinalIgnoreCase);

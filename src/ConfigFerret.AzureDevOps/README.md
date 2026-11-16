@@ -115,8 +115,11 @@ a whole-value reference such as `Alias: $(Timeout)`. When any of them may hold a
 sensitive. There is no option to say which stage or job the trace is about.
 
 One trace step looks at no more than 1,000 pipeline variables and group variables, the most upstream steps the tracer
-keeps for a setting. Past that, the stages and jobs not reached are left out, every step listed is marked inferred and
-sensitive, and a warning says that not all of them were followed.
+keeps for a setting. It counts only what the stage or job sees, and keeps the ones that win, as the tracer keeps the
+end of a chain: pipeline variables from the narrowest scope and the end of the file, and of the groups that apply, the
+linked ones before those no file links.
+Past that, the rest is left out, every step listed is marked inferred and sensitive, and a warning says that not all
+of them were followed.
 
 When several groups or pipeline variables set the same name, they are listed lowest priority first, so the last one
 wins, as in Azure Pipelines: a job's own win over its stage's, and a stage's over the pipeline's, wherever their
