@@ -30,7 +30,40 @@ public class ConfigTracerTests
         }
     }
 
+    /// <summary>
+    /// Answers each layer of the given settings, and each step it returned for them, with that many upstream steps,
+    /// so their traces grow by that factor at every level.
+    /// </summary>
+    private sealed class FanOut(params (string Key, int Width)[] widths) : IOriginResolver
+    {
+        public List<string> Resolved { get; } = [];
+
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
+        {
+            var key = layer.ConfigurationKey ?? layer.Location;
+            var width = widths.FirstOrDefault(w => w.Key == key).Width;
+            if (key is null || width == 0)
+            {
+                return [];
+            }
+
+            Resolved.Add(key);
+            return [.. Enumerable.Range(1, width).Select(i => Step($"{layer.Source} > {i}", $"{key} upstream") with { Kind = LayerKind.Other, Location = key })];
+        }
+    }
+
+    /// <summary>Answers only the .NET configuration layers of a setting, never the steps upstream of them.</summary>
+    private sealed class TopLevel(params ProvenanceStep[] chain) : IOriginResolver
+    {
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) =>
+            layer.ConfigurationKey is null ? [] : chain;
+    }
+
     private static int Depth(ProvenanceStep step) => step.Origins.Count == 0 ? 0 : 1 + Depth(step.Origins[^1]);
+
+    private static IEnumerable<ProvenanceStep> Upstream(ProvenanceStep step) => step.Origins.SelectMany(o => Upstream(o).Prepend(o));
+
+    private static List<ProvenanceStep> Upstream(TracedSetting setting) => [.. setting.Steps.SelectMany(Upstream)];
 
     [Theory]
     [InlineData(1, 1)]
@@ -83,6 +116,116 @@ public class ConfigTracerTests
 
         var up = Assert.Single(setting.Steps[0].Origins);
         Assert.Equal(["preset", "up"], up.Origins.Select(o => o.Source));
+    }
+
+    [Fact]
+    public void Stops_following_the_origins_of_a_setting_at_the_step_limit_and_hides_its_value()
+    {
+        // Three upstream steps for every step, eight levels deep, are 9,840 steps; two for every step are 510.
+        var report = ConfigTracer.For(Memory(("Big", "big-value"), ("Small", "small-value")))
+            .WithResolver(new FanOut(("Big", 3), ("Small", 2)))
+            .Trace();
+
+        var big = report.Find("Big")!;
+        Assert.Equal(1_000, Upstream(big).Count);
+        Assert.Equal(
+            "Stopped following the origins of Big after 1,000 upstream steps, so its trace is incomplete and its value is hidden: the part not traced may hold a secret.",
+            Assert.Single(report.Warnings));
+        Assert.True(big.IsSensitive);
+        Assert.Equal("***", big.Value);
+        Assert.All(big.Steps.Concat(Upstream(big)), s => Assert.Equal("***", s.Value));
+
+        var small = report.Find("Small")!;
+        Assert.Equal(510, Upstream(small).Count);
+        Assert.False(small.IsSensitive);
+        Assert.Equal("small-value", small.Value);
+        Assert.Equal("small-value", small.Steps[0].Value);
+        Assert.All(Upstream(small), s => Assert.Equal("Small upstream", s.Value));
+    }
+
+    [Fact]
+    public void Shows_a_cut_off_setting_with_RevealSensitiveValues_and_still_warns()
+    {
+        var report = ConfigTracer.For(Memory(("Big", "big-value")))
+            .WithResolver(new FanOut(("Big", 3)))
+            .WithOptions(o => o.RevealSensitiveValues = true)
+            .Trace();
+
+        var big = report.Find("Big")!;
+        Assert.Equal(1_000, Upstream(big).Count);
+        Assert.Equal("Stopped following the origins of Big after 1,000 upstream steps, so its trace is incomplete.", Assert.Single(report.Warnings));
+        Assert.True(big.IsSensitive);
+        Assert.Equal("big-value", big.Value);
+        Assert.Equal("big-value", big.Steps[0].Value);
+        Assert.All(Upstream(big), s => Assert.Equal("Big upstream", s.Value));
+        Assert.DoesNotContain(big.Steps.Concat(Upstream(big)), s => s.IsSensitive);
+    }
+
+    [Fact]
+    public void Stops_the_whole_trace_at_the_trace_step_limit_and_hides_the_settings_after_it()
+    {
+        // Two upstream steps for every step, two levels deep: six steps for each setting.
+        var fanOut = new FanOut(("A", 2), ("B", 2), ("C", 2), ("D", 2));
+        var tracer = ConfigTracer.For(Memory(("A", "a"), ("B", "b"), ("C", "c"), ("D", "d")))
+            .WithResolver(fanOut)
+            .WithOptions(o => o.MaxDepth = 2);
+        tracer.MaxStepsPerSetting = 10;
+        tracer.MaxStepsPerTrace = 15;
+
+        var report = tracer.Trace();
+
+        Assert.Equal(
+            "Stopped following origins after 15 upstream steps in this trace, so the traces of C and every setting after it are incomplete and their values are hidden: the part not traced may hold a secret.",
+            Assert.Single(report.Warnings));
+        Assert.Equal([6, 6, 3, 0], report.Settings.Select(s => Upstream(s).Count));
+        Assert.DoesNotContain("D", fanOut.Resolved);
+        Assert.Equal(["a", "b", "***", "***"], report.Settings.Select(s => s.Value));
+        Assert.Equal([false, false, true, true], report.Settings.Select(s => s.IsSensitive));
+        Assert.All(report.Settings.Skip(2).SelectMany(s => s.Steps.Concat(Upstream(s))), s => Assert.Equal("***", s.Value));
+    }
+
+    [Fact]
+    public void Leaves_a_trace_that_fits_the_step_limits_as_it_was()
+    {
+        // Two upstream steps for every step, three levels deep, are 14 steps: exactly both limits.
+        var config = Memory(("K", "v"));
+        var unlimited = ConfigTracer.For(config).WithResolver(new FanOut(("K", 2))).WithOptions(o => o.MaxDepth = 3).Trace();
+        var fanOut = new FanOut(("K", 2));
+        var tracer = ConfigTracer.For(config).WithResolver(fanOut).WithOptions(o => o.MaxDepth = 3);
+        tracer.MaxStepsPerSetting = 14;
+        tracer.MaxStepsPerTrace = 14;
+
+        var report = tracer.Trace();
+
+        Assert.Empty(report.Warnings);
+        Assert.Equal(7, fanOut.Resolved.Count);
+        var setting = report.Find("K")!;
+        Assert.Equal(14, Upstream(setting).Count);
+        Assert.False(setting.IsSensitive);
+        Assert.Equal("v", setting.Value);
+        Assert.Equal(unlimited.ToJson(), report.ToJson());
+    }
+
+    [Fact]
+    public void Never_prints_a_secret_value_that_lies_beyond_the_step_limit()
+    {
+        // The secret store is linked only after the fan-out above it is traced, which takes more than 1,000 steps.
+        const string secret = "fake-secret-value-not-real";
+        var vault = Step("vault secret", secret, sensitive: true);
+        ConfigTracer Tracer() => ConfigTracer.For(Memory(("Upstream", secret)))
+            .WithResolver(new FanOut(("Upstream", 3)))
+            .WithResolver(new TopLevel(vault));
+
+        var full = Tracer();
+        full.MaxStepsPerSetting = 10_000;
+        Assert.True(full.Trace().Find("Upstream")!.IsSensitive);
+
+        var report = Tracer().Trace();
+
+        Assert.Equal("***", report.Find("Upstream")!.Value);
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.Explain("Upstream"), StringComparison.Ordinal);
     }
 
     [Fact]

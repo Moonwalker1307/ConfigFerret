@@ -1,3 +1,4 @@
+using System.Globalization;
 using ConfigFerret.Compose;
 using ConfigFerret.DotNet;
 using ConfigFerret.GitOps;
@@ -43,6 +44,12 @@ public sealed class ConfigTracer
 
     /// <summary>The trace options.</summary>
     public TraceOptions Options { get; private set; } = new();
+
+    /// <summary>How many origin steps resolvers may add to one setting before its trace is cut off.</summary>
+    internal int MaxStepsPerSetting { get; set; } = 1_000;
+
+    /// <summary>How many origin steps resolvers may add to the whole trace before the settings still to come are cut off.</summary>
+    internal int MaxStepsPerTrace { get; set; } = 250_000;
 
     /// <summary>Starts a trace of <paramref name="configuration"/>.</summary>
     public static ConfigTracer For(IConfigurationRoot configuration)
@@ -189,10 +196,17 @@ public sealed class ConfigTracer
             : ReadContainer(_container!, diagnostics);
 
         var settings = new List<TracedSetting>(layers.Count);
+        var budget = new StepBudget(MaxStepsPerSetting, MaxStepsPerTrace);
         foreach (var (key, effectiveValue, steps) in layers)
         {
-            var enriched = MarkEffective(steps.Select(s => Enrich(s, 1, diagnostics)).ToList());
-            var keySensitive = Options.SensitiveKeyPattern?.IsMatch(key) ?? false;
+            var traceWasCut = budget.TraceCut;
+            budget.StartSetting();
+            var enriched = MarkEffective(steps.Select(s => Enrich(s, 1, diagnostics, budget)).ToList());
+            WarnIfCut(key, traceWasCut, budget, diagnostics);
+
+            // A trace that was cut off may have stopped before the secret it would have found, so it is hidden like a
+            // setting whose key looks secret.
+            var keySensitive = budget.SettingCut || (Options.SensitiveKeyPattern?.IsMatch(key) ?? false);
             var effectiveSensitive = enriched.Count > 0 && IsSensitiveDeep(enriched[^1]);
             var sensitive = keySensitive || effectiveSensitive;
 
@@ -267,7 +281,7 @@ public sealed class ConfigTracer
         return layers;
     }
 
-    private ProvenanceStep Enrich(ProvenanceStep step, int depth, TraceDiagnostics diagnostics)
+    private ProvenanceStep Enrich(ProvenanceStep step, int depth, TraceDiagnostics diagnostics, StepBudget budget)
     {
         if (depth > Options.MaxDepth || _resolvers.Count == 0)
         {
@@ -277,16 +291,36 @@ public sealed class ConfigTracer
         var origins = new List<ProvenanceStep>();
         foreach (var resolver in _resolvers)
         {
-            var chain = resolver.Resolve(step, diagnostics);
+            if (!budget.MayResolve())
+            {
+                break;
+            }
+
+            var chain = budget.Take(resolver.Resolve(step, diagnostics));
             if (chain.Count == 0)
             {
                 continue;
             }
 
-            origins.AddRange(MarkEffective(chain.Select(o => Enrich(o, depth + 1, diagnostics)).ToList()));
+            origins.AddRange(MarkEffective(chain.Select(o => Enrich(o, depth + 1, diagnostics, budget)).ToList()));
         }
 
         return origins.Count == 0 ? step : step with { Origins = [.. step.Origins, .. origins] };
+    }
+
+    // Names the bound and the key, never a value: warnings are not redacted.
+    private void WarnIfCut(string key, bool traceWasCut, StepBudget budget, TraceDiagnostics diagnostics)
+    {
+        if (budget.SettingBoundReached)
+        {
+            var hidden = Options.RevealSensitiveValues ? "" : " and its value is hidden: the part not traced may hold a secret";
+            diagnostics.Warn(string.Create(CultureInfo.InvariantCulture, $"Stopped following the origins of {key} after {MaxStepsPerSetting:N0} upstream steps, so its trace is incomplete{hidden}."));
+        }
+        else if (budget.TraceCut && !traceWasCut)
+        {
+            var hidden = Options.RevealSensitiveValues ? "" : " and their values are hidden: the part not traced may hold a secret";
+            diagnostics.Warn(string.Create(CultureInfo.InvariantCulture, $"Stopped following origins after {MaxStepsPerTrace:N0} upstream steps in this trace, so the traces of {key} and every setting after it are incomplete{hidden}."));
+        }
     }
 
     private static List<ProvenanceStep> MarkEffective(List<ProvenanceStep> chain)
@@ -332,5 +366,70 @@ public sealed class ConfigTracer
         }
 
         return result;
+    }
+
+    // Counts the origin steps that resolvers return, so that a resolver that answers each step with several others,
+    // level after level, cannot make one setting or the whole trace grow without end. Only the steps decide where a
+    // trace is cut, never the time it takes.
+    private sealed class StepBudget(int perSetting, int perTrace)
+    {
+        private int _settingSteps;
+        private int _traceSteps;
+
+        /// <summary>True when the setting being traced lost origin steps to either bound.</summary>
+        public bool SettingCut { get; private set; }
+
+        /// <summary>True when the setting being traced lost origin steps to its own bound.</summary>
+        public bool SettingBoundReached { get; private set; }
+
+        /// <summary>True once the trace-wide bound cut off a step. Every setting traced after that is cut off too.</summary>
+        public bool TraceCut { get; private set; }
+
+        public void StartSetting()
+        {
+            _settingSteps = 0;
+            SettingCut = false;
+            SettingBoundReached = false;
+        }
+
+        /// <summary>False when the setting is cut off, so its resolvers are not asked again.</summary>
+        public bool MayResolve()
+        {
+            if (TraceCut)
+            {
+                SettingCut = true;
+            }
+
+            return !SettingCut;
+        }
+
+        /// <summary>
+        /// Counts the chain a resolver returned and keeps as much of it as both bounds allow. A chain that does not
+        /// fit is cut at its start, so the step that wins stays and the setting never passes its bound.
+        /// </summary>
+        public IReadOnlyList<ProvenanceStep> Take(IReadOnlyList<ProvenanceStep> chain)
+        {
+            var settingRoom = perSetting - _settingSteps;
+            var traceRoom = perTrace - _traceSteps;
+            var room = Math.Min(settingRoom, traceRoom);
+            if (chain.Count > room)
+            {
+                SettingCut = true;
+                if (traceRoom <= settingRoom)
+                {
+                    TraceCut = true;
+                }
+                else
+                {
+                    SettingBoundReached = true;
+                }
+
+                chain = [.. chain.Skip(chain.Count - room)];
+            }
+
+            _settingSteps += chain.Count;
+            _traceSteps += chain.Count;
+            return chain;
+        }
     }
 }
