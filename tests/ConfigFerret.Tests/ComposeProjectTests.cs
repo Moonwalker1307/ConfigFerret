@@ -301,9 +301,28 @@ public class ComposeProjectTests
         Assert.Equal("base", service.Environment["A"]);
         Assert.Equal("override", service.Environment["B"]);
         Assert.Equal(["compose.yaml:6", "compose.override.yaml:5"], service.Layers("B").Select(s => s.Location));
-        // a.envfile is listed again last, so it wins over b.envfile.
-        Assert.Equal("a", service.Environment["Y"]);
-        Assert.Equal(["env_file b.envfile", "env_file a.envfile"], service.Layers("Y").Select(s => s.Source));
+        // Like compose, a.envfile listed again keeps its first place, before b.envfile, which wins.
+        Assert.Equal("b", service.Environment["Y"]);
+        Assert.Equal(["env_file a.envfile", "env_file b.envfile"], service.Layers("Y").Select(s => s.Source));
+    }
+
+    [Fact]
+    public void An_env_file_listed_again_keeps_its_first_place()
+    {
+        using var folder = new TempFolder();
+        folder.Write("common.env", "X=common\n");
+        folder.Write("prod.env", "X=prod\n");
+        var main = folder.Write("compose.yaml", "services:\n  api:\n    image: x\n    env_file: [common.env, prod.env]\n  app:\n    extends: base\n    env_file: [common.env]\n  base:\n    env_file: [common.env, prod.env]\n");
+        var over = folder.Write("compose.override.yaml", "services:\n  api:\n    env_file: [./common.env]\n");
+
+        var project = ComposeProject.Load(main, over);
+
+        foreach (var name in new[] { "api", "app" })
+        {
+            var service = Service(project, name);
+            Assert.Equal("prod", service.Environment["X"]);
+            Assert.Equal(["env_file common.env", "env_file prod.env"], service.Layers("X").Select(s => s.Source));
+        }
     }
 
     [Fact]
