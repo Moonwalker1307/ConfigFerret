@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using ConfigFerret.Internal;
+using ConfigFerret.Kustomize;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -24,7 +25,9 @@ namespace ConfigFerret.Compose;
 /// </para>
 /// <para>
 /// A file that compose would need but that is missing (a required <c>env_file</c>, an <c>extends</c> file or an
-/// <c>include</c>) is reported in <see cref="Warnings"/> instead of failing, so the rest can still be traced.
+/// <c>include</c>) is reported in <see cref="Warnings"/> instead of failing, so the rest can still be traced. So is a
+/// file that a compose file names outside the project directory, which is not read unless
+/// <see cref="ComposeOptions.AllowFilesOutsideProject"/> is set.
 /// </para>
 /// </remarks>
 public sealed class ComposeProject
@@ -33,8 +36,12 @@ public sealed class ComposeProject
     private const int MaxExtendsDepth = 16;
     private const int MaxMergeDepth = 16;
     private const int MaxMountedFileChars = 1024 * 1024;
+    private const string OutsideProject = "is outside the project directory";
 
     private readonly ComposeOptions _options;
+
+    // The root project's directory, which an include shares: paths are shown relative to it, and the files that the
+    // compose files name must be in it.
     private readonly string? _displayRoot;
     private readonly Dictionary<string, string> _shell = new(StringComparer.Ordinal);
     private readonly List<ComposeFile> _files = [];
@@ -142,7 +149,7 @@ public sealed class ComposeProject
     private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including)
     {
         var project = new ComposeProject(options, directory, displayRoot);
-        project.LoadEnvironment();
+        project.LoadEnvironment(fromCaller: depth == 0);
         foreach (var text in texts)
         {
             project._files.Add(project.ParseFile(text, directory));
@@ -182,13 +189,19 @@ public sealed class ComposeProject
         return project;
     }
 
-    private void LoadEnvironment()
+    private void LoadEnvironment(bool fromCaller)
     {
-        var paths = _options.EnvFiles.Count > 0
+        // The env files the caller passes are read as they are; an include's env files and the project directory's
+        // .env are named by a compose file, or stand in for one. An include's project directory may be on another root,
+        // so its .env is passed over before anything looks at it on disk, as a missing one is.
+        var named = !fromCaller || _options.EnvFiles.Count == 0;
+        var paths = (_options.EnvFiles.Count > 0
             ? _options.EnvFiles.Select(Path.GetFullPath).ToList()
-            : ProjectDirectory is null ? [] : [.. new[] { Path.Join(ProjectDirectory, ".env") }.Where(File.Exists)];
+            : ProjectDirectory is null ? [] : [.. new[] { Path.Join(ProjectDirectory, ".env") }
+                .Where(p => (_options.AllowFilesOutsideProject || (_displayRoot is not null && SharesRoot(p, _displayRoot))) && Existing(p) is not null)])
+            .Where(p => !named || !Refuses(p, $"The env file {Display(p)}", _warnings)).ToList();
         Environment = DotEnvLayers.Build(
-            paths.Select(p => new DotEnvSourceText(Display(p), p, () => ReadCapped(p) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
+            paths.Select(p => new DotEnvSourceText(Display(p), p, () => (named ? ReadNamed(p) : ReadCapped(p)) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
             ShellLookup);
         _warnings.AddRange(Environment.Warnings);
     }
@@ -283,7 +296,12 @@ public sealed class ComposeProject
                 throw new FormatException($"{at}: {Display(cycle)} includes itself.");
             }
 
-            var missing = full.Find(p => !File.Exists(p));
+            if (full.Exists(p => Refuses(p, $"{at}: the included file {Display(p)}", _warnings)))
+            {
+                continue;
+            }
+
+            var missing = full.Find(p => Existing(p) is null);
             if (missing is not null)
             {
                 _warnings.Add($"{at}: the included file {Display(missing)} does not exist, so its services are not listed.");
@@ -293,7 +311,7 @@ public sealed class ComposeProject
             var projectDirectory = InterpolatedName(item.Str("project_directory"), at, _warnings) is { } dir ? FullPath(file.Base, dir)! : Path.GetDirectoryName(full[0])!;
             var envFiles = ItemsOrSelf(item.Get("env_file")).Select(e => e.Scalar()).Where(e => e is not null)
                 .Select(e => FullPath(file.Base, InterpolatedName(e, at, _warnings)!)!);
-            var texts = full.Select(p => new ComposeText(p, ReadCapped(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
+            var texts = full.Select(p => new ComposeText(p, ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
             var sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full]);
             foreach (var name in sub.ServiceNames)
             {
@@ -453,7 +471,12 @@ public sealed class ComposeProject
             return known;
         }
 
-        var text = ReadCapped(full);
+        if (Refuses(full, $"{at}: the extends file {Display(full)}", warnings))
+        {
+            return null;
+        }
+
+        var text = ReadNamed(full);
         if (text is null)
         {
             warnings.Add($"{at}: the extends file {Display(full)} does not exist.");
@@ -580,7 +603,12 @@ public sealed class ComposeProject
                 continue;
             }
 
-            var text = ReadCapped(declaration.FullPath);
+            if (Refuses(declaration.FullPath, $"{declaration.At}: env_file {declaration.Display}", warnings))
+            {
+                continue;
+            }
+
+            var text = ReadNamed(declaration.FullPath);
             if (text is null)
             {
                 if (declaration.Required)
@@ -662,7 +690,13 @@ public sealed class ComposeProject
                 return step with { Note = step.Note + "; the file is not read" };
             }
 
-            var content = definition.FullPath is null ? null : ReadCapped(definition.FullPath);
+            if (definition.FullPath is not null && Refusal(definition.FullPath) is { } refusal)
+            {
+                warnings.Add(NotRead($"{definition.At}: the {kind} file {Display(definition.FullPath)}", refusal));
+                return step with { Note = step.Note + $"; the file {refusal}, so it is not read" };
+            }
+
+            var content = definition.FullPath is null ? null : ReadNamed(definition.FullPath);
             return content is null
                 ? step with { Note = step.Note + "; the file could not be read" }
                 : step with { Value = content };
@@ -788,6 +822,50 @@ public sealed class ComposeProject
         var relative = Path.GetRelativePath(_displayRoot, fullPath);
         return (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? fullPath : relative).Replace('\\', '/');
     }
+
+    // Why a file that a compose file names is not read, or null when it may be. With every link followed it has to be
+    // in or below the root project directory, unless the options allow files outside it, and it may not be a folder.
+    // A path on another root is refused before anything looks at it on disk.
+    private string? Refusal(string fullPath) =>
+        !_options.AllowFilesOutsideProject && (_displayRoot is null || !SharesRoot(fullPath, _displayRoot) || !Kustomization.IsInFolder(fullPath, _displayRoot)) ? OutsideProject
+        : Directory.Exists(fullPath) ? "is not a regular file"
+        : null;
+
+    // True when two full paths start from the same root: the same drive, share or device. Looking at a path on another
+    // root could already reach out, such as to the server of a UNC path, with the user's credentials.
+    internal static bool SharesRoot(string fullPath, string folder) =>
+        string.Equals(Path.GetPathRoot(fullPath), Path.GetPathRoot(folder), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    // True, with a warning that starts with what, when a file that a compose file names is not read.
+    private bool Refuses(string fullPath, string what, List<string> warnings)
+    {
+        if (Refusal(fullPath) is not { } refusal)
+        {
+            return false;
+        }
+
+        warnings.Add(NotRead(what, refusal));
+        return true;
+    }
+
+    private static string NotRead(string what, string refusal) => refusal == OutsideProject
+        ? $"{what} {refusal}, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it."
+        : $"{what} {refusal}, so it is not read.";
+
+    // The file that a path leads to with every link followed, the way the file system resolves it, or null when there
+    // is none, as for a link whose target is missing.
+    private static FileInfo? Existing(string fullPath) =>
+        Kustomization.RealPath(fullPath) is { } real && new FileInfo(real) is { Exists: true } file ? file : null;
+
+    // Reads a file that a compose file names, once Refusal allows it, from the path its links lead to. A file of size 0
+    // is taken as empty without opening it: a FIFO, a socket and a device report size 0 too, .NET can't tell them from
+    // an empty file without opening them, and opening a FIFO waits for a writer.
+    private static string? ReadNamed(string fullPath) => Existing(fullPath) switch
+    {
+        null => null,
+        { Length: 0 } => string.Empty,
+        var file => ReadCapped(file.FullName),
+    };
 
     // Reads a text file of at most 1 MiB, or returns null when it does not exist or is bigger. Stops early on a
     // device such as /dev/zero.

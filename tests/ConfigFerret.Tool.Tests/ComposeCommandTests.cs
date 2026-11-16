@@ -65,13 +65,41 @@ public class ComposeCommandTests
     [Theory]
     [InlineData("--compose-service", "api")]
     [InlineData("--compose-env-file", "x.envfile")]
-    public async Task Compose_options_need_a_compose_file(string option, string value)
+    [InlineData("--compose-allow-files-outside-project", null)]
+    public async Task Compose_options_need_a_compose_file(string option, string? value)
     {
         var dir = ToolRunner.Golden("container");
-        var result = await new ToolRunner().RunAsync("container", "-m", Path.Join(dir, "cluster.yaml"), option, value);
+        var result = await new ToolRunner().RunAsync(["container", "-m", Path.Join(dir, "cluster.yaml"), option, .. value is null ? Array.Empty<string>() : [value]]);
 
         Assert.Equal(2, result.ExitCode);
-        Assert.Contains("--compose-service and --compose-env-file need --compose-file.", result.Error, StringComparison.Ordinal);
+        Assert.Contains("--compose-service, --compose-env-file and --compose-allow-files-outside-project need --compose-file.", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reads_files_outside_the_project_directory_only_when_allowed()
+    {
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "outside.envfile"), "REGION=fake-outside-region\n", ct);
+            var project = Directory.CreateDirectory(Path.Join(root.FullName, "project")).FullName;
+            var compose = Path.Join(project, "compose.yaml");
+            await File.WriteAllTextAsync(compose, "services:\n  api:\n    env_file: ../outside.envfile\n", ct);
+
+            var refused = await new ToolRunner().RunAsync("container", "--compose-file", compose);
+            var allowed = await new ToolRunner().RunAsync("container", "--compose-file", compose, "--compose-allow-files-outside-project");
+
+            Assert.Equal(0, refused.ExitCode);
+            Assert.DoesNotContain("fake-outside-region", refused.Output, StringComparison.Ordinal);
+            Assert.Contains("is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.", refused.Output, StringComparison.Ordinal);
+            Assert.Equal(0, allowed.ExitCode);
+            Assert.Contains("fake-outside-region", allowed.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
     }
 
     [Theory]

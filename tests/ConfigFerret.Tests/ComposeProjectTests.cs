@@ -790,9 +790,273 @@ public class ComposeProjectTests
         var outside = folder.Write("outside.envfile", "A=1");
         var compose = folder.Write("project/compose.yaml", $"services:\n  app:\n    env_file: {outside.Replace('\\', '/')}\n");
 
-        var service = Service(ComposeProject.Load(compose));
+        var service = Service(ComposeProject.Load([compose], new ComposeOptions { AllowFilesOutsideProject = true }));
 
         Assert.Equal("env_file " + outside.Replace('\\', '/'), service.Layers("A")[0].Source);
+    }
+
+    [Fact]
+    public void Does_not_read_an_env_file_outside_the_project_directory_by_default()
+    {
+        using var folder = new TempFolder();
+        var outside = folder.Write("outside.envfile", "A=1");
+        var compose = folder.Write("project/compose.yaml", $"services:\n  app:\n    env_file: {outside.Replace('\\', '/')}\n");
+
+        var service = Service(ComposeProject.Load(compose));
+
+        Assert.Empty(service.Layers("A"));
+        Assert.Equal(
+            $"compose.yaml:3: env_file {outside.Replace('\\', '/')} is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.",
+            Assert.Single(service.Warnings));
+    }
+
+    [Fact]
+    public void Reads_files_outside_the_project_directory_only_when_allowed()
+    {
+        using var folder = new TempFolder();
+        var outsideText = folder.Write("outside.txt", "fake-outside-config");
+        folder.Write("outside.envfile", "FROM_ENV_FILE=fake-outside-env-file");
+        folder.Write("outside-base.yaml", "services:\n  base:\n    environment: { FROM_EXTENDS: fake-outside-extends }\n");
+        folder.Write("outside-include.yaml", "services:\n  other:\n    environment: { FROM_INCLUDE: fake-outside-include }\n");
+        var compose = folder.Write("project/compose.yaml", $$"""
+            include:
+              - ../outside-include.yaml
+            services:
+              app:
+                extends: { file: ../outside-base.yaml, service: base }
+                env_file: ../outside.envfile
+                configs: [up, absolute]
+            configs:
+              up: { file: ../outside.txt }
+              absolute: { file: "{{outsideText.Replace('\\', '/')}}" }
+            """);
+        string Shown(string name) => Path.Join(folder.Path, name).Replace('\\', '/');
+        const string Allow = "is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.";
+
+        var project = ComposeProject.Load(compose);
+
+        var service = Service(project);
+        Assert.Equal(["app"], project.ServiceNames);
+        Assert.Empty(service.Layers("FROM_EXTENDS"));
+        Assert.Empty(service.Layers("FROM_ENV_FILE"));
+        Assert.Null(service.MountLayers("/up")[0].Value);
+        Assert.Null(service.MountLayers("/absolute")[0].Value);
+        Assert.Equal("mounted at /up on service app; the file is outside the project directory, so it is not read", service.MountLayers("/up")[0].Note);
+        Assert.Equal($"compose.yaml:2: the included file {Shown("outside-include.yaml")} {Allow}", Assert.Single(project.Warnings));
+        Assert.Equal(
+            [
+                $"compose.yaml:5: the extends file {Shown("outside-base.yaml")} {Allow}",
+                $"compose.yaml:6: env_file {Shown("outside.envfile")} {Allow}",
+                $"compose.yaml:9: the config file {Shown("outside.txt")} {Allow}",
+                $"compose.yaml:10: the config file {Shown("outside.txt")} {Allow}",
+            ],
+            service.Warnings);
+        Assert.DoesNotContain("fake-outside", ConfigTracer.ForCompose(project, "app").Trace().ToText(), StringComparison.Ordinal);
+
+        var allowed = ComposeProject.Load([compose], new ComposeOptions { AllowFilesOutsideProject = true });
+
+        var app = Service(allowed);
+        Assert.Equal(["app", "other"], allowed.ServiceNames);
+        Assert.Equal("fake-outside-extends", app.Environment["FROM_EXTENDS"]);
+        Assert.Equal("fake-outside-env-file", app.Environment["FROM_ENV_FILE"]);
+        Assert.Equal("fake-outside-config", app.MountLayers("/up")[0].Value);
+        Assert.Equal("fake-outside-config", app.MountLayers("/absolute")[0].Value);
+        Assert.Equal("fake-outside-include", Service(allowed, "other").Environment["FROM_INCLUDE"]);
+        Assert.Empty(allowed.Warnings);
+        Assert.Empty(app.Warnings);
+    }
+
+    [Fact]
+    public void Does_not_follow_a_link_out_of_the_project_directory_by_default()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        using var folder = new TempFolder();
+        var outsideText = folder.Write("outside.txt", "fake-outside-config");
+        var outsideEnv = folder.Write("outside.env", "TAG=fake-outside-tag\n");
+        var compose = folder.Write("project/compose.yaml", "services:\n  app:\n    configs: [linked]\n    environment: { TAG: $TAG }\nconfigs:\n  linked: { file: link.txt }\n");
+        File.CreateSymbolicLink(Path.Join(folder.Path, "project", "link.txt"), outsideText);
+        File.CreateSymbolicLink(Path.Join(folder.Path, "project", ".env"), outsideEnv);
+
+        var project = ComposeProject.Load(compose);
+
+        var service = Service(project);
+        Assert.Null(service.MountLayers("/linked")[0].Value);
+        Assert.Equal("", service.Environment["TAG"]);
+        Assert.Empty(project.Environment.Files);
+        Assert.Equal("The env file .env is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.", project.Warnings[0]);
+        Assert.Contains("compose.yaml:6: the config file link.txt is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.", service.Warnings);
+
+        var allowed = Service(ComposeProject.Load([compose], new ComposeOptions { AllowFilesOutsideProject = true }));
+        Assert.Equal("fake-outside-config", allowed.MountLayers("/linked")[0].Value);
+        Assert.Equal("fake-outside-tag", allowed.Environment["TAG"]);
+    }
+
+    [Fact]
+    public void An_include_with_its_own_project_directory_does_not_widen_what_is_read()
+    {
+        using var folder = new TempFolder();
+        folder.Write(".env", "FROM_DOTENV=fake-outside-dotenv\n");
+        folder.Write("outside.envfile", "FROM_ENV_FILE=fake-outside-env-file\n");
+        folder.Write("project/sub/compose.yaml", "services:\n  sub:\n    env_file: outside.envfile\n    environment: { FROM_DOTENV: $FROM_DOTENV }\n");
+        folder.Write("project/other/compose.yaml", "services:\n  other:\n    environment: { FROM_ENV_FILE: $FROM_ENV_FILE }\n");
+        var compose = folder.Write("project/compose.yaml", """
+            include:
+              - path: sub/compose.yaml
+                project_directory: ..
+              - path: other/compose.yaml
+                env_file: ../outside.envfile
+            """);
+
+        var project = ComposeProject.Load(compose);
+
+        var sub = Service(project, "sub");
+        Assert.Equal("", sub.Environment["FROM_DOTENV"]);
+        Assert.Empty(sub.Layers("FROM_ENV_FILE"));
+        Assert.Contains(sub.Warnings, w => w.Contains("env_file " + Path.Join(folder.Path, "outside.envfile").Replace('\\', '/') + " is outside the project directory", StringComparison.Ordinal));
+        Assert.Equal("", Service(project, "other").Environment["FROM_ENV_FILE"]);
+        Assert.Equal(
+            [
+                $"The env file {Path.Join(folder.Path, ".env").Replace('\\', '/')} is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.",
+                $"The env file {Path.Join(folder.Path, "outside.envfile").Replace('\\', '/')} is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.",
+            ],
+            project.Warnings.Where(w => w.StartsWith("The env file", StringComparison.Ordinal)));
+
+        var allowed = ComposeProject.Load([compose], new ComposeOptions { AllowFilesOutsideProject = true });
+        Assert.Equal("fake-outside-dotenv", Service(allowed, "sub").Environment["FROM_DOTENV"]);
+        Assert.Equal("fake-outside-env-file", Service(allowed, "sub").Environment["FROM_ENV_FILE"]);
+        Assert.Equal("fake-outside-env-file", Service(allowed, "other").Environment["FROM_ENV_FILE"]);
+    }
+
+    [Fact]
+    public void Reads_only_regular_files()
+    {
+        using var folder = new TempFolder();
+        folder.Write("folder.envfile/x", "A=1");
+        folder.Write("config.d/x", "x");
+        folder.Write("empty.txt", "");
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    env_file: folder.envfile\n    configs: [dir, empty]\nconfigs:\n  dir: { file: config.d }\n  empty: { file: empty.txt }\n");
+
+        foreach (var allow in new[] { false, true })
+        {
+            var service = Service(ComposeProject.Load([compose], new ComposeOptions { AllowFilesOutsideProject = allow }));
+
+            Assert.Null(service.MountLayers("/dir")[0].Value);
+            Assert.Equal("mounted at /dir on service app; the file is not a regular file, so it is not read", service.MountLayers("/dir")[0].Note);
+            Assert.Equal("", service.MountLayers("/empty")[0].Value);
+            Assert.Equal(
+                [
+                    "compose.yaml:3: env_file folder.envfile is not a regular file, so it is not read.",
+                    "compose.yaml:6: the config file config.d is not a regular file, so it is not read.",
+                ],
+                service.Warnings);
+        }
+    }
+
+    [Fact]
+    public void Reports_a_link_whose_target_is_missing_as_a_missing_file()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        using var folder = new TempFolder();
+        var compose = folder.Write("compose.yaml", "include:\n  - inc.yaml\nservices:\n  app:\n    env_file: app.env\n    configs: [c]\nconfigs:\n  c: { file: cfg.txt }\n");
+        File.CreateSymbolicLink(Path.Join(folder.Path, "app.env"), "missing.env");
+        File.CreateSymbolicLink(Path.Join(folder.Path, "cfg.txt"), "missing.txt");
+        File.CreateSymbolicLink(Path.Join(folder.Path, "inc.yaml"), "missing.yaml");
+
+        var project = ComposeProject.Load(compose);
+
+        var service = Service(project);
+        Assert.Equal("compose.yaml:2: the included file inc.yaml does not exist, so its services are not listed.", Assert.Single(project.Warnings));
+        Assert.Equal("compose.yaml:5: env_file app.env does not exist (or is larger than 1 MiB); docker compose stops with an error when a required env_file is missing.", Assert.Single(service.Warnings));
+        Assert.Null(service.MountLayers("/c")[0].Value);
+        Assert.EndsWith("; the file could not be read", service.MountLayers("/c")[0].Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Passes_over_a_dotenv_link_whose_target_is_missing()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        using var folder = new TempFolder();
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    environment:\n      A: ${A:-default}\n");
+        File.CreateSymbolicLink(Path.Join(folder.Path, ".env"), "missing.env");
+
+        var project = ComposeProject.Load(compose);
+
+        Assert.Empty(project.Environment.Files);
+        Assert.Equal("default", Service(project).Environment["A"]);
+    }
+
+    [Fact]
+    public void Reads_a_link_through_a_linked_folder_the_way_the_file_system_does()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        // d/l is sub/deep/l, which leads to ../../real.txt from sub/deep: real.txt in the project, not next to it.
+        using var folder = new TempFolder();
+        folder.Write("project/real.txt", "fake-real-content");
+        Directory.CreateDirectory(Path.Join(folder.Path, "project", "sub", "deep"));
+        Directory.CreateSymbolicLink(Path.Join(folder.Path, "project", "d"), Path.Join("sub", "deep"));
+        File.CreateSymbolicLink(Path.Join(folder.Path, "project", "sub", "deep", "l"), Path.Join("..", "..", "real.txt"));
+        var compose = folder.Write("project/compose.yaml", "services:\n  app:\n    configs: [c]\nconfigs:\n  c: { file: d/l }\n");
+
+        var service = Service(ComposeProject.Load(compose));
+
+        Assert.Equal("fake-real-content", service.MountLayers("/c")[0].Value);
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task Takes_a_fifo_as_empty_without_waiting_for_a_writer()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Windows has no FIFOs in the file system.
+        }
+
+        var ct = TestContext.Current.CancellationToken;
+        using var folder = new TempFolder();
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    env_file: pipe\n    configs: [c]\nconfigs:\n  c: { file: pipe }\n");
+        using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", Path.Join(folder.Path, "pipe"))!)
+        {
+            await mkfifo.WaitForExitAsync(ct);
+            Assert.Equal(0, mkfifo.ExitCode);
+        }
+
+        var project = await Task.Run(() => ComposeProject.Load(compose), ct);
+
+        var service = Service(project);
+        Assert.Equal("", service.MountLayers("/c")[0].Value);
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
+    public void Refuses_a_path_on_another_root_without_looking_at_it()
+    {
+        var temp = Path.GetFullPath(Path.GetTempPath());
+        Assert.True(ComposeProject.SharesRoot(Path.Join(temp, "project", "a.env"), Path.Join(temp, "project")));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.True(ComposeProject.SharesRoot(@"c:\project\a.env", @"C:\project"));
+            Assert.False(ComposeProject.SharesRoot(@"\\attacker\share\a.env", @"C:\project"));
+            Assert.False(ComposeProject.SharesRoot(Path.GetFullPath(Path.Join(@"//attacker/share", ".env")), @"C:\project"));
+            Assert.False(ComposeProject.SharesRoot(@"\\.\pipe\a", @"C:\project"));
+            Assert.False(ComposeProject.SharesRoot(@"\\?\C:\project\a.env", @"C:\project"));
+            Assert.False(ComposeProject.SharesRoot(@"D:\project\a.env", @"C:\project"));
+        }
     }
 
     [Fact]

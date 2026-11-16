@@ -61,6 +61,10 @@ A Docker Compose service, with the override file. `${VAR}` is filled in from the
 configferret container --compose-file compose.yaml --compose-file compose.override.yaml --compose-service api
 ```
 
+Files that the compose files name (`env_file`, `extends`, `include`, config and secret files) are read only from the
+project directory, after following symbolic links; the others are listed as warnings. Pass
+`--compose-allow-files-outside-project` to read them from anywhere, as docker compose does.
+
 `-m -` reads manifests from standard input, for example `kubectl get pod,configmap -o yaml | configferret container -m - -w api-7d9f8c-x2kqp`.
 
 Possibly unused configuration, failing a CI step when there is any:

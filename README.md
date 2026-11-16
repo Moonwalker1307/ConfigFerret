@@ -625,6 +625,13 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
   args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret
   is rejected, since paths and names are never redacted.
+- Docker Compose: a file that a compose file names (a config's or secret's `file`, an `env_file`, an `extends` file,
+  an `include` and its env files) and the project's `.env` are read only from in or below the project directory,
+  after following symbolic links; an include's `project_directory` does not widen this. Others are not read and are
+  listed in the warnings. Set `ComposeOptions.AllowFilesOutsideProject` (`--compose-allow-files-outside-project`) to
+  read them from anywhere, as docker compose does. Either way a folder is not read, and a file of size 0, as a FIFO
+  or a device reports, is taken as empty without opening it. The compose files, env files and project directory you
+  pass are read as they are.
 - A trace follows each .NET configuration layer at most `MaxDepth` levels upstream (default 8). It also stops asking
   resolvers once they have added 1,000 upstream steps to one setting or 250,000 to the whole trace, so a resolver
   that links each step to several others cannot make a trace grow without end. A setting cut off this way gets a
