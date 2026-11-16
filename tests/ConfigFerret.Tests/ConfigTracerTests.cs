@@ -32,17 +32,19 @@ public class ConfigTracerTests
 
     /// <summary>
     /// Answers each layer of the given settings, and each step it returned for them, with that many upstream steps,
-    /// so their traces grow by that factor at every level.
+    /// so their traces grow by that factor at every level, up to <see cref="Levels"/> levels.
     /// </summary>
     private sealed class FanOut(params (string Key, int Width)[] widths) : IOriginResolver
     {
         public List<string> Resolved { get; } = [];
 
+        public int Levels { get; init; } = int.MaxValue;
+
         public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
         {
             var key = layer.ConfigurationKey ?? layer.Location;
             var width = widths.FirstOrDefault(w => w.Key == key).Width;
-            if (key is null || width == 0)
+            if (key is null || width == 0 || layer.Source.Count(c => c == '>') >= Levels)
             {
                 return [];
             }
@@ -123,7 +125,7 @@ public class ConfigTracerTests
     {
         // Three upstream steps for every step, eight levels deep, are 9,840 steps; two for every step are 510.
         var report = ConfigTracer.For(Memory(("Big", "big-value"), ("Small", "small-value")))
-            .WithResolver(new FanOut(("Big", 3), ("Small", 2)))
+            .WithResolver(new FanOut(("Big", 3), ("Small", 2)) { Levels = 8 })
             .Trace();
 
         var big = report.Find("Big")!;
@@ -165,7 +167,7 @@ public class ConfigTracerTests
     public void Stops_the_whole_trace_at_the_trace_step_limit_and_hides_the_settings_after_it()
     {
         // Two upstream steps for every step, two levels deep: six steps for each setting.
-        var fanOut = new FanOut(("A", 2), ("B", 2), ("C", 2), ("D", 2));
+        var fanOut = new FanOut(("A", 2), ("B", 2), ("C", 2), ("D", 2)) { Levels = 2 };
         var tracer = ConfigTracer.For(Memory(("A", "a"), ("B", "b"), ("C", "c"), ("D", "d")))
             .WithResolver(fanOut)
             .WithOptions(o => o.MaxDepth = 2);
@@ -189,8 +191,8 @@ public class ConfigTracerTests
     {
         // Two upstream steps for every step, three levels deep, are 14 steps: exactly both limits.
         var config = Memory(("K", "v"));
-        var unlimited = ConfigTracer.For(config).WithResolver(new FanOut(("K", 2))).WithOptions(o => o.MaxDepth = 3).Trace();
-        var fanOut = new FanOut(("K", 2));
+        var unlimited = ConfigTracer.For(config).WithResolver(new FanOut(("K", 2)) { Levels = 3 }).WithOptions(o => o.MaxDepth = 3).Trace();
+        var fanOut = new FanOut(("K", 2)) { Levels = 3 };
         var tracer = ConfigTracer.For(config).WithResolver(fanOut).WithOptions(o => o.MaxDepth = 3);
         tracer.MaxStepsPerSetting = 14;
         tracer.MaxStepsPerTrace = 14;
@@ -206,6 +208,69 @@ public class ConfigTracerTests
         Assert.Equal(unlimited.ToJson(), report.ToJson());
     }
 
+    /// <summary>Answers each layer with the next one, as many levels upstream as given; the last level is secret if asked.</summary>
+    private sealed class Chain(int count, bool lastIsSecret) : IOriginResolver
+    {
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
+        {
+            var level = layer.ConfigurationKey is not null ? 0 : int.Parse(layer.Location!, System.Globalization.CultureInfo.InvariantCulture);
+            if (level == count)
+            {
+                return [];
+            }
+
+            var next = level + 1;
+            return [Step($"level {next}", "fake-level-value", sensitive: lastIsSecret && next == count) with { Kind = LayerKind.Other, Location = next.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
+        }
+    }
+
+    [Fact]
+    public void Hides_the_value_of_a_chain_cut_off_at_the_depth_limit_and_says_so()
+    {
+        const string secret = "fake-secret-at-level-nine";
+        var report = ConfigTracer.For(Memory(("Deep", secret)))
+            .WithResolver(new Chain(9, lastIsSecret: true))
+            .Trace();
+
+        var deep = report.Find("Deep")!;
+        Assert.Equal(8, Depth(deep.Steps[0]));
+        Assert.True(deep.IsSensitive);
+        Assert.Equal("***", deep.Value);
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.Equal(
+            "Stopped following the origins of Deep after 8 levels upstream (MaxDepth), so its trace is incomplete and its value is hidden: the part not traced may hold a secret.",
+            Assert.Single(report.Warnings));
+    }
+
+    [Fact]
+    public void Shows_a_chain_cut_off_at_the_depth_limit_with_RevealSensitiveValues_and_still_warns()
+    {
+        var report = ConfigTracer.For(Memory(("Deep", "v")))
+            .WithResolver(new Chain(9, lastIsSecret: false))
+            .WithOptions(o => o.RevealSensitiveValues = true)
+            .Trace();
+
+        var deep = report.Find("Deep")!;
+        Assert.True(deep.IsSensitive);
+        Assert.Equal("v", deep.Value);
+        Assert.Equal("Stopped following the origins of Deep after 8 levels upstream (MaxDepth), so its trace is incomplete.", Assert.Single(report.Warnings));
+    }
+
+    [Fact]
+    public void Leaves_a_chain_that_ends_at_the_depth_limit_as_it_was()
+    {
+        var report = ConfigTracer.For(Memory(("Deep", "v")))
+            .WithResolver(new Chain(8, lastIsSecret: false))
+            .Trace();
+
+        var deep = report.Find("Deep")!;
+        Assert.Equal(8, Depth(deep.Steps[0]));
+        Assert.False(deep.IsSensitive);
+        Assert.Equal("v", deep.Value);
+        Assert.Empty(report.Warnings);
+    }
+
     [Fact]
     public void Never_prints_a_secret_value_that_lies_beyond_the_step_limit()
     {
@@ -213,7 +278,7 @@ public class ConfigTracerTests
         const string secret = "fake-secret-value-not-real";
         var vault = Step("vault secret", secret, sensitive: true);
         ConfigTracer Tracer() => ConfigTracer.For(Memory(("Upstream", secret)))
-            .WithResolver(new FanOut(("Upstream", 3)))
+            .WithResolver(new FanOut(("Upstream", 3)) { Levels = 8 })
             .WithResolver(new TopLevel(vault));
 
         var full = Tracer();
@@ -232,8 +297,7 @@ public class ConfigTracerTests
     public void Redacts_values_whose_winning_origin_is_secret()
     {
         var report = ConfigTracer.For(Memory(("Plain", "v")))
-            .WithResolver(new Fixed(Step("public", "p"), Step("secret", "s", sensitive: true)))
-            .WithOptions(o => o.MaxDepth = 1)
+            .WithResolver(new TopLevel(Step("public", "p"), Step("secret", "s", sensitive: true)))
             .Trace();
 
         var setting = report.Find("Plain")!;
@@ -248,8 +312,7 @@ public class ConfigTracerTests
     public void A_secret_that_lost_does_not_make_the_value_sensitive()
     {
         var setting = ConfigTracer.For(Memory(("Plain", "v")))
-            .WithResolver(new Fixed(Step("secret", "s", sensitive: true), Step("public", "p")))
-            .WithOptions(o => o.MaxDepth = 1)
+            .WithResolver(new TopLevel(Step("secret", "s", sensitive: true), Step("public", "p")))
             .Trace().Find("Plain")!;
 
         Assert.False(setting.IsSensitive);
@@ -280,8 +343,7 @@ public class ConfigTracerTests
         Assert.All(references, reference =>
         {
             var report = ConfigTracer.For(Memory(("Smtp:Auth", secret)))
-                .WithResolver(new Fixed(Named(reference) with { Origins = [Step("values file", secret)] }))
-                .WithOptions(o => o.MaxDepth = 1)
+                .WithResolver(new TopLevel(Named(reference) with { Origins = [Step("values file", secret)] }))
                 .Trace();
 
             var setting = report.Find("Smtp:Auth")!;
@@ -316,8 +378,7 @@ public class ConfigTracerTests
         Assert.All(references, reference =>
         {
             var setting = ConfigTracer.For(Memory(("Smtp:Host", "mail.example.test")))
-                .WithResolver(new Fixed(Named(reference, "mail.example.test")))
-                .WithOptions(o => o.MaxDepth = 1)
+                .WithResolver(new TopLevel(Named(reference, "mail.example.test")))
                 .Trace().Find("Smtp:Host")!;
 
             Assert.False(setting.IsSensitive);
@@ -366,8 +427,7 @@ public class ConfigTracerTests
         };
 
         var setting = ConfigTracer.For(Memory(("Smtp:Host", "mail.example.test")))
-            .WithResolver(new Fixed(file))
-            .WithOptions(o => o.MaxDepth = 1)
+            .WithResolver(new TopLevel(file))
             .Trace().Find("Smtp:Host")!;
 
         // A file named like a secret says it holds secrets, so its values are hidden, as a container trace hides the file.
@@ -380,8 +440,7 @@ public class ConfigTracerTests
     public void A_layer_named_like_a_secret_that_lost_hides_only_itself()
     {
         var setting = ConfigTracer.For(Memory(("Smtp:Auth", "v")))
-            .WithResolver(new Fixed(Named(new ConfigMapKeyRef("api-config", "smtp-password"), "s") with { Origins = [Step("values file", "s")] }, Step("public", "p")))
-            .WithOptions(o => o.MaxDepth = 1)
+            .WithResolver(new TopLevel(Named(new ConfigMapKeyRef("api-config", "smtp-password"), "s") with { Origins = [Step("values file", "s")] }, Step("public", "p")))
             .Trace().Find("Smtp:Auth")!;
 
         Assert.False(setting.IsSensitive);
@@ -396,8 +455,7 @@ public class ConfigTracerTests
     {
         var config = Memory(("Smtp:Auth", "fake-smtp-password"));
         ConfigTracer Tracer(string name) => ConfigTracer.For(config)
-            .WithResolver(new Fixed(Named(new ConfigMapKeyRef("api-config", name))))
-            .WithOptions(o => o.MaxDepth = 1);
+            .WithResolver(new TopLevel(Named(new ConfigMapKeyRef("api-config", name))));
 
         var revealed = Tracer("smtp-password").WithOptions(o => o.RevealSensitiveValues = true).Trace().Find("Smtp:Auth")!;
         var off = Tracer("smtp-password").WithOptions(o => o.SensitiveKeyPattern = null).Trace().Find("Smtp:Auth")!;

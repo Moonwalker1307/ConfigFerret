@@ -41,13 +41,18 @@ public sealed class TraceOptions
     /// </summary>
     public IReadOnlyDictionary<string, string?>? Environment { get; set; }
 
-    /// <summary>How many layers upstream to follow from each .NET configuration step. Default 8.</summary>
+    /// <summary>How many layers upstream to follow from each .NET configuration step. Default 8. Zero follows none.</summary>
     /// <remarks>
+    /// A setting with a chain that goes on beyond this depth gets a warning, and its values are hidden like a secret's
+    /// unless <see cref="RevealSensitiveValues"/> is on, since the level not followed may be a secret. A chain that ends
+    /// at this depth is not cut off.
+    /// <para>
     /// The trace also stops asking resolvers once they have added 1,000 upstream steps to one setting, or 250,000 to
     /// the whole trace, so a resolver that links each step to several others cannot make a trace grow without end.
     /// A setting cut off this way gets a warning, and its values are hidden like a secret's unless
     /// <see cref="RevealSensitiveValues"/> is on, since the part not traced may hold a secret. Once the trace-wide
     /// limit is reached, every setting after it is cut off.
+    /// </para>
     /// </remarks>
     public int MaxDepth { get; set; } = 8;
 

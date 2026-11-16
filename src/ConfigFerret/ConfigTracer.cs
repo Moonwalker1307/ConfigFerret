@@ -206,7 +206,7 @@ public sealed class ConfigTracer
 
             // A trace that was cut off may have stopped before the secret it would have found, so it is hidden like a
             // setting whose key looks secret.
-            var keySensitive = budget.SettingCut || (Options.SensitiveKeyPattern?.IsMatch(key) ?? false);
+            var keySensitive = budget.SettingCut || budget.DepthReached || (Options.SensitiveKeyPattern?.IsMatch(key) ?? false);
             var ownNames = OwnNames(key, enriched);
             var effectiveSensitive = false;
             List<ProvenanceStep> redacted;
@@ -298,8 +298,21 @@ public sealed class ConfigTracer
 
     private ProvenanceStep Enrich(ProvenanceStep step, int depth, TraceDiagnostics diagnostics, StepBudget budget)
     {
-        if (depth > Options.MaxDepth || _resolvers.Count == 0)
+        if (_resolvers.Count == 0)
         {
+            return step;
+        }
+
+        if (depth > Options.MaxDepth)
+        {
+            // Ask one level further only to learn whether the chain goes on, without adding what is there. A max depth
+            // of zero turns upstream tracing off, so nothing is asked then.
+            if (Options.MaxDepth > 0 && !budget.DepthReached && budget.MayResolve()
+                && _resolvers.Exists(r => r.Resolve(step, new TraceDiagnostics()).Count > 0))
+            {
+                budget.ReachDepth();
+            }
+
             return step;
         }
 
@@ -335,6 +348,11 @@ public sealed class ConfigTracer
         {
             var hidden = Options.RevealSensitiveValues ? "" : " and their values are hidden: the part not traced may hold a secret";
             diagnostics.Warn(string.Create(CultureInfo.InvariantCulture, $"Stopped following origins after {MaxStepsPerTrace:N0} upstream steps in this trace, so the traces of {key} and every setting after it are incomplete{hidden}."));
+        }
+        else if (budget.DepthReached)
+        {
+            var hidden = Options.RevealSensitiveValues ? "" : " and its value is hidden: the part not traced may hold a secret";
+            diagnostics.Warn(string.Create(CultureInfo.InvariantCulture, $"Stopped following the origins of {key} after {Options.MaxDepth:N0} levels upstream (MaxDepth), so its trace is incomplete{hidden}."));
         }
     }
 
@@ -444,12 +462,18 @@ public sealed class ConfigTracer
         /// <summary>True once the trace-wide bound cut off a step. Every setting traced after that is cut off too.</summary>
         public bool TraceCut { get; private set; }
 
+        /// <summary>True when a chain of the setting being traced goes on beyond the depth limit.</summary>
+        public bool DepthReached { get; private set; }
+
         public void StartSetting()
         {
             _settingSteps = 0;
             SettingCut = false;
             SettingBoundReached = false;
+            DepthReached = false;
         }
+
+        public void ReachDepth() => DepthReached = true;
 
         /// <summary>False when the setting is cut off, so its resolvers are not asked again.</summary>
         public bool MayResolve()
