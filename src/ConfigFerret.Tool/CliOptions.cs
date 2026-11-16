@@ -16,6 +16,19 @@ internal sealed class OutputOptions
     {
         Description = "text (the default) or json.",
         DefaultValueFactory = _ => OutputFormat.Text,
+
+        // The parser's own error quotes the text, which could be a value put after --format by mistake.
+        CustomParser = result =>
+        {
+            if (result.Tokens.Count == 1 && Enum.TryParse<OutputFormat>(result.Tokens[0].Value, ignoreCase: true, out var format)
+                && Enum.IsDefined(format))
+            {
+                return format;
+            }
+
+            result.AddError("--format expects text or json.");
+            return OutputFormat.Text;
+        },
     };
 
     public Option<string?> Output { get; } = new("--output")

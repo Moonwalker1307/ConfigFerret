@@ -438,7 +438,54 @@ public class InputErrorTests
         var result = await new ToolRunner().RunAsync("trace", "-a", ToolRunner.Golden("local-dev"), "--user-secrets-id", "..");
 
         Assert.Equal(2, result.ExitCode);
-        Assert.Contains("not a valid UserSecretsId", result.Error, StringComparison.Ordinal);
+        Assert.Contains("The UserSecretsId from --user-secrets-id is not valid", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Leaves_a_user_secrets_id_with_other_characters_out_of_the_error()
+    {
+        var result = await new ToolRunner().RunAsync("trace", "-a", ToolRunner.Golden("local-dev"), "--user-secrets-id", "fake+s3cret/pasted=");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.DoesNotContain("s3cret", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cret", result.Output, StringComparison.Ordinal);
+        Assert.Contains("The UserSecretsId from --user-secrets-id is not valid", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Leaves_a_user_secrets_id_from_the_project_file_out_of_the_error()
+    {
+        var app = Directory.CreateTempSubdirectory("cf-secrets-id-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(
+                Path.Join(app.FullName, "Orders.csproj"),
+                "<Project><PropertyGroup><UserSecretsId>fake+s3cret/pasted=</UserSecretsId></PropertyGroup></Project>",
+                TestContext.Current.CancellationToken);
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "-e", "Development");
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.DoesNotContain("s3cret", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("s3cret", result.Output, StringComparison.Ordinal);
+            Assert.Contains("The UserSecretsId from the project file is not valid", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Leaves_a_format_it_does_not_know_out_of_the_error()
+    {
+        var result = await new ToolRunner().RunAsync("trace", "-a", ToolRunner.Golden("local-dev"), "--format", "fake-s3cret");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.DoesNotContain("fake-s3cret", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-s3cret", result.Output, StringComparison.Ordinal);
+        Assert.Contains("--format expects text or json.", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -503,6 +550,52 @@ public class RemoteSourceTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("owner/name", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Leaves_a_repository_that_is_not_owner_and_name_out_of_the_error()
+    {
+        var runner = new ToolRunner();
+        runner.Environment["GITHUB_TOKEN"] = GitHubToken;
+
+        var result = await runner.RunAsync("trace", "-a", LocalDev, "--github-repo", "fake-s3cret-pasted-here");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.DoesNotContain("fake-s3cret", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-s3cret", result.Output, StringComparison.Ordinal);
+        Assert.Contains("configferret: --github-repo expects owner/name.", result.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--github-api-url", null, "--github-api-url")]
+    [InlineData(null, "GITHUB_API_URL", "GITHUB_API_URL")]
+    [InlineData("--octopus-server", null, "--octopus-server")]
+    [InlineData(null, "OCTOPUS_URL", "OCTOPUS_URL")]
+    [InlineData(null, "OCTOPUS_CLI_SERVER", "OCTOPUS_CLI_SERVER")]
+    public async Task Leaves_an_address_that_is_not_a_url_out_of_the_error_and_names_where_it_came_from(string? option, string? variable, string source)
+    {
+        var runner = new ToolRunner();
+        runner.Environment["GITHUB_TOKEN"] = GitHubToken;
+        runner.Environment["OCTOPUS_API_KEY"] = OctopusKey;
+        if (variable is not null)
+        {
+            runner.Environment[variable] = "API-FAKES3CRETPASTEDHERE";
+        }
+
+        string[] args = source.Contains("github", StringComparison.OrdinalIgnoreCase)
+            ? ["trace", "-a", LocalDev, "--github-repo", "contoso/api"]
+            : ["trace", "-a", LocalDev, "--octopus-project", "api"];
+        if (option is not null)
+        {
+            args = [.. args, option, "API-FAKES3CRETPASTEDHERE"];
+        }
+
+        var result = await runner.RunAsync(args);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.DoesNotContain("FAKES3CRET", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("FAKES3CRET", result.Output, StringComparison.Ordinal);
+        Assert.Contains($"configferret: {source} is not an absolute URL.", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
