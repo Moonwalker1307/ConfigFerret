@@ -293,6 +293,41 @@ public class TraceCommandTests
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Says_once_when_the_app_folder_holds_several_project_files(int projects)
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", ct);
+            for (var i = 0; i < projects; i++)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Join(app.FullName, $"Orders{i}.csproj"),
+                    "<Project><PropertyGroup><AssemblyName>Hidden</AssemblyName></PropertyGroup></Project>",
+                    ct);
+            }
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--no-user-secrets", "Db:Host");
+
+            Assert.Equal(0, result.ExitCode);
+            string[] expected = projects < 2
+                ? []
+                : [$"configferret: {app.FullName} holds several project files, so no {{ApplicationName}}.settings.json or UserSecretsId is read."];
+            Assert.Equal(expected, result.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')));
+            Assert.DoesNotContain("Hidden", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("Orders0", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
     [InlineData("link", "links to a file outside the app folder")]
     [InlineData("dtd", "holds a DTD or is not valid XML")]
     [InlineData("xml", "holds a DTD or is not valid XML")]
