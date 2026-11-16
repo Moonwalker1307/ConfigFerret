@@ -586,17 +586,30 @@ public class AppConfigurationLoadTests
             Enabled = true,
             Filters = ["Microsoft.Percentage"],
         };
-        var resolver = new AzureAppConfigurationResolver(new AzureAppConfigurationSettings("s", [flag]), new());
         // Every colon here is followed by EnabledFor:0:Parameters:, so each one could end a flag's key.
-        var key = "F" + string.Concat(Enumerable.Repeat(":EnabledFor:0:Parameters", 2_000));
+        const string Segment = ":EnabledFor:0:Parameters";
+        var key = "F" + string.Concat(Enumerable.Repeat(Segment, 2_000));
+        // Flags whose keys are as long as the key up to every 20th of those colons, so the walk tests and looks up 100
+        // candidates, none of them a flag.
+        var atColons = Enumerable.Range(0, 100).Select(i => new AzureAppConfigurationSetting(".appconfig.featureflag/Z" + i, null, "s")
+        {
+            Kind = AzureAppConfigurationSettingKind.FeatureFlag,
+            ConfigurationKey = new string('Z', 1 + (Segment.Length * 20 * i)),
+            Enabled = true,
+            Filters = ["Microsoft.Percentage"],
+        });
+        var settings = new AzureAppConfigurationSettings("s", [flag, .. atColons]);
+        var resolver = new AzureAppConfigurationResolver(settings, new());
         resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "Warm", "v"), new TraceDiagnostics());
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         var steps = resolver.Resolve(TestLayers.Provider("AzureAppConfigurationProvider", key, "v"), new TraceDiagnostics());
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
+        Assert.Equal(101, settings.FlagKeyLengths.Count);
+        Assert.All(settings.FlagKeyLengths.SkipLast(1), length => Assert.Equal(':', key[length]));
         Assert.Empty(steps);
-        // Copying the key up to each of those colons would take about 96 MB.
+        // Copying the key up to each of those 100 colons would take about 5 MB, and up to each of its 2,000 colons 96 MB.
         Assert.InRange(allocated, 0, 1_000_000);
         Assert.Equal(
             "Azure App Configuration feature flag Z (s)",
