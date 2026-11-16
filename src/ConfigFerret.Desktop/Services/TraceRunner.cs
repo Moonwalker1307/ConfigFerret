@@ -258,7 +258,8 @@ public sealed class TraceRunner
         var deadHelm = new List<DeadHelmValue>();
         foreach (var helm in sources.OfType<HelmSource>().Where(h => results.GetValueOrDefault(h) is null && Directory.Exists(h.ChartFolder)))
         {
-            deadHelm.AddRange(HelmValueUsage.FindDead(helm.ChartFolder, helm.ValuesFiles));
+            deadHelm.AddRange(HelmValueUsage.FindDead(helm.ChartFolder, helm.ValuesFiles, helm.Name, out var helmNotes));
+            notes.AddRange(helmNotes);
         }
 
         var workflowVariables = new List<WorkflowVariable>();
