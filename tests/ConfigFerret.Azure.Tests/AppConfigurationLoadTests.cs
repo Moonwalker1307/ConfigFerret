@@ -237,6 +237,69 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Sets_nothing_from_a_JSON_key_value_that_a_later_label_replaces_with_a_plain_one()
+    {
+        var settings = await LoadLabels(
+            ("base", Kv("K", """{"A":1}""", "base", "application/json")),
+            ("prod", Kv("K", "x", "prod")));
+
+        Assert.Empty(settings.FindByConfigurationKey("K:A"));
+        Assert.Equal(["x"], settings.FindByConfigurationKey("K").Select(s => s.Value));
+        Assert.Empty(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Env("K__A", "1"), new TraceDiagnostics()));
+        // The whole JSON still answers to its own key, below the value that replaced it.
+        Assert.Equal(["""{"A":1}""", "x"], settings.FindByConfigurationKeyOrOwnKey("K").Select(s => s.Value));
+    }
+
+    [Fact]
+    public async Task Sets_nothing_from_a_plain_key_value_that_a_later_label_replaces_with_a_JSON_one()
+    {
+        var settings = await LoadLabels(
+            ("base", Kv("K", "x", "base")),
+            ("prod", Kv("K", """{"A":1}""", "prod", "application/json")));
+
+        Assert.Empty(settings.FindByConfigurationKey("K"));
+        Assert.Equal(["1"], settings.FindByConfigurationKey("K:A").Select(s => s.Value));
+        Assert.Empty(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "K", "x"), new TraceDiagnostics()));
+        Assert.Equal(["x", """{"A":1}"""], settings.FindByConfigurationKeyOrOwnKey("K").Select(s => s.Value));
+    }
+
+    [Fact]
+    public async Task Lists_a_replaced_key_value_only_under_the_keys_the_last_label_sets()
+    {
+        var settings = await LoadLabels(
+            ("base", Kv("K", """{"A":1,"B":2}""", "base", "application/json")),
+            ("mid", Kv("k", """{"A":3,"B":{"C":6}}""", "mid", "application/json")),
+            ("prod", Kv("K", """{"A":4,"C":5}""", "prod", "application/json")));
+
+        Assert.Equal(["1", "3", "4"], settings.FindByConfigurationKey("K:A").Select(s => s.Value));
+        Assert.Equal(["label base", "label mid", "label prod"], settings.FindByConfigurationKey("K:A").Select(s => s.LabelText));
+        Assert.Empty(settings.FindByConfigurationKey("K:B"));
+        // k in mid is another stored key than K, so prod does not replace it, and the app has its K:B:C.
+        Assert.Equal(["6"], settings.FindByConfigurationKey("K:B:C").Select(s => s.Value));
+        Assert.Equal(["5"], settings.FindByConfigurationKey("K:C").Select(s => s.Value));
+        Assert.Equal(3, settings.Find("K").Count);
+    }
+
+    private static Task<AzureAppConfigurationSettings> LoadLabels(params (string Label, string Item)[] pages)
+    {
+        var handler = Handler();
+        foreach (var (label, item) in pages)
+        {
+            handler.Respond(KeysPath(label), Page(null, item));
+        }
+
+        return Load(handler, o =>
+        {
+            foreach (var (label, _) in pages)
+            {
+                o.Labels.Add(label);
+            }
+
+            o.IncludeFeatureFlags = false;
+        });
+    }
+
+    [Fact]
     public async Task Compares_a_JSON_key_value_with_the_value_seen_as_JSON()
     {
         var handler = Handler().Respond(KeysPath(), Page(

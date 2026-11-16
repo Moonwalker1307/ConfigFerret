@@ -42,6 +42,7 @@ public sealed class AzureAppConfigurationSettings
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byKeyOrOwnKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> _flattened;
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>>.AlternateLookup<ReadOnlySpan<char>> _byKeySpan;
+    private readonly Dictionary<AzureAppConfigurationSetting, List<AzureAppConfigurationSetting>> _replaced = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>Creates a snapshot from settings you already have. Each setting sets its own configuration key.</summary>
     /// <param name="store">The store name, for example <c>contoso</c>.</param>
@@ -65,12 +66,35 @@ public sealed class AzureAppConfigurationSettings
         Settings = [.. settings];
         _flattened = flattened;
         var flagKeyLengths = new SortedSet<int>();
+
+        // The provider keeps one setting for each stored key, the one read last, and sets only what that one sets. So a
+        // setting that a later one replaces is listed only under the keys the later one also sets, below it, as
+        // overridden; under any other key it would look like the app's value, which it is not. The provider compares stored
+        // keys with case, so K and k are two settings and both set their values; only the configuration keys they set are
+        // compared without case, as in the app.
+        var last = new Dictionary<string, AzureAppConfigurationSetting>(StringComparer.Ordinal);
         foreach (var setting in Settings)
         {
             ArgumentNullException.ThrowIfNull(setting, nameof(settings));
+            last[setting.Key] = setting;
+        }
+
+        var keysSetBy = new Dictionary<AzureAppConfigurationSetting, HashSet<string>>(ReferenceEqualityComparer.Instance);
+        foreach (var setting in Settings)
+        {
             Add(_byStoredKey, setting.Key, setting);
-            // An empty configuration key is no key: a flag in the newer layout sets none that is traced.
-            var values = (Flattened(setting) ?? [setting]).Where(value => value.ConfigurationKey.Length > 0).ToList();
+            var values = AllValues(setting);
+            if (last[setting.Key] is var replacing && !ReferenceEquals(replacing, setting))
+            {
+                if (!keysSetBy.TryGetValue(replacing, out var keys))
+                {
+                    keysSetBy[replacing] = keys = new HashSet<string>(AllValues(replacing).Select(value => value.ConfigurationKey), StringComparer.OrdinalIgnoreCase);
+                }
+
+                values = values.Where(value => keys.Contains(value.ConfigurationKey)).ToList();
+                _replaced[setting] = values;
+            }
+
             foreach (var value in values)
             {
                 Add(_byKey, value.ConfigurationKey, value);
@@ -84,7 +108,7 @@ public sealed class AzureAppConfigurationSettings
                 Add(_byKeyOrOwnKey, setting.ConfigurationKey, setting);
             }
 
-            if (IsFlagWithFilters(setting) && setting.ConfigurationKey.Length > 0)
+            if (IsFlagWithFilters(setting) && values.Contains(setting))
             {
                 flagKeyLengths.Add(setting.ConfigurationKey.Length);
             }
@@ -94,6 +118,18 @@ public sealed class AzureAppConfigurationSettings
         _byKeySpan = _byKey.GetAlternateLookup<ReadOnlySpan<char>>();
         Warnings = [.. warnings ?? []];
     }
+
+    /// <summary>
+    /// The values a stored setting sets that are indexed by configuration key: its flattened values or itself, without an
+    /// empty key, and, for a setting a later one with the same stored key (case included) replaces, only those under keys
+    /// the later one also sets.
+    /// </summary>
+    internal IReadOnlyList<AzureAppConfigurationSetting> IndexedValues(AzureAppConfigurationSetting setting) =>
+        _replaced.TryGetValue(setting, out var values) ? values : AllValues(setting);
+
+    // An empty configuration key is no key: a flag in the newer layout sets none that is traced.
+    private List<AzureAppConfigurationSetting> AllValues(AzureAppConfigurationSetting setting) =>
+        (Flattened(setting) ?? [setting]).Where(value => value.ConfigurationKey.Length > 0).ToList();
 
     /// <summary>The lengths of the configuration keys of the flags that are on and have client filters, shortest first.</summary>
     internal IReadOnlyList<int> FlagKeyLengths { get; }
