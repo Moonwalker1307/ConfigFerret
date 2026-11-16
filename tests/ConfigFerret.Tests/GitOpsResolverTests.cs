@@ -1022,11 +1022,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void A_dangling_link_in_the_folder_it_deploys_is_skipped_like_any_link()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
-
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
         Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
         File.CreateSymbolicLink(Path.Join(_root, "apps", "local.yaml"), Path.Join(_root, "missing.yaml"));
 
