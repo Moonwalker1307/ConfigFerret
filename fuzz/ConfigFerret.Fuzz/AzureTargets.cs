@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Azure;
 using Azure.Core;
 using Azure.Core.Pipeline;
@@ -151,6 +152,11 @@ internal static partial class Targets
             options.TrimKeyPrefixes.Add("App:");
         }
 
+        if ((flags & 128) != 0)
+        {
+            options.TrimKeyPrefixes.Add("FeatureManagement:");
+        }
+
         using var server = new ScriptedServer(responses, """{"items":[]}""");
         var clientOptions = new ConfigurationClientOptions { Transport = new HttpClientTransport(new HttpClient(server, disposeHandler: false)) };
         clientOptions.Retry.MaxRetries = 0;
@@ -172,6 +178,7 @@ internal static partial class Targets
             CheckNoAccessKey(warning, accessKey, server);
         }
 
+        var flagKeys = ExpectedFlagKeys(responses, options.TrimKeyPrefixes);
         foreach (var setting in settings.Settings)
         {
             // A stored key finds the stored key-value, and each configuration key it sets finds the value it sets there.
@@ -185,7 +192,9 @@ internal static partial class Targets
             {
                 case AzureAppConfigurationSettingKind.KeyVaultReference when setting.Value is not null || !options.IncludeKeyVaultReferences:
                     throw new InvariantException($"Key Vault reference {setting.Key} has a value or was not asked for.");
-                case AzureAppConfigurationSettingKind.FeatureFlag when !setting.ConfigurationKey.StartsWith("FeatureManagement:", StringComparison.Ordinal) || !options.IncludeFeatureFlags:
+                // A flag sets FeatureManagement:<id>, with the loader's trim, for the id of a response item with its key.
+                case AzureAppConfigurationSettingKind.FeatureFlag when !options.IncludeFeatureFlags
+                    || !flagKeys.TryGetValue(setting.Key, out var expected) || !expected.Contains(setting.ConfigurationKey):
                     throw new InvariantException($"Feature flag {setting.Key} maps to {setting.ConfigurationKey} or was not asked for.");
                 default:
                     break;
@@ -194,7 +203,15 @@ internal static partial class Targets
 
         var resolver = new AzureAppConfigurationResolver(settings, new AzureAppConfigurationTraceOptions { MatchByName = (flags & 32) == 0 });
         var diagnostics = new TraceDiagnostics();
-        foreach (var setting in settings.Settings.Take(100))
+        // The values a JSON key-value is flattened to stand for it, as they are what the app's keys hold. Up to 10 of each
+        // stored setting, the first of every setting before the second of any, so one large JSON value cannot crowd out
+        // the rest and the flags, which are read last.
+        var values = settings.Settings
+            .SelectMany(s => (settings.Flattened(s) ?? [s]).Take(10).Select((value, index) => (Value: value, Index: index)))
+            .OrderBy(pair => pair.Index)
+            .Select(pair => pair.Value)
+            .ToList();
+        foreach (var setting in values.Take(200))
         {
             var layers = NamedLayers(setting.Key)
                 .Append(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "AzureAppConfigurationProvider", Value = LayerValue, ConfigurationKey = setting.ConfigurationKey })
@@ -218,9 +235,75 @@ internal static partial class Targets
             }
         }
 
-        var keys = settings.Settings.Take(200).Select(s => s.ConfigurationKey).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary<string, string, string?>(k => k, _ => LayerValue, StringComparer.OrdinalIgnoreCase);
+        var keys = values.Take(200).Select(s => s.ConfigurationKey).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary<string, string, string?>(k => k, _ => LayerValue, StringComparer.OrdinalIgnoreCase);
         var loaded = settings.ToLoadedSource();
         Render(loaded, keys, provider: false);
+    }
+
+    // For each feature flag key in the scripted responses, the configuration keys the loader may give it:
+    // FeatureManagement:<id>, where id is the non-blank "id" string of the item's value or else the name in the key,
+    // trimmed as the loader trims (prefixes in descending order with case ignored, the first that is shorter than the key).
+    private static Dictionary<string, HashSet<string>> ExpectedFlagKeys(List<(HttpStatusCode Status, string Body)> responses, IEnumerable<string> trimKeyPrefixes)
+    {
+        var prefixes = trimKeyPrefixes.Where(p => !string.IsNullOrEmpty(p)).OrderDescending(StringComparer.OrdinalIgnoreCase).ToList();
+        var expected = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var (_, body) in responses)
+        {
+            try
+            {
+                using var page = JsonDocument.Parse(body);
+                if (page.RootElement.ValueKind != JsonValueKind.Object || !page.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var item in items.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("key", out var key) || key.ValueKind != JsonValueKind.String
+                        || key.GetString() is not { } stored || !stored.StartsWith(AzureAppConfigurationSettings.FeatureFlagPrefix, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var name = stored[AzureAppConfigurationSettings.FeatureFlagPrefix.Length..];
+                    if (item.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.String)
+                    {
+                        name = FlagId(value.GetString()!) ?? name;
+                    }
+
+                    var full = "FeatureManagement:" + name;
+                    var prefix = prefixes.FirstOrDefault(p => full.StartsWith(p, StringComparison.OrdinalIgnoreCase) && full.Length > p.Length);
+                    if (!expected.TryGetValue(stored, out var keys))
+                    {
+                        expected[stored] = keys = new HashSet<string>(StringComparer.Ordinal);
+                    }
+
+                    keys.Add(prefix is null ? full : full[prefix.Length..]);
+                }
+            }
+            catch (JsonException)
+            {
+                // Not a page of key-values.
+            }
+        }
+
+        return expected;
+    }
+
+    private static string? FlagId(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(id.GetString())
+                ? id.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     // Traces keys set by a stand-in for the Azure configuration provider, and returns the text and JSON reports.
