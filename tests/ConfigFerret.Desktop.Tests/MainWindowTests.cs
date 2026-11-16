@@ -312,6 +312,88 @@ public sealed class MainWindowTests : IDisposable
         Assert.Equal("charts/worker/values-prod.yaml", viewModel.SelectedValuesFile);
     }
 
+    [AvaloniaFact]
+    public async Task The_environment_the_container_sets_is_traced_until_one_is_picked_and_the_pick_is_kept()
+    {
+        var repo = Path.Join(_temp.FullName, "shop");
+        foreach (var (file, text) in new[]
+        {
+            ("src/Api/appsettings.json", """{"Db":{"Timeout":"5"}}"""),
+            ("src/Api/appsettings.Production.json", """{"Db":{"Timeout":"60"}}"""),
+            ("src/Api/appsettings.Staging.json", """{"Db":{"Timeout":"15"}}"""),
+            ("k8s/api.yaml", "apiVersion: v1\nkind: Pod\nmetadata:\n  name: api\nspec:\n  containers:\n    - name: api\n      image: api:1\n      env:\n        - name: ASPNETCORE_ENVIRONMENT\n          value: Staging\n"),
+        })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(repo, file))!);
+            File.WriteAllText(Path.Join(repo, file), text);
+        }
+
+        MainWindowViewModel Open() => new(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+        string Timeout(MainWindowViewModel vm) => vm.Rows.Single(r => r.Key == "Db:Timeout").Setting.Value!;
+
+        using (var viewModel = Open())
+        {
+            await viewModel.AnalyzeFolderAsync(repo);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("15", Timeout(viewModel));
+            Assert.Equal("Staging", viewModel.SelectedEnvironment);
+            Assert.Contains(viewModel.Problems, p => p.Text.Contains("traced in Staging, not Production", StringComparison.Ordinal));
+
+            viewModel.SelectedEnvironment = "Production";
+            await WaitForTraceAsync(viewModel);
+            Assert.Equal("60", Timeout(viewModel));
+        }
+
+        using (var reopened = Open())
+        {
+            await reopened.AnalyzeFolderAsync(repo);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("Production", reopened.SelectedEnvironment);
+            Assert.Equal("60", Timeout(reopened));
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task An_environment_the_container_takes_from_a_secret_is_shown_nowhere()
+    {
+        const string fromSecret = "Qa7FromTheSecret";
+        var repo = Path.Join(_temp.FullName, "shop");
+        foreach (var (file, text) in new[]
+        {
+            ("src/Api/appsettings.json", """{"Db":{"Timeout":"5"}}"""),
+            ("src/Api/appsettings.Production.json", """{"Db":{"Timeout":"60"}}"""),
+            ("k8s/api.yaml", $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: env-secret\nstringData:\n  env: {fromSecret}\n---\n"
+                + "apiVersion: v1\nkind: Pod\nmetadata:\n  name: api\nspec:\n  containers:\n    - name: api\n      image: api:1\n      env:\n        - name: ASPNETCORE_ENVIRONMENT\n          valueFrom:\n            secretKeyRef:\n              name: env-secret\n              key: env\n"),
+        })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(repo, file))!);
+            File.WriteAllText(Path.Join(repo, file), text);
+        }
+
+        var workspace = Path.Join(_temp.FullName, "workspace.json");
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(workspace),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("Production", viewModel.SelectedEnvironment);
+        Assert.DoesNotContain(viewModel.Environments, e => e.Contains(fromSecret, StringComparison.Ordinal));
+        Assert.Equal("60", viewModel.Rows.Single(r => r.Key == "Db:Timeout").Setting.Value);
+        Assert.Contains(viewModel.Problems, p => p.Text.Contains("ASPNETCORE_ENVIRONMENT in the app's environment comes from a Secret", StringComparison.Ordinal));
+        Assert.All(viewModel.Problems, p => Assert.DoesNotContain(fromSecret, p.Text, StringComparison.Ordinal));
+        var shown = viewModel.Rows.SelectMany(r => r.Setting.Steps.Prepend(r.Setting.EffectiveStep!)).SelectMany(s => new[] { s?.Source, s?.Location, s?.Note, s?.Value });
+        Assert.All(shown, text => Assert.DoesNotContain(fromSecret, text ?? string.Empty, StringComparison.Ordinal));
+        Assert.Equal("Production", viewModel.LastResult!.Environment);
+        Assert.DoesNotContain(fromSecret, File.ReadAllText(workspace), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("[]", "did not say who")]
     [InlineData("\"ferret-fan\"", "did not say who")]

@@ -38,7 +38,10 @@ repository. App settings are the starting point of a trace and stay on. The note
 problems and what the dead-variable scan read. When the repository holds a Helm chart or overlay for each of several
 apps, the one named most like the app picked is traced, with a values file from the chart's own folder first, and the
 notes name the chart. An overlay named for the environment comes first, even when only the bases are named like the
-apps.
+apps. Until you pick an environment, the one the container sets with `DOTNET_ENVIRONMENT` (else
+`ASPNETCORE_ENVIRONMENT`, the order `WebApplication.CreateBuilder` reads them in on .NET 7 and later) is traced and
+shown; a pick is kept per repository, and a note says when the container sets another. A value from a Secret, or one
+the repository doesn't hold, is not used, and the note names only the variable.
 
 A workflow `env:` entry such as `Db__Host: ${{ vars.DB_HOST }}` counts as an environment variable of the app, so
 `Db:Host` gets the variable's value and links back to it. Only entries that look like app settings are used: names with

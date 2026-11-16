@@ -16,6 +16,9 @@ public sealed class AnalysisChoices
     /// <summary>The hosting environment, for example Production.</summary>
     public string Environment { get; set; } = "Production";
 
+    /// <summary>True when the user picked <see cref="Environment"/>. Otherwise the environment the container's variables set wins.</summary>
+    public bool EnvironmentChosen { get; set; }
+
     /// <summary>The Helm chart, as a path from the repository root.</summary>
     public string? HelmChart { get; set; }
 
@@ -92,9 +95,16 @@ public sealed partial class RepositoryAnalyzer
         choices.App = app?.RelativePath;
         if (app is not null && !app.Environments.Contains(choices.Environment, StringComparer.OrdinalIgnoreCase))
         {
-            choices.Environment = app.Environments.FirstOrDefault(e => e.Equals("Production", StringComparison.OrdinalIgnoreCase))
+            var suggested = app.Environments.FirstOrDefault(e => e.Equals("Production", StringComparison.OrdinalIgnoreCase))
                 ?? app.Environments.FirstOrDefault(e => !e.Equals("Development", StringComparison.OrdinalIgnoreCase))
                 ?? choices.Environment;
+
+            // A suggestion is not the user's pick, so the environment the container sets wins over it again.
+            if (!string.Equals(suggested, choices.Environment, StringComparison.Ordinal))
+            {
+                choices.Environment = suggested;
+                choices.EnvironmentChosen = false;
+            }
         }
 
         SuggestDeployment(scan, choices);
@@ -275,6 +285,7 @@ public sealed partial class RepositoryAnalyzer
                 Name = $"App settings {app.RelativePath}",
                 Folder = app.Folder,
                 EnvironmentName = choices.Environment,
+                EnvironmentNameIsDefault = !choices.EnvironmentChosen,
                 UseUserSecrets = false,
                 EnvironmentPrefixes = prefixes,
             });

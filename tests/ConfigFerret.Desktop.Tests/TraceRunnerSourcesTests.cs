@@ -575,6 +575,157 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Contains("db-secret", finding.Reason + finding.Where, StringComparison.Ordinal);
     }
 
+    // The environment the container sets
+
+    private AppSettingsSource ThreeEnvironments(bool isDefault)
+    {
+        var app = App("""{"Db":{"Timeout":"5"}}""", environment: "Production");
+        Write("app/appsettings.Production.json", """{"Db":{"Timeout":"60"}}""");
+        Write("app/appsettings.Staging.json", """{"Db":{"Timeout":"15"}}""");
+        app.EnvironmentNameIsDefault = isDefault;
+        return app;
+    }
+
+    private KubernetesSource ContainerSetting(string variables) =>
+        new() { Paths = [Write("k8s/pod.yaml", Pod("web", "      env:\n" + variables))] };
+
+    private static string Variable(string name, string value) => $"        - name: {name}\n          value: \"{value}\"\n";
+
+    [Fact]
+    public async Task The_environment_the_container_sets_wins_over_a_default_one_with_a_note()
+    {
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(Variable("ASPNETCORE_ENVIRONMENT", "Staging"))));
+
+        var timeout = result.Report.Find("Db:Timeout")!;
+        Assert.Equal("15", timeout.Value);
+        Assert.Contains("appsettings.Staging.json", timeout.EffectiveStep!.Source, StringComparison.Ordinal);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT is Staging in the app's environment (DOTNET_ENVIRONMENT before ASPNETCORE_ENVIRONMENT, as WebApplication.CreateBuilder reads them on .NET 7 and later), so app is traced in Staging, not Production. Pick an environment to trace another one.", result.Notes);
+    }
+
+    [Fact]
+    public async Task A_chosen_environment_is_kept_with_a_note_when_the_container_sets_another()
+    {
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: false), ContainerSetting(Variable("ASPNETCORE_ENVIRONMENT", "Staging"))));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT is Staging in the app's environment (DOTNET_ENVIRONMENT before ASPNETCORE_ENVIRONMENT, as WebApplication.CreateBuilder reads them on .NET 7 and later), but app is traced in Production, the environment picked. The app reads appsettings.Staging.json.", result.Notes);
+    }
+
+    [Fact]
+    public async Task Dotnet_environment_wins_over_aspnetcore_environment_as_in_a_web_app()
+    {
+        var variables = Variable("ASPNETCORE_ENVIRONMENT", "Production") + Variable("DOTNET_ENVIRONMENT", "Staging");
+
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(variables)));
+
+        Assert.Equal("15", result.Report.Find("Db:Timeout")!.Value);
+    }
+
+    [Fact]
+    public async Task No_note_when_the_container_sets_the_same_environment()
+    {
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: false), ContainerSetting(Variable("ASPNETCORE_ENVIRONMENT", "Production"))));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Empty(result.Notes);
+    }
+
+    [Fact]
+    public async Task An_environment_that_differs_only_in_case_gets_a_note_about_the_file_name()
+    {
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(Variable("ASPNETCORE_ENVIRONMENT", "production"))));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Equal(
+            ["ASPNETCORE_ENVIRONMENT is production in the app's environment, and app is traced with appsettings.Production.json. A Linux container looks for appsettings.production.json, with the name as written."],
+            result.Notes);
+    }
+
+    [Fact]
+    public async Task An_environment_that_differs_only_in_case_gets_no_note_when_the_app_has_no_file_for_it()
+    {
+        var app = App("""{"Db":{"Timeout":"5"}}""", environment: "Production");
+        Write("app/appsettings.Development.json", """{"Db":{"Timeout":"1"}}""");
+        app.EnvironmentNameIsDefault = true;
+
+        var result = await Run(ProfileOf(app, ContainerSetting(Variable("ASPNETCORE_ENVIRONMENT", "production"))));
+
+        Assert.Equal("5", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Empty(result.Notes);
+    }
+
+    [Theory]
+    [InlineData("../secrets")]
+    [InlineData("Staging/../../x")]
+    [InlineData(" Staging")]
+    [InlineData("Stag.ing")]
+    public async Task An_environment_name_that_could_pick_another_file_is_not_used(string name)
+    {
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(Variable("ASPNETCORE_ENVIRONMENT", name))));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT in the app's environment is not a name that picks a settings file in the app's folder, so app is traced in Production.", result.Notes);
+    }
+
+    [Fact]
+    public async Task An_environment_whose_value_is_not_in_the_manifests_is_not_used_and_named_in_a_note()
+    {
+        var variables = "        - name: ASPNETCORE_ENVIRONMENT\n          valueFrom:\n            configMapKeyRef:\n              name: absent\n              key: env\n";
+
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(variables)));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Equal("Production", result.Environment);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT in the app's environment has no value in the repository, so app is traced in Production, which may not be the environment the app runs in.", result.Notes);
+    }
+
+    [Fact]
+    public async Task The_first_environment_variable_set_decides_even_when_its_value_is_not_known()
+    {
+        // DOTNET_ENVIRONMENT wins in the app, so its unknown value is what the app runs in, not ASPNETCORE_ENVIRONMENT's.
+        var variables = "        - name: DOTNET_ENVIRONMENT\n          valueFrom:\n            configMapKeyRef:\n              name: absent\n              key: env\n"
+            + Variable("ASPNETCORE_ENVIRONMENT", "Staging");
+
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(variables)));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Contains(result.Notes, n => n.StartsWith("DOTNET_ENVIRONMENT in the app's environment has no value in the repository", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_environment_name_with_a_line_break_from_a_block_scalar_is_not_used()
+    {
+        var variables = "        - name: ASPNETCORE_ENVIRONMENT\n          value: |\n            Staging\n";
+
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(variables)));
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Equal("Production", result.Environment);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT in the app's environment is not a name that picks a settings file in the app's folder, so app is traced in Production.", result.Notes);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_environment_from_a_secret_is_never_used_or_shown(bool reveal)
+    {
+        const string fromSecret = "Qa7FromTheSecret";
+        Write($"app/appsettings.{fromSecret}.json", """{"Db":{"Timeout":"7"}}""");
+        var yaml = $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: env-secret\nstringData:\n  env: {fromSecret}\n---\n"
+            + Pod("web", "      env:\n        - name: ASPNETCORE_ENVIRONMENT\n          valueFrom:\n            secretKeyRef:\n              name: env-secret\n              key: env\n");
+        var k8s = new KubernetesSource { Paths = [Write("k8s/all.yaml", yaml)] };
+
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), k8s), reveal: reveal);
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Equal("Production", result.Environment);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT in the app's environment comes from a Secret or is sensitive, so its value is not used or shown, and app is traced in Production.", result.Notes);
+        Assert.All(result.Notes, n => Assert.DoesNotContain(fromSecret, n, StringComparison.Ordinal));
+        var shown = result.Report.Settings.Where(s => !reveal || s.Key != "ASPNETCORE_ENVIRONMENT").SelectMany(s => AllSteps(s.Steps)).SelectMany(s => new[] { s.Source, s.Location, s.Note, s.Value });
+        Assert.All(shown, text => Assert.DoesNotContain(fromSecret, text ?? string.Empty, StringComparison.Ordinal));
+        Assert.All(result.Sources, s => Assert.DoesNotContain(fromSecret, s.Source.Name + s.Problem, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task No_note_when_every_value_is_known()
     {

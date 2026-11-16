@@ -140,6 +140,16 @@ public class RepositoryAnalyzerTests : IDisposable
         Assert.Equal(["ORDERS_"], Assert.IsType<AppSettingsSource>(profile.Sources[0]).EnvironmentPrefixes);
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void The_environment_is_only_a_default_until_the_user_picks_one(bool chosen, bool isDefault)
+    {
+        var (profile, _) = Build(new RepositoryAnalyzer((_, _) => null), NoConnections, c => c.EnvironmentChosen = chosen);
+
+        Assert.Equal(isDefault, Assert.IsType<AppSettingsSource>(profile.Sources[0]).EnvironmentNameIsDefault);
+    }
+
     [Fact]
     public void Finds_the_environment_prefix_in_the_app_code_without_manifests()
     {
