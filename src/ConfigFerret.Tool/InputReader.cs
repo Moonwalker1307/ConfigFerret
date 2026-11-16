@@ -57,8 +57,9 @@ internal sealed class InputReader(CliHost host)
     }
 
     // A folder stands for every manifest file below it, in a stable order, each named by its path inside the folder so
-    // that files of the same name in different folders can be told apart. Links below it are skipped: a link to a
-    // parent folder never ends, and one out of the folder reads other files.
+    // that files of the same name in different folders can be told apart. Only the system's own separator becomes "/":
+    // on Linux and macOS a "\" is part of a file name. Links below it are skipped: a link to a parent folder never
+    // ends, and one out of the folder reads other files.
     private static IEnumerable<(string File, string Name)> ExpandFolder(string path) =>
         path != StandardInput && Directory.Exists(path)
             ? Directory.EnumerateFiles(path, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint })
@@ -66,7 +67,7 @@ internal sealed class InputReader(CliHost host)
                     || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
                     || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 .Order(StringComparer.Ordinal)
-                .Select(f => (RequireFoundFileSize(f), Path.GetRelativePath(path, f).Replace('\\', '/')))
+                .Select(f => (RequireFoundFileSize(f), Path.GetRelativePath(path, f).Replace(Path.DirectorySeparatorChar, '/')))
             : [(path, path == StandardInput ? "stdin" : Path.GetFileName(path))];
 
     /// <summary>Refuses a file the tool found by itself that is bigger than <see cref="MaxFoundFileBytes"/>.</summary>

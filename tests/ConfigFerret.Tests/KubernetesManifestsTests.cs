@@ -354,6 +354,20 @@ public sealed class KubernetesManifestsTests : IDisposable
     }
 
     [Fact]
+    public void Keeps_a_backslash_in_a_file_name_as_part_of_the_name()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "On Windows a backslash is the separator, so no file name can hold one.");
+        Directory.CreateDirectory(Path.Join(_dir, "api"));
+        File.WriteAllText(Path.Join(_dir, "api", "cm.yaml"), "kind: ConfigMap\nmetadata: { name: in-folder }\n");
+        File.WriteAllText(Path.Join(_dir, "api\\cm.yaml"), "kind: ConfigMap\nmetadata: { name: in-name }\n");
+
+        var manifests = KubernetesManifests.LoadFiles(_dir);
+
+        Assert.Equal("api/cm.yaml", manifests.ConfigMaps["in-folder"].SourceName);
+        Assert.Equal("api\\cm.yaml", manifests.ConfigMaps["in-name"].SourceName);
+    }
+
+    [Fact]
     public void Does_not_follow_links_below_a_folder()
     {
         if (OperatingSystem.IsWindows())

@@ -175,6 +175,28 @@ public class ContainerCommandTests
     }
 
     [Fact]
+    public async Task Keeps_a_backslash_in_a_manifest_file_name_as_part_of_the_name()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "On Windows a backslash is the separator, so no file name can hold one.");
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "pod.yaml"), "apiVersion: v1\nkind: Pod\nmetadata: {name: api}\nspec:\n  containers:\n    - name: api\n      envFrom: [{configMapRef: {name: api-config}}]\n", ct);
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "api\\configmap.yaml"), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: api-config}\ndata: {Api__Host: api.internal}\n", ct);
+
+            var result = await new ToolRunner().RunAsync("container", "-m", root.FullName);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("ConfigMap api-config (key Api__Host, api\\configmap.yaml:4)", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Needs_manifests()
     {
         var result = await new ToolRunner().RunAsync("container");
