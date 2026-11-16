@@ -98,6 +98,10 @@ public class ResolverTests
         Assert.Single(Resolve(WithValues, Provider("Google Secret Manager")));
         Assert.Single(Resolve(WithValues, Provider("gcp secrets")));
         Assert.Single(Resolve(WithValues, Provider("secret manager provider")));
+        Assert.Single(Resolve(WithValues, Provider("SecretManagerConfigurationProvider")));
+        Assert.Single(Resolve(WithValues, Provider("Contoso.Config.SecretManagerProvider")));
+        Assert.Empty(Resolve(WithValues, Provider("SecretsManagerConfigurationProvider")));
+        Assert.Empty(Resolve(WithValues, Provider("AWS Secrets Manager")));
         Assert.Empty(Resolve(WithValues, Provider("appsettings.json")));
         Assert.Empty(Resolve(WithValues, Provider("Google") with { ConfigurationKey = null }));
         Assert.Empty(Resolve(WithValues, Provider("Google") with { Reference = new FileRef("x") }));
