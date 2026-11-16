@@ -7,12 +7,16 @@ namespace ConfigFerret.GitLab;
 public sealed partial class GitLabTraceOptions
 {
     private readonly Dictionary<string, GitLabMapping> _mappings = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string? Job, string Name), GitLabMapping> _links = [];
+    private readonly Dictionary<string, string> _environments = new(StringComparer.Ordinal);
     private readonly List<GitLabCiVariable> _variables = [];
     private readonly HashSet<string> _readFiles = new(StringComparer.Ordinal);
 
     /// <summary>
     /// The environment the deployment runs in, for example <c>production</c> or <c>review/feature-1</c>. It picks which
-    /// environment-scoped variable applies. Leave null for a job with no environment, which gets only <c>*</c> variables.
+    /// environment-scoped variable applies, and leaves out the CI file jobs whose own <c>environment:</c> names another
+    /// environment (never a hidden job, since a job that extends it can name another one). Leave null for a job with no
+    /// environment, which gets only <c>*</c> variables; then every job counts.
     /// </summary>
     public string? Environment { get; set; }
 
@@ -35,11 +39,17 @@ public sealed partial class GitLabTraceOptions
     /// </summary>
     public IList<string> CiFiles { get; } = [];
 
-    /// <summary>The <c>NAME: $VAR</c> and <c>export NAME=$VAR</c> links read from CI files.</summary>
+    /// <summary>
+    /// The <c>NAME: $VAR</c> and <c>export NAME=$VAR</c> links read from CI files: one link per name, a later line
+    /// replacing an earlier one. The trace itself follows each job's own link.
+    /// </summary>
     public IReadOnlyCollection<GitLabMapping> Mappings => _mappings.Values;
 
     /// <summary>The variables set in CI files' <c>variables:</c> blocks, in file order.</summary>
     public IReadOnlyList<GitLabCiVariable> Variables => _variables;
+
+    /// <summary>How many CI files were read, so a resolver knows when what it indexed is out of date.</summary>
+    internal int Version { get; private set; }
 
     /// <summary>
     /// Links the environment variable, Kubernetes env entry or ConfigMap/Secret key <paramref name="name"/> to the GitLab
@@ -57,6 +67,10 @@ public sealed partial class GitLabTraceOptions
     /// Reads a CI file such as <c>.gitlab-ci.yml</c>: its global and job <c>variables:</c> blocks (<c>NAME: value</c> or
     /// <c>NAME:</c> with <c>value: ...</c>), and every <c>NAME: $VAR</c> or script <c>export NAME=$VAR</c> line elsewhere,
     /// so <c>NAME</c> is traced to <c>VAR</c>. A variable whose whole value is <c>$VAR</c> is traced to <c>VAR</c> too.
+    /// What a job sets counts for that job only. What is set outside jobs, in global keywords such as <c>default:</c>,
+    /// and in hidden jobs (<c>.name</c>, since <c>extends:</c> is not read) counts for every job; variables from
+    /// <c>workflow:</c> rules count only as alternatives, since the trace cannot tell whether a rule matched. Each job's
+    /// own <c>environment:</c> is read too, so <see cref="Environment"/> can leave out the jobs for other environments.
     /// </summary>
     public GitLabTraceOptions AddCiFile(string path)
     {
@@ -77,6 +91,7 @@ public sealed partial class GitLabTraceOptions
         var blockIndent = -1;
         var childIndent = -1;
         (string Key, int Line)? pending = null;
+        var environmentIndent = -1;
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i].TrimEnd('\r');
@@ -90,6 +105,11 @@ public sealed partial class GitLabTraceOptions
             if (indent == 0 && TopKey().Match(text) is { Success: true } topKey)
             {
                 top = topKey.Groups["quoted"].Success ? YamlLine.Scalar(topKey.Groups["quoted"].Value) : topKey.Groups["key"].Value;
+            }
+
+            if (environmentIndent >= 0 && indent <= environmentIndent)
+            {
+                environmentIndent = -1;
             }
 
             if (blockIndent >= 0 && indent <= blockIndent)
@@ -106,10 +126,37 @@ public sealed partial class GitLabTraceOptions
                     childIndent = -1;
                     job = indent == 0 ? null : top;
                 }
+                else if (indent > 0 && top is not null && KeyValue().Match(text) is { Success: true } setting
+                    && (setting.Groups["key"].Value == "environment" || (environmentIndent >= 0 && setting.Groups["key"].Value == "name")))
+                {
+                    // environment: NAME, environment: { name: NAME }, or environment: with name: NAME below it. A comment
+                    // alone leaves the name to the lines below; an alias, a tag such as !reference or an anchor is not
+                    // read, so the environment stays unknown.
+                    var written = setting.Groups["value"].Value.Trim();
+                    if (written.StartsWith('#'))
+                    {
+                        written = string.Empty;
+                    }
+
+                    var environment = written.Length > 0 && written[0] is '*' or '!' or '&' ? null
+                        : !written.StartsWith('{') ? YamlLine.Scalar(written)
+                        : FlowName().Match(written) is { Success: true } flow ? YamlLine.Scalar(flow.Groups["name"].Value) : null;
+                    if (environment is { Length: > 0 })
+                    {
+                        _environments[top] = environment;
+                        environmentIndent = -1;
+                    }
+                    else if (setting.Groups["key"].Value == "environment" && written.Length == 0)
+                    {
+                        environmentIndent = indent;
+                    }
+                }
                 else if (FindLink(text) is { } link)
                 {
-                    // A later line (usually a narrower job) replaces an earlier one with the same name.
-                    _mappings[link.Name] = new GitLabMapping(link.Name, link.Key, Where(sourceName, i));
+                    // A later line replaces an earlier one with the same name, in Mappings and in the same job.
+                    var mapping = new GitLabMapping(link.Name, link.Key, Where(sourceName, i));
+                    _mappings[link.Name] = mapping;
+                    _links[(indent == 0 ? null : top, link.Name)] = mapping;
                 }
 
                 continue;
@@ -152,6 +199,7 @@ public sealed partial class GitLabTraceOptions
             }
         }
 
+        Version++;
         return this;
     }
 
@@ -177,15 +225,34 @@ public sealed partial class GitLabTraceOptions
 
     private static string Where(string sourceName, int index) => string.Create(CultureInfo.InvariantCulture, $"{sourceName} line {index + 1}");
 
-    internal GitLabMapping? FindMapping(string name)
-    {
-        if (Links.TryGetValue(name, out var link) && !string.IsNullOrWhiteSpace(link))
-        {
-            return new GitLabMapping(name, link.Trim().TrimStart('$').Trim('{', '}'), null);
-        }
+    internal GitLabMapping? ExplicitLink(string name) =>
+        Links.TryGetValue(name, out var link) && !string.IsNullOrWhiteSpace(link)
+            ? new GitLabMapping(name, link.Trim().TrimStart('$').Trim('{', '}'), null)
+            : null;
 
-        return _mappings.GetValueOrDefault(name);
-    }
+    /// <summary>The links from CI files, the last one for each job and name, with the job each one is in (null outside a job).</summary>
+    internal IEnumerable<(GitLabMapping Mapping, string? Job)> FileLinks() => _links.Select(l => (l.Value, l.Key.Job));
+
+    /// <summary>
+    /// The jobs whose own <c>environment:</c> is a name with no variable in it other than <paramref name="environment"/>.
+    /// A job that gets its environment through <c>extends:</c>, or whose name has a variable, is not one of them, and
+    /// neither is a hidden job, since a job that extends it can name another environment.
+    /// </summary>
+    internal IEnumerable<string> JobsForOtherEnvironments(string? environment) =>
+        environment is null
+            ? []
+            : _environments
+                .Where(e => !IsHidden(e.Key) && !e.Value.Contains('$', StringComparison.Ordinal) && !string.Equals(e.Value, environment, StringComparison.Ordinal))
+                .Select(e => e.Key);
+
+    /// <summary>
+    /// Whether what a top-level key of a CI file sets reaches every job: outside any key, and in global keywords such as
+    /// <c>default:</c> and <c>workflow:</c>. Jobs and hidden jobs (<c>.name</c>) are not shared.
+    /// </summary>
+    internal static bool IsShared(string? key) => key is null || NotJobs.Contains(key);
+
+    /// <summary>Whether a top-level key is a hidden job (<c>.name</c>), a template that <c>extends:</c> can use.</summary>
+    internal static bool IsHidden(string? key) => key is not null && key.StartsWith('.');
 
     /// <summary>Reads the files in <see cref="CiFiles"/> once, and returns a warning for each one that cannot be read.</summary>
     internal List<string> ReadConfiguredCiFiles()
@@ -210,6 +277,10 @@ public sealed partial class GitLabTraceOptions
         return warnings;
     }
 
+    private static readonly HashSet<string> NotJobs = new(
+        ["default", "workflow", "include", "stages", "variables", "image", "services", "cache", "before_script", "after_script", "spec"],
+        StringComparer.Ordinal);
+
     /// <summary>The variable a whole value refers to, such as <c>TIMEOUT</c> for <c>$TIMEOUT</c> or <c>${TIMEOUT}</c>, or null.</summary>
     internal static string? ReferenceTarget(string? value) =>
         value is not null && WholeReference().Match(value) is { Success: true } match ? match.Groups["var"].Value : null;
@@ -225,6 +296,10 @@ public sealed partial class GitLabTraceOptions
 
     [GeneratedRegex("""^(?<kq>['"]?)(?<key>[A-Za-z_][A-Za-z0-9_]*)\k<kq>\s*:(?:\s+(?<value>.*))?$""", RegexOptions.CultureInvariant)]
     private static partial Regex KeyValue();
+
+    // The name in a flow mapping such as { name: production, url: https://example.com }.
+    [GeneratedRegex("""[{,]\s*name\s*:\s*(?<name>"[^"]*"|'[^']*'|[^,}]+)""", RegexOptions.CultureInvariant)]
+    private static partial Regex FlowName();
 
     // NAME: $VAR or NAME: ${VAR}, name and value optionally quoted, optionally a "- " list item, optionally a comment.
     [GeneratedRegex(

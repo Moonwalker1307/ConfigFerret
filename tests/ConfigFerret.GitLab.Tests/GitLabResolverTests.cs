@@ -281,6 +281,590 @@ public class GitLabResolverTests
 
     private static int Count(IEnumerable<ProvenanceStep> steps) => steps.Sum(s => 1 + Count(s.Origins));
 
+    private const string DeployJobs = """
+        stages: [build, deploy]
+
+        build:
+          stage: build
+          script:
+            - dotnet publish
+
+        deploy:staging:
+          stage: deploy
+          environment: staging
+          variables:
+            PFX_ASPNETCORE_ENVIRONMENT: Staging
+            PFX_Db__Host: $PFX_STAGING_DB_HOST
+          script:
+            - export PFX_Db__Timeout=$PFX_STAGING_TIMEOUT
+
+        deploy:production:
+          stage: deploy
+          environment:
+            name: production
+            url: https://example.com
+          variables:
+            PFX_ASPNETCORE_ENVIRONMENT: Production
+            PFX_Db__Host: $PFX_PROD_DB_HOST
+          script:
+            - export PFX_Db__Timeout=$PFX_PROD_TIMEOUT
+
+        qa:
+          stage: deploy
+          environment: { name: qa, url: https://qa.example.com }
+          variables:
+            PFX_ASPNETCORE_ENVIRONMENT: QA
+        """;
+
+    private static ProvenanceReport TraceMany(string prefix, Dictionary<string, string> values, GitLabVariables variables, string ciFile, string? environment)
+    {
+        var environmentVariables = values.ToDictionary(v => prefix + v.Key, v => (string?)v.Value);
+        foreach (var (name, value) in environmentVariables)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            return ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = environmentVariables)
+                .WithGitLab(variables, o =>
+                {
+                    o.Environment = environment;
+                    o.AddCiFileText(ciFile.Replace("PFX_", prefix, StringComparison.Ordinal), ".gitlab-ci.yml");
+                })
+                .Trace();
+        }
+        finally
+        {
+            foreach (var name in environmentVariables.Keys)
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
+    }
+
+    private static GitLabVariables DeployVariables(string prefix) => new(
+    [
+        new(prefix + "STAGING_DB_HOST", "db-staging.example", GitLabVariableLevel.Project, "contoso/api"),
+        new(prefix + "PROD_DB_HOST", "db-prod.example", GitLabVariableLevel.Project, "contoso/api"),
+        new(prefix + "STAGING_TIMEOUT", "5", GitLabVariableLevel.Project, "contoso/api"),
+        new(prefix + "PROD_TIMEOUT", "9", GitLabVariableLevel.Project, "contoso/api"),
+    ]);
+
+    [Theory]
+    [InlineData("staging", "Staging", "deploy:staging", 12, "STAGING")]
+    [InlineData("production", "Production", "deploy:production", 23, "PROD")]
+    public void Uses_only_the_job_that_deploys_to_the_environment(string environment, string value, string job, int line, string target)
+    {
+        const string prefix = "CFGLJOB_";
+        var values = new Dictionary<string, string> { ["ASPNETCORE_ENVIRONMENT"] = value, ["Db__Host"] = $"db-{environment}.example", ["Db__Timeout"] = "5" };
+        var report = TraceMany(prefix, values, DeployVariables(prefix), DeployJobs, environment);
+
+        var ci = Assert.Single(Assert.Single(report.Find("ASPNETCORE_ENVIRONMENT")!.Steps).Origins);
+        Assert.Equal($"GitLab CI variable {prefix}ASPNETCORE_ENVIRONMENT (job {job})", ci.Source);
+        Assert.Equal($".gitlab-ci.yml line {line}", ci.Location);
+        Assert.Equal("matched by name", ci.Note);
+        Assert.True(ci.IsEffective);
+
+        var host = Assert.Single(Assert.Single(report.Find("Db:Host")!.Steps).Origins);
+        Assert.Equal($"GitLab CI variable {prefix}Db__Host (job {job})", host.Source);
+        Assert.Equal($"GitLab project variable {prefix}{target}_DB_HOST", Assert.Single(host.Origins).Source);
+
+        var timeout = Assert.Single(Assert.Single(report.Find("Db:Timeout")!.Steps).Origins);
+        Assert.Equal($"GitLab project variable {prefix}{target}_TIMEOUT", timeout.Source);
+        Assert.False(timeout.IsInferred);
+        Assert.DoesNotContain(report.Warnings, w => w.Contains("GitLab CI jobs", StringComparison.Ordinal));
+
+        // The flow form, environment: { name: qa }, names the environment too.
+        var qa = TraceMany(prefix, new() { ["ASPNETCORE_ENVIRONMENT"] = "QA" }, DeployVariables(prefix), DeployJobs, "qa");
+        Assert.Equal($"GitLab CI variable {prefix}ASPNETCORE_ENVIRONMENT (job qa)", Assert.Single(Assert.Single(qa.Find("ASPNETCORE_ENVIRONMENT")!.Steps).Origins).Source);
+    }
+
+    [Fact]
+    public void Warns_and_infers_when_jobs_disagree_and_nothing_picks_one()
+    {
+        const string prefix = "CFGLJOBS_";
+        var report = TraceMany(prefix, new() { ["ASPNETCORE_ENVIRONMENT"] = "Staging", ["Db__Timeout"] = "5" }, DeployVariables(prefix), DeployJobs, null);
+
+        // The tracer marks the last step effective, so the alternative with the value seen here goes last.
+        var ci = Assert.Single(report.Find("ASPNETCORE_ENVIRONMENT")!.Steps).Origins;
+        Assert.Equal(["Production", "QA", "Staging"], ci.Select(s => s.Value));
+        Assert.All(ci, s => Assert.True(s.IsInferred));
+        Assert.All(ci, s => Assert.Equal("matched by name", s.Note));
+        var timeout = Assert.Single(report.Find("Db:Timeout")!.Steps).Origins;
+        Assert.Equal([$"GitLab project variable {prefix}PROD_TIMEOUT", $"GitLab project variable {prefix}STAGING_TIMEOUT"], timeout.Select(s => s.Source));
+        Assert.All(timeout, s => Assert.True(s.IsInferred));
+        Assert.All(timeout, s => Assert.DoesNotContain("differs", s.Note, StringComparison.Ordinal));
+
+        const string why = ", and the trace cannot tell which job deployed this, so their steps are marked inferred. Set Environment to leave out the jobs for other environments.";
+        Assert.Contains($"GitLab CI jobs deploy:staging, deploy:production, qa set {prefix}ASPNETCORE_ENVIRONMENT differently{why}", report.Warnings);
+        Assert.Contains($"GitLab CI jobs deploy:staging, deploy:production link {prefix}Db__Timeout to different values{why}", report.Warnings);
+        Assert.All(report.Warnings, w =>
+        {
+            Assert.DoesNotContain("Staging", w, StringComparison.Ordinal);
+            Assert.DoesNotContain(".example", w, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Follows_a_link_in_each_job_that_has_it()
+    {
+        const string prefix = "CFGLSAME_";
+        const string yaml = """
+            deploy-staging:
+              variables:
+                PFX_DB_HOST: db-staging.example
+              script:
+                - export PFX_Db__Host=$PFX_DB_HOST
+            deploy-production:
+              variables:
+                PFX_DB_HOST: db-prod.example
+              script:
+                - export PFX_Db__Host=$PFX_DB_HOST
+            """;
+
+        var report = TraceMany(prefix, new() { ["Db__Host"] = "db-staging.example" }, new GitLabVariables([]), yaml, null);
+
+        var host = Assert.Single(report.Find("Db:Host")!.Steps).Origins;
+        Assert.Equal([$"GitLab CI variable {prefix}DB_HOST (job deploy-production)", $"GitLab CI variable {prefix}DB_HOST (job deploy-staging)"], host.Select(s => s.Source));
+        Assert.All(host, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"GitLab CI jobs deploy-staging, deploy-production link {prefix}Db__Host to different values", StringComparison.Ordinal));
+
+        // When the jobs' links end at the same variable, it is one certain link.
+        const string agreeing = "deploy-staging:\n  script:\n    - export PFX_Db__Host=$PFX_DB_HOST\ndeploy-production:\n  script:\n    - export PFX_Db__Host=$PFX_DB_HOST\n";
+        var shared = TraceMany(prefix, new() { ["Db__Host"] = "db.example" }, new GitLabVariables([new(prefix + "DB_HOST", "db.example", GitLabVariableLevel.Project, "contoso/api")]), agreeing, null);
+        var link = Assert.Single(Assert.Single(shared.Find("Db:Host")!.Steps).Origins);
+        Assert.Equal($"GitLab project variable {prefix}DB_HOST", link.Source);
+        Assert.False(link.IsInferred);
+    }
+
+    [Theory]
+    [InlineData("export", "PASSWORD,USER,USER")]
+    [InlineData("export", "USER,PASSWORD,USER")]
+    [InlineData("export", "PASSWORD,USER,PASSWORD")]
+    [InlineData("export", "USER,USER,PASSWORD")]
+    [InlineData("variables", "PASSWORD,USER")]
+    [InlineData("variables", "USER,PASSWORD")]
+    public void Redacts_every_alternative_when_one_may_be_secret(string form, string order)
+    {
+        const string prefix = "CFGLALT_";
+        const string secret = "fake-smtp-pass";
+        var yaml = new StringBuilder();
+        var job = 0;
+        foreach (var source in order.Split(','))
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"job-{job++}:\n");
+            yaml.Append(form == "export" ? $"  script:\n    - export PFX_MAIL_AUTH=$PFX_SMTP_{source}\n" : $"  variables:\n    PFX_MAIL_AUTH: $PFX_SMTP_{source}\n");
+        }
+
+        // Neither is masked; one is named like a secret. The value seen here is neither of them.
+        var variables = new GitLabVariables(
+        [
+            new(prefix + "SMTP_PASSWORD", secret, GitLabVariableLevel.Project, "contoso/api"),
+            new(prefix + "SMTP_USER", "fake-user", GitLabVariableLevel.Project, "contoso/api"),
+        ]);
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = $"smtp://fake-user:{secret}@mail" }, variables, yaml.ToString(), null);
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
+    }
+
+    [Fact]
+    public void Treats_hidden_jobs_that_disagree_as_alternatives()
+    {
+        const string prefix = "CFGLHIDDEN_";
+        const string yaml = """
+            .staging:
+              environment: staging
+              variables:
+                PFX_DB_HOST: db-staging.example
+            .prod:
+              variables:
+                PFX_DB_HOST: db-prod.example
+            deploy-staging:
+              extends: .staging
+            deploy-production:
+              extends: .prod
+            """;
+
+        var report = TraceMany(prefix, new() { ["DB_HOST"] = "db-staging.example" }, new GitLabVariables([]), yaml, null);
+
+        var host = Assert.Single(report.Find("DB_HOST")!.Steps).Origins;
+        Assert.Equal(["db-prod.example", "db-staging.example"], host.Select(s => s.Value));
+        Assert.All(host, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"GitLab CI jobs .staging, .prod set {prefix}DB_HOST differently", StringComparison.Ordinal));
+
+        // A hidden job counts whatever environment it names, since a job that extends it can name another one.
+        var production = TraceMany(prefix, new() { ["DB_HOST"] = "db-prod.example" }, new GitLabVariables([]), yaml, "production");
+        var both = Assert.Single(production.Find("DB_HOST")!.Steps).Origins;
+        Assert.Equal(["db-staging.example", "db-prod.example"], both.Select(s => s.Value));
+        Assert.All(both, s => Assert.True(s.IsInferred));
+    }
+
+    [Fact]
+    public void Keeps_jobs_that_do_not_name_another_environment_themselves()
+    {
+        const string prefix = "CFGLEXT_";
+        const string secret = "fake-smtp-pass";
+        const string yaml = """
+            .prod:
+              environment: production
+            deploy-api:
+              extends: .prod
+              script:
+                - export PFX_MAIL_AUTH=$PFX_SMTP_PASSWORD
+            review:
+              environment: review/$CI_COMMIT_REF_SLUG
+              script:
+                - export PFX_REVIEW_AUTH=$PFX_SMTP_PASSWORD
+            smoke:
+              environment: production
+            """;
+        var variables = new GitLabVariables([new(prefix + "SMTP_PASSWORD", secret, GitLabVariableLevel.Project, "contoso/api")]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = secret, ["REVIEW_AUTH"] = secret }, variables, yaml, "production");
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        AssertNowhere(report, "REVIEW_AUTH", secret);
+        Assert.False(Assert.Single(Assert.Single(report.Find("MAIL_AUTH")!.Steps).Origins).IsInferred);
+        Assert.False(Assert.Single(Assert.Single(report.Find("REVIEW_AUTH")!.Steps).Origins).IsInferred);
+    }
+
+    [Fact]
+    public void Follows_a_job_variable_to_its_own_job_only()
+    {
+        const string yaml = "variables:\n  TIMEOUT: \"1\"\nstaging:\n  variables:\n    TIMEOUT: \"5\"\n    ALIAS: $TIMEOUT\nproduction:\n  variables:\n    TIMEOUT: \"9\"\n";
+        var diagnostics = new TraceDiagnostics();
+        var resolver = Resolver(o => o.AddCiFileText(yaml, ".gitlab-ci.yml"), new GitLabVariables([]));
+
+        var origins = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.GitLabCi, Source = "g", Reference = new GitLabCiVariableRef(".gitlab-ci.yml", 6, "ALIAS") }, diagnostics);
+
+        Assert.Equal(["1", "5"], origins.Select(s => s.Value));
+        Assert.All(origins, s => Assert.False(s.IsInferred));
+        Assert.Empty(diagnostics.Warnings);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Does_work_in_proportion_to_the_jobs_that_link_a_name()
+    {
+        // Each job sets X and links MAIL_AUTH to it. Following each link may look at its own job only. There are fewer
+        // jobs than the bound on one step, so every link is followed.
+        const int jobs = 900;
+        var yaml = new StringBuilder();
+        for (var i = 0; i < jobs; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"job-{i}:\n  variables:\n    X: v{i}\n  script:\n    - export MAIL_AUTH=$X\n");
+        }
+
+        var resolver = Resolver(o => o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml"), new GitLabVariables([]));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = await Task.Run(
+            () =>
+            {
+                var found = resolver.Resolve(EnvStep("MAIL_AUTH", "v7"), diagnostics);
+                foreach (var step in found)
+                {
+                    resolver.Resolve(step, diagnostics);
+                }
+
+                return found;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(jobs, steps.Count);
+        Assert.Equal("v7", steps[^1].Value);
+        Assert.InRange(resolver.Examined, jobs, 20L * jobs);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task Bounds_the_work_when_every_link_sees_many_hidden_definitions()
+    {
+        // Each job links MAIL_AUTH to X, and every job sees each hidden job's X.
+        const int jobs = 1_000;
+        const int hidden = 1_000;
+        var yaml = new StringBuilder();
+        for (var i = 0; i < hidden; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $".h-{i}:\n  variables:\n    X: v{i}\n");
+        }
+
+        for (var i = 0; i < jobs; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"job-{i}:\n  script:\n    - export MAIL_AUTH=$X\n");
+        }
+
+        var resolver = Resolver(o => o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml"), new GitLabVariables([]));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = await Task.Run(() => resolver.Resolve(EnvStep("MAIL_AUTH", "v7"), diagnostics), TestContext.Current.CancellationToken);
+
+        Assert.InRange(resolver.Examined, jobs, 20L * (jobs + hidden));
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.All(steps, s =>
+        {
+            Assert.True(s.IsSensitive);
+            Assert.True(s.IsInferred);
+        });
+        Assert.Contains("MAIL_AUTH is linked or set in more GitLab CI jobs and definitions than the trace follows for one step (1,000), so not all of them were followed; the steps listed are marked inferred and sensitive.", diagnostics.Warnings);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Redacts_links_that_come_to_the_same_value_when_one_is_named_like_a_secret(bool secretFirst)
+    {
+        const string prefix = "CFGLSAMEVAL_";
+        const string secret = "fake-s3cr3t";
+        const string secretJob = "job-a:\n  variables:\n    PFX_SMTP_PASSWORD: fake-s3cr3t\n  script:\n    - export PFX_MAIL_AUTH=$PFX_SMTP_PASSWORD\n";
+        const string plainJob = "job-b:\n  variables:\n    PFX_PLAIN_AUTH: fake-s3cr3t\n  script:\n    - export PFX_MAIL_AUTH=$PFX_PLAIN_AUTH\n";
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = secret }, new GitLabVariables([]), secretFirst ? secretJob + plainJob : plainJob + secretJob, null);
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
+    }
+
+    [Fact]
+    public void Compares_what_a_reference_comes_to_in_each_job()
+    {
+        const string prefix = "CFGLREF_";
+        const string yaml = """
+            deploy-staging:
+              variables:
+                PFX_HOST_VAR: db-staging.example
+                PFX_DB_HOST: $PFX_HOST_VAR
+              script:
+                - export PFX_Db__Host=$PFX_DB_HOST
+            deploy-production:
+              variables:
+                PFX_HOST_VAR: db-production.example
+                PFX_DB_HOST: $PFX_HOST_VAR
+              script:
+                - export PFX_Db__Host=$PFX_DB_HOST
+            """;
+
+        var report = TraceMany(prefix, new() { ["Db__Host"] = "db-staging.example", ["DB_HOST"] = "db-staging.example" }, new GitLabVariables([]), yaml, null);
+
+        var host = Assert.Single(report.Find("Db:Host")!.Steps).Origins;
+        Assert.Equal([$"GitLab CI variable {prefix}DB_HOST (job deploy-production)", $"GitLab CI variable {prefix}DB_HOST (job deploy-staging)"], host.Select(s => s.Source));
+        Assert.All(host, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"GitLab CI jobs deploy-staging, deploy-production link {prefix}Db__Host to different values", StringComparison.Ordinal));
+        var byName = Assert.Single(report.Find("DB_HOST")!.Steps).Origins;
+        Assert.Equal(2, byName.Count);
+        Assert.All(byName, s => Assert.True(s.IsInferred));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"GitLab CI jobs deploy-staging, deploy-production set {prefix}DB_HOST differently", StringComparison.Ordinal));
+
+        // When the reference comes to the same variable in each job, it is one certain link.
+        const string agreeing = "variables:\n  PFX_HOST_VAR: db.example\ndeploy-staging:\n  variables:\n    PFX_DB_HOST: $PFX_HOST_VAR\n  script:\n    - export PFX_Db__Host=$PFX_DB_HOST\ndeploy-production:\n  variables:\n    PFX_DB_HOST: $PFX_HOST_VAR\n  script:\n    - export PFX_Db__Host=$PFX_DB_HOST\n";
+        var shared = TraceMany(prefix, new() { ["Db__Host"] = "db.example" }, new GitLabVariables([]), agreeing, null);
+        Assert.False(Assert.Single(Assert.Single(shared.Find("Db:Host")!.Steps).Origins).IsInferred);
+    }
+
+    [Fact]
+    public void Keeps_a_hidden_job_whatever_environment_it_names()
+    {
+        // A job that extends a hidden job can name another environment, so the hidden job's environment: decides nothing.
+        const string prefix = "CFGLHIDENV_";
+        const string secret = "fake-smtp-pass";
+        const string yaml = """
+            .deploy:
+              environment: production
+              variables:
+                PFX_MAIL_AUTH: $PFX_SMTP_PASSWORD
+            deploy-staging:
+              extends: .deploy
+              environment: staging
+            """;
+        var variables = new GitLabVariables([new(prefix + "SMTP_PASSWORD", secret, GitLabVariableLevel.Project, "contoso/api")]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = secret }, variables, yaml, "staging");
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal($"GitLab CI variable {prefix}MAIL_AUTH (job .deploy)", Assert.Single(Assert.Single(setting.Steps).Origins).Source);
+    }
+
+    [Theory]
+    [InlineData(".tpl:\n  script:\n    - export PFX_MAIL_AUTH=$PFX_SMTP_PASSWORD\ndeploy:\n  extends: .tpl\ntest:\n  script:\n    - export PFX_MAIL_AUTH=$PFX_SMTP_USER\n", ".tpl, test link")]
+    [InlineData("job-a:\n  variables:\n    PFX_MAIL_AUTH: $PFX_SMTP_PASSWORD\njob-b:\n  script:\n    - export PFX_MAIL_AUTH=$PFX_SMTP_USER\n", "job-b, job-a link or set")]
+    public void Keeps_every_job_that_may_set_a_linked_name_as_an_alternative(string yaml, string jobs)
+    {
+        const string prefix = "CFGLMIXED_";
+        const string secret = "fake-smtp-pass";
+        var variables = new GitLabVariables(
+        [
+            new(prefix + "SMTP_PASSWORD", secret, GitLabVariableLevel.Project, "contoso/api"),
+            new(prefix + "SMTP_USER", "fake-user", GitLabVariableLevel.Project, "contoso/api"),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = "fake-user" }, variables, yaml, null);
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        var origins = Assert.Single(setting.Steps).Origins;
+        Assert.Equal(2, origins.Count);
+        Assert.All(origins, s => Assert.True(s.IsInferred));
+        Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
+        Assert.Contains(report.Warnings, w => w.StartsWith($"GitLab CI jobs {jobs} {prefix}MAIL_AUTH to values that cannot be compared", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Marks_a_link_to_a_variable_set_from_a_secret_sensitive_whatever_is_traced_first(bool otherFirst)
+    {
+        // B leads to C, C to A, and A to B in one job and to SMTP_PASSWORD in another.
+        const string yaml = """
+            variables:
+              B: $C
+              C: $A
+            job-a:
+              variables:
+                A: $B
+            job-b:
+              variables:
+                A: $SMTP_PASSWORD
+            other-a:
+              script:
+                - export OTHER=$A
+            other-b:
+              script:
+                - export OTHER=$PLAIN
+            mail-a:
+              script:
+                - export MAIL_AUTH=$B
+            mail-b:
+              script:
+                - export MAIL_AUTH=$USER_VAR
+            """;
+        var variables = new GitLabVariables(
+        [
+            new("PLAIN", "p", GitLabVariableLevel.Project, "contoso/api"),
+            new("USER_VAR", "u", GitLabVariableLevel.Project, "contoso/api"),
+        ]);
+        var resolver = Resolver(o => o.AddCiFileText(yaml, ".gitlab-ci.yml"), variables);
+        var diagnostics = new TraceDiagnostics();
+
+        if (otherFirst)
+        {
+            resolver.Resolve(EnvStep("OTHER", "p"), diagnostics);
+        }
+
+        var mail = resolver.Resolve(EnvStep("MAIL_AUTH", "u"), diagnostics);
+
+        Assert.Equal(2, mail.Count);
+        Assert.All(mail, s => Assert.True(s.IsSensitive));
+    }
+
+    [Fact]
+    public void Orders_alternatives_by_the_value_seen_through_a_reference()
+    {
+        const string prefix = "CFGLSEEN_";
+        const string yaml = "variables:\n  PFX_ALIAS: $PFX_TIMEOUT\nstaging:\n  variables:\n    PFX_TIMEOUT: \"5\"\nproduction:\n  variables:\n    PFX_TIMEOUT: \"9\"\n";
+
+        var report = TraceMany(prefix, new() { ["ALIAS"] = "5" }, new GitLabVariables([]), yaml, null);
+
+        // The tracer marks the last step effective, so the alternative with the value seen at the start goes last.
+        var alias = Assert.Single(Assert.Single(report.Find("ALIAS")!.Steps).Origins);
+        Assert.Equal(["9", "5"], alias.Origins.Select(s => s.Value));
+        Assert.True(alias.Origins[^1].IsEffective);
+    }
+
+    [Fact]
+    public void Does_not_take_an_alias_a_tag_or_a_comment_for_an_environment_name()
+    {
+        const string yaml = """
+            .env: &prod
+              name: production
+            alias:
+              environment: *prod
+              variables:
+                X: alias
+            tag:
+              environment: !reference [.env]
+              variables:
+                X: tag
+            anchor:
+              environment: &named production
+              variables:
+                X: anchor
+            comment:
+              environment:  # named below
+                name: staging
+              variables:
+                X: comment
+            production:
+              environment: production
+              variables:
+                X: production
+            """;
+        var resolver = Resolver(
+            o =>
+            {
+                o.Environment = "staging";
+                o.AddCiFileText(yaml, ".gitlab-ci.yml");
+            },
+            new GitLabVariables([]));
+
+        var origins = resolver.Resolve(EnvStep("X", "comment"), new TraceDiagnostics());
+
+        Assert.Equal(["alias", "tag", "anchor", "comment"], origins.Select(s => s.Value));
+    }
+
+    [Fact]
+    public void Counts_workflow_rule_variables_as_alternatives()
+    {
+        // A workflow rule's variables apply only when the rule matches, which the trace cannot tell.
+        const string prefix = "CFGLFLOW_";
+        const string secret = "fake-smtp-pass";
+        const string yaml = """
+            workflow:
+              rules:
+                - if: $CI_COMMIT_BRANCH == "main"
+                  variables:
+                    PFX_MAIL_AUTH: $PFX_SMTP_PASSWORD
+                - when: always
+            variables:
+              PFX_MAIL_AUTH: $PFX_SMTP_USER
+            """;
+        var variables = new GitLabVariables(
+        [
+            new(prefix + "SMTP_PASSWORD", secret, GitLabVariableLevel.Project, "contoso/api"),
+            new(prefix + "SMTP_USER", "fake-user", GitLabVariableLevel.Project, "contoso/api"),
+        ]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = "fake-user" }, variables, yaml, null);
+
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        var origins = Assert.Single(setting.Steps).Origins;
+        Assert.Equal([$"GitLab CI variable {prefix}MAIL_AUTH (job workflow)", $"GitLab CI variable {prefix}MAIL_AUTH"], origins.Select(s => s.Source));
+        Assert.All(origins, s => Assert.True(s.IsInferred));
+    }
+
+    [Fact]
+    public void Lists_one_link_per_name_with_the_later_line()
+    {
+        const string yaml = "staging:\n  script:\n    - export Db__Host=$STAGING_DB_HOST\nproduction:\n  script:\n    - export Db__Host=$PROD_DB_HOST\n    - export db__host=$OTHER\n";
+
+        var options = new GitLabTraceOptions().AddCiFileText(yaml, ".gitlab-ci.yml");
+
+        Assert.Equal(["Db__Host>PROD_DB_HOST@.gitlab-ci.yml line 6", "db__host>OTHER@.gitlab-ci.yml line 7"], options.Mappings.Select(m => $"{m.Name}>{m.Key}@{m.Where}"));
+    }
+
     [Fact]
     public void Reads_job_names_with_colons_and_quotes_and_a_variables_block_with_an_anchor()
     {

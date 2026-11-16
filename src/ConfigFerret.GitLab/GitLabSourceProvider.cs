@@ -23,7 +23,7 @@ public sealed class GitLabSourceProvider : IConfigSourceProvider
         new(nameof(GitLabOptions.BaseAddress), "GitLab address", SourceSettingKind.Url, Required: true, Help: "The GitLab address, or your self-managed instance's.", DefaultValue: DefaultBaseAddress),
         new(nameof(GitLabOptions.Project), "Project", Required: true, Help: "The project id or path, for example contoso/api."),
         new(nameof(GitLabOptions.Token), "Access token", SourceSettingKind.Secret, Required: true, Help: "A personal, group or project access token with read_api, from a Maintainer. CI_JOB_TOKEN cannot read variables.", EnvironmentVariables: ["GITLAB_TOKEN"]),
-        new(nameof(GitLabTraceOptions.Environment), "Environment", Help: "The environment the deployment runs in, to pick environment-scoped variables. Leave empty for a job with no environment."),
+        new(nameof(GitLabTraceOptions.Environment), "Environment", Help: "The environment the deployment runs in, to pick environment-scoped variables and leave out CI file jobs for other environments. Leave empty for a job with no environment."),
         new(nameof(GitLabOptions.IncludeGroups), "Include group variables", SourceSettingKind.Boolean, Help: "Also read the variables of the project's groups.", DefaultValue: "true"),
         new(nameof(GitLabOptions.IncludeInstance), "Include instance variables", SourceSettingKind.Boolean, Help: "Also read instance variables. Needs an administrator's token.", DefaultValue: "false"),
         new(nameof(GitLabOptions.IncludeMaskedValues), "Read masked values", SourceSettingKind.Boolean, Help: "Keep masked values to compare them. They are always redacted.", DefaultValue: "false"),
