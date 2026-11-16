@@ -681,10 +681,8 @@ public sealed class KustomizationGeneratorTests : IDisposable
     [Fact]
     public void Does_not_follow_a_junction_to_another_drive_out_of_the_folder()
     {
-        if (FolderOnSecondDrive() is not { } other)
-        {
-            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
-        }
+        var other = FolderOnSecondDrive();
+        Assert.SkipWhen(other is null, "Needs Windows and a second drive, such as D: on GitHub's runners.");
 
         try
         {
@@ -693,10 +691,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
             File.WriteAllText(Path.Join(outside, "app.env"), "A=1\n");
             Write("app/kustomization.yaml", "configMapGenerator:\n  - name: cfg\n    envs: [ext/app.env]\n");
             var junction = Path.Join(_root, "app", "ext");
-            if (!TryCreateJunction(junction, outside))
-            {
-                return; // The junction could not be made here.
-            }
+            Assert.SkipUnless(TryCreateJunction(junction, outside), "The junction could not be made here.");
 
             var file = Path.Join(junction, "app.env");
             Assert.Null(Kustomization.RealPath(file));
@@ -714,10 +709,8 @@ public sealed class KustomizationGeneratorTests : IDisposable
     [Fact]
     public void Finds_the_files_of_a_folder_behind_a_junction_to_another_drive()
     {
-        if (FolderOnSecondDrive() is not { } other)
-        {
-            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
-        }
+        var other = FolderOnSecondDrive();
+        Assert.SkipWhen(other is null, "Needs Windows and a second drive, such as D: on GitHub's runners.");
 
         try
         {
@@ -726,10 +719,7 @@ public sealed class KustomizationGeneratorTests : IDisposable
             File.WriteAllText(Path.Join(src, "app", "app.env"), "A=1\n");
             File.WriteAllText(Path.Join(src, "app", "kustomization.yaml"), "configMapGenerator:\n  - name: cfg\n    envs: [app.env]\n");
             var junction = Path.Join(_root, "src");
-            if (!TryCreateJunction(junction, src))
-            {
-                return; // The junction could not be made here.
-            }
+            Assert.SkipUnless(TryCreateJunction(junction, src), "The junction could not be made here.");
 
             var app = Path.Join(junction, "app");
             Assert.True(Kustomization.IsInFolder(Path.Join(app, "app.env"), app));
