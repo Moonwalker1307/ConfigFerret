@@ -138,7 +138,10 @@ public class GitOpsSourceTests
         var tracer = ConfigTracer.ForContainer(KubernetesManifests.LoadFile(Path.Join(SourceGoldenTests.Fixture("flux"), "billing-rendered.yaml")), "billing", "billing");
         var loaded = await tracer.WithSourceAsync(source, TestContext.Current.CancellationToken);
 
-        Assert.Equal(["SMTP_HOST", "UNUSED_VAR"], loaded.FindUnused(tracer.Trace()).Select(e => e.Name));
+        Assert.Equal(["UNUSED_VAR"], loaded.FindUnused(tracer.Trace()).Select(e => e.Name));
+
+        // secret.yaml names STRIPE_KEY, so it is used, and still listed as a secret entry.
+        Assert.True(Assert.Single(loaded.Entries, e => e.Name == "STRIPE_KEY").IsSensitive);
     }
 
     [Fact]

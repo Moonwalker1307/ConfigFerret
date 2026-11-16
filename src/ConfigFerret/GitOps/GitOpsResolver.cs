@@ -11,7 +11,7 @@ namespace ConfigFerret.GitOps;
 /// Links layers to what a GitOps object adds: the Helm values of an Argo CD Application or Flux HelmRelease, the
 /// ConfigMap keys an Argo CD kustomize patch sets, and the <c>${VAR}</c> placeholders a Flux Kustomization substitutes.
 /// </summary>
-internal sealed class GitOpsResolver : IOriginResolver
+internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
 {
     private static readonly SearchValues<char> KustomizeHashAlphabet = SearchValues.Create("2456789bcdfghkmt"); // the characters of the hash kustomize appends to a generated name
 
@@ -23,6 +23,7 @@ internal sealed class GitOpsResolver : IOriginResolver
     private readonly List<KubernetesData?> _substituteFrom = [];
     private readonly Dictionary<(char Kind, string Object, string Key), SubstitutionTemplate> _templates = [];
     private readonly Dictionary<string, bool> _fromSecret = new(StringComparer.Ordinal); // whether the value that wins for a variable is from a Secret
+    private readonly HashSet<string> _usedVariables = new(StringComparer.Ordinal); // every ${VAR} written in a manifest under the path
     private readonly List<KubernetesManifests> _data;
     private bool _warned;
 
@@ -85,6 +86,13 @@ internal sealed class GitOpsResolver : IOriginResolver
             _ => [],
         };
     }
+
+    /// <summary>
+    /// True for a variable that a manifest under the Kustomization path names: Flux substitutes it anywhere, in an
+    /// Ingress host or an image tag too, where no trace step can show the use.
+    /// </summary>
+    public bool IsUsed(SourceRef reference) =>
+        reference is GitOpsVariableRef v && v.Kustomization == _app.Name && _usedVariables.Contains(v.Name);
 
     /// <summary>Everything the object sets, so unused entries can be listed.</summary>
     public List<SourceEntry> Entries()
@@ -255,7 +263,9 @@ internal sealed class GitOpsResolver : IOriginResolver
             var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
             try
             {
-                AddTemplates(KubernetesManifests.Parse(File.ReadAllText(file), relative));
+                var text = File.ReadAllText(file);
+                _usedVariables.UnionWith(ReadVariables(text).Select(v => v.Name));
+                AddTemplates(KubernetesManifests.Parse(text, relative));
             }
             catch (FormatException ex)
             {
