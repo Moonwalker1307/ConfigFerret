@@ -1092,6 +1092,59 @@ public class GitLabResolverTests
     }
 
     [Fact]
+    public void Tells_ci_files_of_one_name_in_different_folders_apart()
+    {
+        // Two services with a CI file of the same name, each setting DB_TIMEOUT on line 2 from its own variable.
+        var folder = $"cf-gitlab-{Guid.NewGuid():N}";
+        var first = Path.Join(folder, "service-a", ".gitlab-ci.yml");
+        var second = Path.Join(folder, "service-b", ".gitlab-ci.yml");
+        Directory.CreateDirectory(Path.GetDirectoryName(first)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(second)!);
+        File.WriteAllText(first, "variables:\n  DB_TIMEOUT: $A_TIMEOUT\n");
+        File.WriteAllText(second, "variables:\n  DB_TIMEOUT: $B_TIMEOUT\n");
+        try
+        {
+            var variables = new GitLabVariables(
+            [
+                new("A_TIMEOUT", "5", GitLabVariableLevel.Project, "contoso/api"),
+                new("B_TIMEOUT", "60", GitLabVariableLevel.Project, "contoso/api"),
+            ]);
+            var resolver = Resolver(o => o.AddCiFile(first).AddCiFile(second), variables);
+
+            var chain = resolver.Resolve(EnvStep("DB_TIMEOUT", "60"), new TraceDiagnostics());
+            var origin = Assert.Single(resolver.Resolve(chain[^1], new TraceDiagnostics()));
+
+            Assert.Equal("GitLab project variable B_TIMEOUT", origin.Source);
+            // A file in the current directory is named by its path from there, with "/" on every platform.
+            Assert.Equal([$"{folder}/service-a/.gitlab-ci.yml line 2", $"{folder}/service-b/.gitlab-ci.yml line 2"], chain.Select(s => s.Location));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Keeps_a_backslash_in_a_ci_file_path_as_part_of_the_name()
+    {
+        // On Windows a backslash is the separator, so no name can hold one.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A Windows file name cannot hold a backslash.");
+        var folder = $"cf-gitlab-{Guid.NewGuid():N}";
+        Directory.CreateDirectory(Path.Join(folder, "a\\b"));
+        File.WriteAllText(Path.Join(folder, "a\\b", ".gitlab-ci.yml"), "variables:\n  A: 1\n");
+        try
+        {
+            var options = new GitLabTraceOptions().AddCiFile(Path.Join(folder, "a\\b", ".gitlab-ci.yml"));
+
+            Assert.Equal($"{folder}/a\\b/.gitlab-ci.yml", Assert.Single(options.Variables).File);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Reads_configured_ci_files_once_and_warns_about_missing_ones()
     {
         var path = Path.Join(Path.GetTempPath(), $"cf-gitlab-{Guid.NewGuid():N}.yml");
@@ -1109,7 +1162,7 @@ public class GitLabResolverTests
             resolver.Resolve(EnvStep("DB_PASSWORD", null), diagnostics);
             _ = new GitLabResolver(Variables, options);
 
-            Assert.StartsWith($"{Path.GetFileName(path)} line 3 sets", step.Note, StringComparison.Ordinal);
+            Assert.Contains($"{Path.GetFileName(path)} line 3 sets", step.Note, StringComparison.Ordinal);
             Assert.StartsWith("Could not read GitLab CI file does-not-exist/.gitlab-ci.yml: ", Assert.Single(diagnostics.Warnings), StringComparison.Ordinal);
             Assert.Single(options.Mappings);
         }
