@@ -105,6 +105,7 @@ only over HTTPS, and never into a report.
 | --- | --- |
 | 0 | The trace ran. |
 | 1 | A key you named is not set, or `unused --exit-code` found something. |
-| 2 | Bad arguments, or an input that could not be read. |
+| 2 | Bad arguments, or an input that could not be read: a missing file, a settings file that does not parse, a request that failed or timed out. |
+| 130 | You cancelled the run with Ctrl+C. Nothing is printed. |
 
 See the [ConfigFerret readme](https://github.com/Moonwalker1307/ConfigFerret#readme) for what each layer shows and the limits.
