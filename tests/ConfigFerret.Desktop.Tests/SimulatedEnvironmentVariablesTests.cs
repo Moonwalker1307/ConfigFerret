@@ -69,6 +69,22 @@ public class SimulatedEnvironmentVariablesTests
         Assert.Null(configuration["ConnectionStrings:Main_ProviderName"]);
     }
 
+    [Theory]
+    [InlineData("APIHUBCONNSTR_Main")]
+    [InlineData("DOCDBCONNSTR_Main")]
+    [InlineData("EVENTHUBCONNSTR_Main")]
+    [InlineData("NOTIFICATIONHUBCONNSTR_Main")]
+    [InlineData("REDISCACHECONNSTR_Main")]
+    [InlineData("SERVICEBUSCONNSTR_Main")]
+    public void The_other_connection_string_variables_become_connection_strings_without_a_provider(string name)
+    {
+        var configuration = Build(string.Empty, (name, "Server=x"));
+
+        Assert.Equal("Server=x", configuration["ConnectionStrings:Main"]);
+        Assert.Null(configuration["ConnectionStrings:Main_ProviderName"]);
+        Assert.Null(configuration[name]);
+    }
+
     [Fact]
     public void Connection_string_names_may_hold_sections_and_any_case()
     {

@@ -8,11 +8,20 @@ public class EnvironmentTests
     [Fact]
     public void Maps_variables_to_keys_like_the_real_environment_variables_provider()
     {
-        // Compare against the real provider over this process's own environment, with a few tricky names added.
+        // Compare against the real provider over this process's own environment, with a few tricky names and one
+        // variable for each connection string prefix added, each with its own name so no two set the same key.
         Environment.SetEnvironmentVariable("CFTOOLTEST_Db__Timeout", "42");
-        Environment.SetEnvironmentVariable("SQLCONNSTR_CfToolTest", "Server=sql");
-        Environment.SetEnvironmentVariable("CUSTOMCONNSTR_CfToolTestCustom", "custom");
-        Environment.SetEnvironmentVariable("MYSQLCONNSTR_CfToolTestMy", "my");
+        string[] csPrefixes =
+        [
+            "MYSQLCONNSTR_", "SQLAZURECONNSTR_", "SQLCONNSTR_", "POSTGRESQLCONNSTR_", "CUSTOMCONNSTR_", "APIHUBCONNSTR_",
+            "DOCDBCONNSTR_", "EVENTHUBCONNSTR_", "NOTIFICATIONHUBCONNSTR_", "REDISCACHECONNSTR_", "SERVICEBUSCONNSTR_",
+        ];
+        for (var i = 0; i < csPrefixes.Length; i++)
+        {
+            Environment.SetEnvironmentVariable($"{csPrefixes[i]}CfToolTest{i}", "fake-" + csPrefixes[i]);
+            Environment.SetEnvironmentVariable($"CFTOOLTEST_{csPrefixes[i]}CfToolTest{i}", "fake-prefixed-" + csPrefixes[i]);
+        }
+
         var process = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
