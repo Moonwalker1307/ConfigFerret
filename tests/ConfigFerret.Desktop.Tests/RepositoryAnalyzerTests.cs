@@ -147,7 +147,7 @@ public class RepositoryAnalyzerTests : IDisposable
         var choices = new AnalysisChoices { App = "src/Orders.Api", HelmChart = null };
         var emptyScan = scan with { Manifests = [], HelmCharts = [], Kustomizations = [] };
 
-        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(emptyScan, choices, NoConnections, []);
+        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(emptyScan, choices, NoConnections, [], TestContext.Current.CancellationToken);
 
         Assert.Equal(["ORDERS_"], Assert.IsType<AppSettingsSource>(Assert.Single(profile.Sources)).EnvironmentPrefixes);
     }
@@ -160,7 +160,7 @@ public class RepositoryAnalyzerTests : IDisposable
         var scan = RepositoryScanner.Scan(_temp.FullName);
         var notes = new List<string>();
 
-        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, new AnalysisChoices(), NoConnections, notes);
+        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, new AnalysisChoices(), NoConnections, notes, TestContext.Current.CancellationToken);
 
         Assert.Equal(TraceMode.Container, profile.Mode);
         Assert.Equal(SourceKind.Kubernetes, Assert.Single(profile.Sources).Kind);
@@ -179,7 +179,7 @@ public class RepositoryAnalyzerTests : IDisposable
         var scan = RepositoryScanner.Scan(_temp.FullName);
         var notes = new List<string>();
 
-        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, new AnalysisChoices { App = "src/Orders" }, NoConnections, notes);
+        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, new AnalysisChoices { App = "src/Orders" }, NoConnections, notes, TestContext.Current.CancellationToken);
 
         var kubernetes = Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource));
         Assert.Equal("orders", kubernetes.Workload);
@@ -206,7 +206,7 @@ public class RepositoryAnalyzerTests : IDisposable
         Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses /bin/sh as the tool.");
 
         // The argument reaches the tool as one argument, so $(...) in it is not run by a shell.
-        var output = RepositoryAnalyzer.RunTool("/bin/sh", ["-c", "printf '%s|%s|%s|%s' \"$HTTPS_PROXY\" \"$http_proxy\" \"$GIT_ALLOW_PROTOCOL\" \"$1\"", "sh", "$(echo injected)"]);
+        var output = RepositoryAnalyzer.RunTool("/bin/sh", ["-c", "printf '%s|%s|%s|%s' \"$HTTPS_PROXY\" \"$http_proxy\" \"$GIT_ALLOW_PROTOCOL\" \"$1\"", "sh", "$(echo injected)"], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("http://127.0.0.1:9|http://127.0.0.1:9|file|$(echo injected)", output.Output);
     }
@@ -246,7 +246,7 @@ public class RepositoryAnalyzerTests : IDisposable
 
     [Fact]
     public void Says_when_a_tool_is_not_installed() =>
-        Assert.Equal(ToolRun.Missing, RepositoryAnalyzer.RunTool("configferret-no-such-tool", ["template"]));
+        Assert.Equal(ToolRun.Missing, RepositoryAnalyzer.RunTool("configferret-no-such-tool", ["template"], cancellationToken: TestContext.Current.CancellationToken));
 
     private static AnalysisConnections Connections(string? gitHub) => NoConnections with { GitHubRepository = gitHub };
 

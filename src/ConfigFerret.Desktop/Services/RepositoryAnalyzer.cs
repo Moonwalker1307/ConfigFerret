@@ -64,19 +64,22 @@ public sealed partial class RepositoryAnalyzer
     // gigabytes, and the web app's server would hold all of it in memory.
     private const int MaxToolOutput = 32 * 1024 * 1024;
 
-    private readonly Func<string, IReadOnlyList<string>, ToolRun> _render;
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, ToolRun> _render;
 
     /// <summary>Creates an analyzer.</summary>
     /// <param name="render">Runs a tool and returns its output, or null when the tool is not installed or fails. Defaults to running the real process.</param>
     public RepositoryAnalyzer(Func<string, IReadOnlyList<string>, string?>? render = null)
-        : this(render is null ? (tool, arguments) => RunTool(tool, arguments) : (tool, arguments) => new ToolRun(render(tool, arguments)))
+        : this(render is null ? (tool, arguments, cancellationToken) => RunTool(tool, arguments, cancellationToken: cancellationToken) : (tool, arguments, _) => new ToolRun(render(tool, arguments)))
     {
     }
 
-    private RepositoryAnalyzer(Func<string, IReadOnlyList<string>, ToolRun> render) => _render = render;
+    private RepositoryAnalyzer(Func<string, IReadOnlyList<string>, CancellationToken, ToolRun> render) => _render = render;
 
     /// <summary>Creates an analyzer whose tools can also say why they failed.</summary>
-    internal static RepositoryAnalyzer WithTools(Func<string, IReadOnlyList<string>, ToolRun> render) => new(render);
+    internal static RepositoryAnalyzer WithTools(Func<string, IReadOnlyList<string>, ToolRun> render) => new((tool, arguments, _) => render(tool, arguments));
+
+    /// <summary>Creates an analyzer whose tools can also say why they failed and see the trace's cancellation.</summary>
+    internal static RepositoryAnalyzer WithTools(Func<string, IReadOnlyList<string>, CancellationToken, ToolRun> render) => new(render);
 
     /// <summary>Fills in choices the user hasn't made, from what the scan found.</summary>
     public static void SuggestChoices(RepositoryScan scan, AnalysisChoices choices, IReadOnlyList<string> gitHubEnvironments)
@@ -160,7 +163,12 @@ public sealed partial class RepositoryAnalyzer
     /// <param name="choices">What to trace.</param>
     /// <param name="connections">The GitHub and Octopus connections.</param>
     /// <param name="notes">Notes for the user, such as a chart that could not be rendered.</param>
-    public Profile BuildProfile(RepositoryScan scan, AnalysisChoices choices, AnalysisConnections connections, List<string> notes)
+    public Profile BuildProfile(RepositoryScan scan, AnalysisChoices choices, AnalysisConnections connections, List<string> notes) =>
+        BuildProfile(scan, choices, connections, notes, CancellationToken.None);
+
+    /// <summary>Builds the profile to trace, and stops helm or kubectl when <paramref name="cancellationToken"/> is cancelled.</summary>
+    /// <exception cref="OperationCanceledException">The trace was cancelled while a tool ran.</exception>
+    internal Profile BuildProfile(RepositoryScan scan, AnalysisChoices choices, AnalysisConnections connections, List<string> notes, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(scan);
         ArgumentNullException.ThrowIfNull(choices);
@@ -188,7 +196,7 @@ public sealed partial class RepositoryAnalyzer
                 arguments.AddRange(["-f", scan.Full(choices.HelmValues)]);
             }
 
-            var helm = _render("helm", arguments);
+            var helm = _render("helm", arguments, cancellationToken);
             if (helm.Output is not null)
             {
                 rendered = ("helm-template.yaml", helm.Output);
@@ -212,8 +220,8 @@ public sealed partial class RepositoryAnalyzer
             {
                 // kustomize also when kubectl failed: kubectl bundles its own kustomize, often an older one. Not after a
                 // timeout or too much output, which kustomize would only repeat.
-                var kubectl = _render("kubectl", ["kustomize", scan.Full(kustomization)]);
-                var kustomize = kubectl.Output is null && (kubectl.Problem is null || kubectl.Failed) ? _render("kustomize", ["build", scan.Full(kustomization)]) : ToolRun.Missing;
+                var kubectl = _render("kubectl", ["kustomize", scan.Full(kustomization)], cancellationToken);
+                var kustomize = kubectl.Output is null && (kubectl.Problem is null || kubectl.Failed) ? _render("kustomize", ["build", scan.Full(kustomization)], cancellationToken) : ToolRun.Missing;
                 if ((kubectl.Output ?? kustomize.Output) is { } output)
                 {
                     rendered = ("kustomize-build.yaml", output);
@@ -445,8 +453,10 @@ public sealed partial class RepositoryAnalyzer
     /// fetched, with the user's git credentials, from any host. For the same reason it gets only the environment
     /// variables it needs to run (see <see cref="StartInfo"/>).
     /// </summary>
-    internal static ToolRun RunTool(string tool, IReadOnlyList<string> arguments, int maxOutput = MaxToolOutput)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the tool and every process it started are stopped.</exception>
+    internal static ToolRun RunTool(string tool, IReadOnlyList<string> arguments, int maxOutput = MaxToolOutput, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var start = StartInfo(tool, arguments, Environment.GetEnvironmentVariable);
         try
         {
@@ -458,23 +468,49 @@ public sealed partial class RepositoryAnalyzer
 
             var output = ReadAtMostAsync(process.StandardOutput, maxOutput);
             var error = ReadAtMostAsync(process.StandardError, 4096);
-            if (!process.WaitForExit(TimeSpan.FromSeconds(60)))
+
+            // A cancelled trace, such as one replaced by the next drop-down change, stops the tool at once instead of
+            // leaving it to run out its minute next to the new one. Nothing waits for its output after that.
+            bool exited;
+            using (cancellationToken.Register(() => Stop(process)))
             {
-                process.Kill(entireProcessTree: true);
+                exited = process.WaitForExit(TimeSpan.FromSeconds(60));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!exited)
+            {
+                Stop(process);
                 return new ToolRun(null, "it took over a minute, so it was stopped");
             }
 
             if (process.ExitCode != 0)
             {
+                error.Wait(cancellationToken);
                 return new ToolRun(null, $"it exited with code {process.ExitCode}" + Reason(error.GetAwaiter().GetResult().Text), Failed: true);
             }
 
+            output.Wait(cancellationToken);
             var (text, cut) = output.GetAwaiter().GetResult();
             return cut ? new ToolRun(null, $"it wrote more than {maxOutput / 1024 / 1024} MB") : new ToolRun(text);
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
             return ToolRun.Missing;
+        }
+    }
+
+    // Stops the tool and every process it started, such as a git clone or a plugin.
+    private static void Stop(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or AggregateException)
+        {
+            // It has exited already, or a process it started refused to be killed. This runs from the cancellation
+            // callback too, where a throw would reach whoever cancelled and stop the next trace from starting.
         }
     }
 

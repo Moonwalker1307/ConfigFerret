@@ -66,10 +66,10 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         var scan = RepositoryScanner.Scan(_root.FullName);
         var analyzer = NoTools();
 
-        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(null!, new AnalysisChoices(), NoConnections, []));
-        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(scan, null!, NoConnections, []));
-        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(scan, new AnalysisChoices(), null!, []));
-        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(scan, new AnalysisChoices(), NoConnections, null!));
+        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(null!, new AnalysisChoices(), NoConnections, [], TestContext.Current.CancellationToken));
+        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(scan, null!, NoConnections, [], TestContext.Current.CancellationToken));
+        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(scan, new AnalysisChoices(), null!, [], TestContext.Current.CancellationToken));
+        Assert.Throws<ArgumentNullException>(() => analyzer.BuildProfile(scan, new AnalysisChoices(), NoConnections, null!, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         Write("src/Api/appsettings.json", "{}");
         var scan = RepositoryScanner.Scan(_root.FullName);
 
-        var profile = NoTools().BuildProfile(scan, new AnalysisChoices { App = "src/Api", Environment = "Staging" }, NoConnections, []);
+        var profile = NoTools().BuildProfile(scan, new AnalysisChoices { App = "src/Api", Environment = "Staging" }, NoConnections, [], TestContext.Current.CancellationToken);
 
         var app = Assert.IsType<AppSettingsSource>(Assert.Single(profile.Sources));
         Assert.Equal("App settings src/Api", app.Name);
@@ -149,7 +149,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         var scan = RepositoryScanner.Scan(_root.FullName);
 
         var notes = new List<string>();
-        var profile = analyzer.BuildProfile(scan, new AnalysisChoices { HelmChart = "deploy/chart", HelmValues = "deploy/values-prod.yaml" }, NoConnections, notes);
+        var profile = analyzer.BuildProfile(scan, new AnalysisChoices { HelmChart = "deploy/chart", HelmValues = "deploy/values-prod.yaml" }, NoConnections, notes, TestContext.Current.CancellationToken);
 
         var call = Assert.Single(calls);
         Assert.Equal("helm", call.Tool);
@@ -217,7 +217,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         });
         var scan = RepositoryScanner.Scan(_root.FullName);
 
-        var profile = analyzer.BuildProfile(scan, new AnalysisChoices { Kustomization = "k8s/overlay" }, NoConnections, []);
+        var profile = analyzer.BuildProfile(scan, new AnalysisChoices { Kustomization = "k8s/overlay" }, NoConnections, [], TestContext.Current.CancellationToken);
 
         var call = Assert.Single(calls);
         Assert.Equal("kubectl", call.Tool);
@@ -242,7 +242,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         });
         var scan = RepositoryScanner.Scan(_root.FullName);
 
-        var profile = analyzer.BuildProfile(scan, new AnalysisChoices { Kustomization = "k8s/overlay" }, NoConnections, []);
+        var profile = analyzer.BuildProfile(scan, new AnalysisChoices { Kustomization = "k8s/overlay" }, NoConnections, [], TestContext.Current.CancellationToken);
 
         Assert.Equal(["kubectl", "kustomize"], calls.Select(c => c.Tool));
         Assert.Equal(["build", scan.Full("k8s/overlay")], calls[1].Arguments);
@@ -656,7 +656,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             return;
         }
 
-        Assert.Equal(new ToolRun("a b|c"), RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s|%s' \"$0\" \"$1\"", "a b", "c"]));
+        Assert.Equal(new ToolRun("a b|c"), RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s|%s' \"$0\" \"$1\"", "a b", "c"], cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -667,8 +667,8 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             return;
         }
 
-        Assert.Equal(new ToolRun(null, "it exited with code 3", Failed: true), RepositoryAnalyzer.RunTool("sh", ["-c", "echo output; exit 3"]));
-        Assert.Equal(ToolRun.Missing, RepositoryAnalyzer.RunTool("configferret-no-such-tool", []));
+        Assert.Equal(new ToolRun(null, "it exited with code 3", Failed: true), RepositoryAnalyzer.RunTool("sh", ["-c", "echo output; exit 3"], cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(ToolRun.Missing, RepositoryAnalyzer.RunTool("configferret-no-such-tool", [], cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -680,7 +680,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         }
 
         // The repository decides what the tool says: an env file line, a template's fail message or a values file path.
-        var run = RepositoryAnalyzer.RunTool("sh", ["-c", "printf 'Error: \\033[2J \"DB_PASSWORD: fake-hunter2\" is not a valid key name\\n' >&2; exit 1"]);
+        var run = RepositoryAnalyzer.RunTool("sh", ["-c", "printf 'Error: \\033[2J \"DB_PASSWORD: fake-hunter2\" is not a valid key name\\n' >&2; exit 1"], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(new ToolRun(null, "it exited with code 1", Failed: true), run);
     }
@@ -696,7 +696,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             return;
         }
 
-        var run = RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s\\n' \"$0\" >&2; exit 1", error]);
+        var run = RepositoryAnalyzer.RunTool("sh", ["-c", "printf '%s\\n' \"$0\" >&2; exit 1", error], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(new ToolRun(null, "it exited with code 1" + reason, Failed: true), run);
     }
@@ -711,8 +711,98 @@ public class RepositoryAnalyzerProfileTests : IDisposable
 
         var limit = 1024 * 1024;
 
-        Assert.Equal(new ToolRun(null, "it wrote more than 1 MB"), RepositoryAnalyzer.RunTool("sh", ["-c", "head -c 1100000 /dev/zero | tr '\\0' x"], limit));
-        Assert.Equal(limit, RepositoryAnalyzer.RunTool("sh", ["-c", $"head -c {limit} /dev/zero | tr '\\0' x"], limit).Output?.Length);
+        Assert.Equal(new ToolRun(null, "it wrote more than 1 MB"), RepositoryAnalyzer.RunTool("sh", ["-c", "head -c 1100000 /dev/zero | tr '\\0' x"], maxOutput: limit, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(limit, RepositoryAnalyzer.RunTool("sh", ["-c", $"head -c {limit} /dev/zero | tr '\\0' x"], maxOutput: limit, cancellationToken: TestContext.Current.CancellationToken).Output?.Length);
+    }
+
+    [Fact]
+    public async Task Cancelling_stops_the_tool_and_every_process_it_started()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses sh as the tool.");
+        var pidFile = Path.Join(_temp.FullName, "child.pid");
+        using var cancel = new CancellationTokenSource();
+
+        // The tool starts a child that would run for ten minutes, writes its id, and waits for it.
+        var run = Task.Run(() => RepositoryAnalyzer.RunTool("sh", ["-c", "sleep 600 & echo $! > \"$0.tmp\"; mv \"$0.tmp\" \"$0\"; wait", pidFile], cancellationToken: cancel.Token), TestContext.Current.CancellationToken);
+        var child = await WaitForAsync(() => File.Exists(pidFile) ? int.Parse(File.ReadAllText(pidFile).Trim(), System.Globalization.CultureInfo.InvariantCulture) : (int?)null);
+        Assert.True(IsRunning(child));
+
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken));
+        await WaitForAsync(() => IsRunning(child) ? null : (int?)child);
+    }
+
+    [Fact]
+    public void A_cancelled_trace_starts_no_tool()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses sh as the tool.");
+        var marker = Path.Join(_temp.FullName, "started");
+
+        Assert.ThrowsAny<OperationCanceledException>(() => RepositoryAnalyzer.RunTool("sh", ["-c", "touch \"$0\"", marker], cancellationToken: new CancellationToken(canceled: true)));
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void The_traces_cancellation_reaches_every_tool()
+    {
+        Write("chart/Chart.yaml", "name: demo\n");
+        Write("k8s/overlay/kustomization.yaml", "resources: []\n");
+        using var cancel = new CancellationTokenSource();
+        var seen = new List<CancellationToken>();
+        var analyzer = RepositoryAnalyzer.WithTools((_, _, cancellationToken) =>
+        {
+            seen.Add(cancellationToken);
+            return ToolRun.Missing;
+        });
+
+        analyzer.BuildProfile(RepositoryScanner.Scan(_root.FullName), new AnalysisChoices { HelmChart = "chart", Kustomization = "k8s/overlay" }, NoConnections, [], cancel.Token);
+
+        Assert.Equal([cancel.Token, cancel.Token, cancel.Token], seen);
+    }
+
+    // Waits for an event of another process. The minute only decides failure; the event normally comes at once.
+    private static async Task<int> WaitForAsync(Func<int?> poll)
+    {
+        var giveUp = DateTime.UtcNow + TimeSpan.FromMinutes(1);
+        while (true)
+        {
+            try
+            {
+                if (poll() is { } value)
+                {
+                    return value;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or FormatException)
+            {
+                // Not written yet.
+            }
+
+            Assert.True(DateTime.UtcNow < giveUp, "The other process did not get there within a minute.");
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+    }
+
+    // A killed process whose parent is gone can stay a zombie until something reaps it; it no longer runs.
+    private static bool IsRunning(int pid)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            if (process.HasExited)
+            {
+                return false;
+            }
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        var stat = $"/proc/{pid}/stat";
+        return !File.Exists(stat) || !File.ReadAllText(stat).Split(')')[^1].TrimStart().StartsWith('Z');
     }
 
     [Fact]
@@ -723,6 +813,6 @@ public class RepositoryAnalyzerProfileTests : IDisposable
             return;
         }
 
-        Assert.Equal(new ToolRun("out\n"), RepositoryAnalyzer.RunTool("sh", ["-c", "echo err >&2; echo out"]));
+        Assert.Equal(new ToolRun("out\n"), RepositoryAnalyzer.RunTool("sh", ["-c", "echo err >&2; echo out"], cancellationToken: TestContext.Current.CancellationToken));
     }
 }
