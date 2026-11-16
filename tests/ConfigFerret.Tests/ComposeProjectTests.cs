@@ -1302,6 +1302,54 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void Stops_when_the_files_one_load_reads_hold_more_text_than_its_bound()
+    {
+        using var folder = new TempFolder();
+        folder.Write("inc/.env", "A=" + new string('a', 40) + "\n");
+        folder.Write("inc/compose.yaml", "services:\n  db:\n    environment: { A: $A }\n");
+        var compose = folder.Write("compose.yaml", "include: [inc/compose.yaml]\n");
+
+        Assert.Equal(new string('a', 40), ComposeProject.Load([compose], null, 200).FindService("db")!.Environment["A"]);
+        var ex = Assert.Throws<FormatException>(() => ComposeProject.Load([compose], null, 100));
+
+        Assert.Equal("Stopped reading at inc/.env: the compose, env and mounted files this load read hold more than 100 characters of text.", ex.Message);
+        Assert.DoesNotContain("aaaa", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Stops_when_the_compose_files_one_load_reads_hold_more_yaml_than_its_bound()
+    {
+        using var folder = new TempFolder();
+        const string Included = "services:\n  db:\n    image: pg\n";
+        const string Extended = "services:\n  base:\n    image: x\n";
+        const string Main = "include: [inc/compose.yaml]\nservices:\n  api:\n    extends: { file: base.yaml, service: base }\n";
+        folder.Write(".env", "A=" + new string('a', 400) + "\n");
+        folder.Write("inc/compose.yaml", Included);
+        folder.Write("base.yaml", Extended);
+        var compose = folder.Write("compose.yaml", Main);
+        var yaml = Main.Length + Included.Length + Extended.Length;
+
+        // The .env holds more text than the YAML bound, and counts only against the bound of all text.
+        Assert.Equal(["api", "db"], ComposeProject.Load([compose], null, 10_000, yaml).ServiceNames);
+        var extends = Assert.Throws<FormatException>(() => ComposeProject.Load([compose], null, 10_000, yaml - 1));
+        var own = Assert.Throws<FormatException>(() => ComposeProject.Load([compose], null, 10_000, 10));
+
+        Assert.Equal($"Stopped reading at base.yaml: the compose files this load read, with their includes and extends files, hold more than {yaml - 1} characters of YAML.", extends.Message);
+        Assert.Equal($"Stopped reading at {compose}: the compose files this load read, with their includes and extends files, hold more than 10 characters of YAML.", own.Message);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task Stops_reading_a_compose_file_passed_in_at_the_bound()
+    {
+        // /dev/zero never ends, so it is read only as far as the bound allows.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Needs /dev/zero.");
+
+        var ex = await Assert.ThrowsAsync<FormatException>(() => Task.Run(() => ComposeProject.Load(["/dev/zero"], null, 100), TestContext.Current.CancellationToken));
+
+        Assert.Equal("Stopped reading at /dev/zero: the compose, env and mounted files this load read hold more than 100 characters of text.", ex.Message);
+    }
+
+    [Fact]
     public void Lists_a_warning_of_a_file_that_several_files_include_once()
     {
         using var folder = new TempFolder();
