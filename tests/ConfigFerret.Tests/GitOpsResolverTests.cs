@@ -993,6 +993,74 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal(["UNUSED"], new LoadedConfigSource("flux", resolver, resolver.Entries()).FindUnused(new ProvenanceReport([], [])).Select(e => e.Name));
     }
 
+    [Fact]
+    public void The_scan_of_the_folder_reads_at_most_the_limits_the_readme_names()
+    {
+        Assert.Equal(new FluxScanLimits(100_000, 256L * 1024 * 1024, 64), FluxScanLimits.Default);
+        Assert.Equal(FluxScanLimits.Default, new GitOpsOptions().ScanLimits);
+    }
+
+    [Fact]
+    public void Stops_at_the_limit_on_files_and_folders_and_lists_no_variable_as_unused()
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            Write($"apps/cm{i}.yaml", $"apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: c{i}}}\ndata: {{K: '${{V}}'}}\n");
+        }
+
+        var resolver = new GitOpsResolver(
+            Kustomization("    substitute: {V: x, UNUSED: y}"),
+            new GitOpsOptions { RepositoryRoot = _root, ScanLimits = FluxScanLimits.Default with { Entries = 4 } });
+
+        Assert.Equal(
+            ["Flux Kustomization apps: apps holds more than 4 files and folders, so the rest were not read and no variable is listed as unused."],
+            resolver.Warnings);
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact]
+    public void Stops_before_a_file_past_the_limit_on_bytes_and_lists_no_variable_as_unused()
+    {
+        Write("apps/a.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {K: '${V}'}\n");
+        Write("apps/big.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: big}\ndata: {K: '${V}'}\n# " + new string('x', 4096) + "\n");
+
+        var resolver = new GitOpsResolver(
+            Kustomization("    substitute: {V: x, UNUSED: y}"),
+            new GitOpsOptions { RepositoryRoot = _root, ScanLimits = FluxScanLimits.Default with { Bytes = 1024 } });
+
+        Assert.Equal(
+            ["Flux Kustomization apps: the YAML files under apps hold more than 1024 bytes, so apps/big.yaml and the files after it were not read and no variable is listed as unused."],
+            resolver.Warnings);
+        Assert.Single(resolver.Resolve(ConfigMapKey("a", "K"), new TraceDiagnostics()));
+        Assert.Empty(resolver.Resolve(ConfigMapKey("big", "K"), new TraceDiagnostics()));
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact]
+    public void Skips_folders_nested_deeper_than_the_limit_and_lists_no_variable_as_unused()
+    {
+        // 80 levels, more than the 64 the scan follows.
+        var deep = Path.Join([.. Enumerable.Repeat("d", 80)]);
+        Write(Path.Join("apps", deep, "cm.yaml"), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: deep}\ndata: {K: '${V}'}\n");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: top}\ndata: {K: '${V}'}\n");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        var warning = Assert.Single(resolver.Warnings);
+        Assert.StartsWith("Flux Kustomization apps: apps/d/d/", warning, StringComparison.Ordinal);
+        Assert.EndsWith(" is more than 64 folders below apps, so it was not read and no variable is listed as unused.", warning, StringComparison.Ordinal);
+        Assert.Single(resolver.Resolve(ConfigMapKey("top", "K"), new TraceDiagnostics()));
+        Assert.Empty(resolver.Resolve(ConfigMapKey("deep", "K"), new TraceDiagnostics()));
+        AssertNoneUnused(resolver);
+    }
+
+    private static void AssertNoneUnused(GitOpsResolver resolver)
+    {
+        var loaded = new LoadedConfigSource("flux", resolver, resolver.Entries());
+        Assert.Empty(loaded.FindUnused(new ProvenanceReport([], [])));
+        Assert.Equal(["UNUSED", "V"], loaded.Entries.Select(e => e.Name));
+    }
+
     private static bool CanRead(string path)
     {
         try

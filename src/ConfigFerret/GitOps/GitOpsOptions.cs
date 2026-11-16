@@ -26,4 +26,17 @@ public sealed class GitOpsOptions
     /// <c>kubectl get configmap -o yaml</c>. Those in the same manifest as the object are always used.
     /// </summary>
     public KubernetesManifests? Data { get; set; }
+
+    /// <summary>How much the scan of a Flux Kustomization path reads.</summary>
+    internal FluxScanLimits ScanLimits { get; set; } = FluxScanLimits.Default;
+}
+
+/// <summary>How much the scan of a Flux Kustomization path for <c>${VAR}</c> placeholders reads.</summary>
+/// <param name="Entries">The files and folders it looks at.</param>
+/// <param name="Bytes">The size of the YAML files it reads, all together.</param>
+/// <param name="Depth">How many folders below the path it goes.</param>
+internal sealed record FluxScanLimits(int Entries, long Bytes, int Depth)
+{
+    // Far above what the folder of one Kustomization holds in a large repository.
+    public static readonly FluxScanLimits Default = new(100_000, 256L * 1024 * 1024, 64);
 }

@@ -641,6 +641,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   in an Ingress host, since Flux substitutes it there too; a `${VAR}` in a comment or in a file the build leaves out
   counts as well. The variable stays in `Entries`. A file or folder under `spec.path` that cannot be read is a
   warning, and then `FindUnused` lists no variable of that Kustomization, since the part not read may name any of them.
+  The scan of `spec.path` looks at most at 100,000 files and folders, reads at most 256 MiB of YAML and goes at most 64
+  folders deep; at a limit it warns once, and again lists no variable as unused.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest
