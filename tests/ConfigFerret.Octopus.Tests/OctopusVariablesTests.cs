@@ -271,6 +271,7 @@ public class OctopusVariablesTests
 
         var scope = Assert.Single(octopus.Entries).Scope;
         Assert.Equal(["Env", "Machine", "Role", "Action", "Channel", "t", "Process"], scope.Values.Select(v => Assert.Single(v)));
+        Assert.Equal(ProcessScope.TypeNotGiven, octopus.Entries[0].Process);
     }
 
     [Theory]
@@ -302,6 +303,46 @@ public class OctopusVariablesTests
 
         Assert.Equal(expected, string.Join(",", chain.Select(s => s.Value)));
         Assert.Equal(["Region/West"], octopus.Entries[1].Scope["TenantTag"]);
+    }
+
+    [Theory]
+    [InlineData("Rebuild index")]
+    [InlineData("Api")]
+    [InlineData("Ops/Api")]
+    public async Task Leaves_out_values_scoped_only_to_a_runbook_and_ranks_the_deployment_process_above_no_scope(string runbook)
+    {
+        // Octopus lists the deployment process, named after the project, with the runbooks; a trace is of a deployment.
+        // Only the ids tell them apart, since a runbook can have any name.
+        var octopus = await LoadSet($$$"""
+            {
+              "ScopeValues": {
+                "Processes": [{"ProcessType":"Deployment","Id":"Projects-1","Name":"Api"},{"ProcessType":"Runbook","Id":"Runbooks-1","Name":"{{{runbook}}}"}]
+              },
+              "Variables": [
+                {"Name":"Db:Timeout","Value":"30","Scope":{}},
+                {"Name":"Db:Timeout","Value":"5","Scope":{"ProcessOwner":["Runbooks-1"]}},
+                {"Name":"Db:Pool","Value":"20","Scope":{"ProcessOwner":["Runbooks-1","Projects-1"]}},
+                {"Name":"Db:Pool","Value":"10","Scope":{}},
+                {"Name":"Db:Pool","Value":"40","Scope":{"Channel":["Beta"]}}
+              ]
+            }
+            """);
+        var resolver = new OctopusResolver(octopus, new OctopusTraceOptions { Environment = "Production" });
+        var diagnostics = new TraceDiagnostics();
+
+        Assert.Equal(
+            [ProcessScope.TypeNotGiven, ProcessScope.RunbooksOnly, ProcessScope.Deployment, ProcessScope.TypeNotGiven, ProcessScope.TypeNotGiven],
+            octopus.Entries.Select(e => e.Process));
+        var timeout = resolver.Resolve(Layer("Db:Timeout", "30"), diagnostics);
+        var pool = resolver.Resolve(Layer("Db:Pool", null), diagnostics);
+
+        Assert.Equal(["30"], timeout.Select(s => s.Value));
+        Assert.Equal(["10", "20", "40"], pool.Select(s => s.Value));
+        Assert.Equal($"matched by name; scoped to process {runbook}, Api", pool[1].Note);
+        Assert.Empty(diagnostics.Warnings);
+
+        static ProvenanceStep Layer(string name, string? value) =>
+            new() { Kind = LayerKind.DotNetProvider, Source = $"environment variable {name}", Value = value, Reference = new EnvironmentVariableRef(name) };
     }
 
     [Fact]

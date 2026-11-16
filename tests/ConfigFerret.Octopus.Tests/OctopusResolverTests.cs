@@ -243,6 +243,83 @@ public class OctopusResolverTests
         Assert.DoesNotContain("sensitive", overridden.Note + behindCertain.Note + ruledOut.Note, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Redacts_the_value_when_a_sensitive_value_scoped_only_to_a_runbook_is_left_out()
+    {
+        // The trace is taken to be of a deployment, which cannot be told otherwise, so the runbook value may still apply.
+        var variables = new OctopusVariables(
+        [
+            Var("Queue:Endpoint", "amqp://relay"),
+            Var("Queue:Endpoint", null, sensitive: true, scope: ("ProcessOwner", "Rebuild index")) with { Process = ProcessScope.RunbooksOnly },
+        ]);
+
+        var report = TraceQueueEndpoint(variables, o => o.Environment = "Production");
+
+        AssertSecretHidden(report);
+        var octopus = Assert.Single(report.Find("Queue:Endpoint")!.Steps[0].Origins);
+        Assert.True(octopus.IsSensitive);
+        Assert.EndsWith("; another value that may apply instead is sensitive", octopus.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Links_a_layer_to_a_sensitive_value_scoped_only_to_a_runbook_when_nothing_else_applies()
+    {
+        var variables = new OctopusVariables(
+        [
+            Var("Queue:Endpoint", null, sensitive: true, scope: ("ProcessOwner", "Rebuild index")) with { Process = ProcessScope.RunbooksOnly },
+            Var("Queue:Endpoint", "amqp://other", scope: ("ProcessOwner", "Purge")) with { Process = ProcessScope.RunbooksOnly },
+        ]);
+        var diagnostics = new TraceDiagnostics();
+
+        var chain = new OctopusResolver(variables, new OctopusTraceOptions()).Resolve(FileStep("Queue:Endpoint", "amqps://app:hunter2@mq.prod"), diagnostics);
+
+        var step = Assert.Single(chain);
+        Assert.True(step.IsSensitive);
+        Assert.True(step.IsInferred);
+        Assert.Contains("applies only if the deployment matches runbook Rebuild index, which was not given", step.Note, StringComparison.Ordinal);
+        Assert.Empty(diagnostics.Warnings);
+        AssertSecretHidden(TraceQueueEndpoint(variables));
+    }
+
+    [Theory]
+    [InlineData("Environment", "Production")]
+    [InlineData("Action", "Deploy")]
+    public void Redacts_the_value_when_a_sensitive_runbook_value_is_left_out_behind_a_deployment_only_value(string dimension, string value)
+    {
+        // The plain value is certain in a deployment but does not apply when the runbook runs, so the runbook's secret may
+        // be what the file holds.
+        var variables = new OctopusVariables(
+        [
+            Var("Queue:Endpoint", "amqp://relay", scope: [(dimension, value), ("ProcessOwner", "Api")]) with { Process = ProcessScope.Deployment },
+            Var("Queue:Endpoint", null, sensitive: true, scope: ("ProcessOwner", "Rebuild index")) with { Process = ProcessScope.RunbooksOnly },
+        ]);
+
+        AssertSecretHidden(TraceQueueEndpoint(variables, o =>
+        {
+            o.Environment = "Production";
+            o.Step = "Deploy";
+        }));
+    }
+
+    [Fact]
+    public void Leaves_out_a_runbook_value_without_doubt_when_it_is_plain_or_ruled_out_on_another_scope()
+    {
+        var variables = new OctopusVariables(
+        [
+            Var("A", "plain"),
+            Var("A", "runbook", scope: ("ProcessOwner", "Rebuild index")) with { Process = ProcessScope.RunbooksOnly },
+            Var("A", null, sensitive: true, scope: [("ProcessOwner", "Rebuild index"), ("Environment", "Staging")]) with { Process = ProcessScope.RunbooksOnly },
+            Var("A", null, sensitive: true, scope: [("ProcessOwner", "Rebuild index"), ("Machine", "worker-01")]) with { Process = ProcessScope.RunbooksOnly },
+        ]);
+        var resolver = new OctopusResolver(variables, new OctopusTraceOptions { Environment = "Production", Machine = "web-01" });
+
+        var plain = Assert.Single(resolver.Resolve(EnvStep("A", null), new TraceDiagnostics()));
+
+        Assert.Equal("plain", plain.Value);
+        Assert.False(plain.IsSensitive);
+        Assert.Equal("matched by name", plain.Note);
+    }
+
     private static ProvenanceReport TraceQueueEndpoint(OctopusVariables variables, Action<OctopusTraceOptions>? configure = null)
     {
         var dir = Directory.CreateTempSubdirectory("configferret-octopus-");
@@ -330,6 +407,7 @@ public class OctopusResolverTests
             Var("A", "environment", scope: ("Environment", "Production")),
             Var("A", "tenant", scope: ("TenantTag", "Region/West")),
             Var("A", "role", scope: ("Role", "web")),
+            Var("A", "process", scope: ("ProcessOwner", "Api")),
             Var("A", "unscoped"),
         ]);
         var options = new OctopusTraceOptions { Environment = "Production", Machine = "web-01", Channel = "Default", Step = "Deploy" };
@@ -339,7 +417,7 @@ public class OctopusResolverTests
 
         var chain = new OctopusResolver(variables, options).Resolve(EnvStep("A", null), diagnostics);
 
-        Assert.Equal(["unscoped", "channel", "environment", "tenant", "role", "machine", "action"], chain.Select(s => s.Value));
+        Assert.Equal(["unscoped", "process", "channel", "environment", "tenant", "role", "machine", "action"], chain.Select(s => s.Value));
         Assert.Empty(diagnostics.Warnings);
         Assert.Equal("matched by name; scoped to step Deploy", chain[^1].Note);
         Assert.Equal("matched by name; scoped to target web-01", chain[^2].Note);
@@ -347,6 +425,7 @@ public class OctopusResolverTests
         Assert.Equal("matched by name; scoped to tenant tag Region/West", chain[^4].Note);
         Assert.Equal("matched by name; scoped to environment Production", chain[^5].Note);
         Assert.Equal("matched by name; scoped to channel Default", chain[^6].Note);
+        Assert.StartsWith("matched by name; scoped to process Api", chain[^7].Note, StringComparison.Ordinal);
         Assert.Equal("matched by name", chain[0].Note);
     }
 

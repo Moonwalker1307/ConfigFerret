@@ -149,7 +149,8 @@ public sealed partial class OctopusVariables
             return;
         }
 
-        var names = ReadScopeNames(root);
+        var processTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var names = ReadScopeNames(root, processTypes);
         if (!root.TryGetProperty("Variables", out var variables) || variables.ValueKind != JsonValueKind.Array)
         {
             return;
@@ -169,11 +170,11 @@ public sealed partial class OctopusVariables
 
             // Octopus returns null for sensitive values; drop one anyway if a server ever sends it.
             var value = sensitive ? null : GetString(v, "Value");
-            into.Add(new OctopusVariable(name, value, sensitive, type, setName, isProject, ReadScope(v, names)));
+            into.Add(new OctopusVariable(name, value, sensitive, type, setName, isProject, ReadScope(v, names)) { Process = ReadProcessScope(v, processTypes) });
         }
     }
 
-    private static Dictionary<string, Dictionary<string, string>> ReadScopeNames(JsonElement root)
+    private static Dictionary<string, Dictionary<string, string>> ReadScopeNames(JsonElement root, Dictionary<string, string> processTypes)
     {
         var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
         if (!root.TryGetProperty("ScopeValues", out var scopeValues) || scopeValues.ValueKind != JsonValueKind.Object)
@@ -192,6 +193,12 @@ public sealed partial class OctopusVariables
             foreach (var (id, item) in list.Value.EnumerateArray().Select(i => (Id: GetString(i, "Id"), Item: i)).Where(x => x.Id is not null))
             {
                 map[id!] = GetString(item, "Name") ?? id!;
+
+                // Processes lists the deployment process and each runbook, told apart by ProcessType.
+                if (dimension == "ProcessOwner" && GetString(item, "ProcessType") is { } processType)
+                {
+                    processTypes[id!] = processType;
+                }
             }
 
             result[dimension] = map;
@@ -230,6 +237,25 @@ public sealed partial class OctopusVariables
         }
 
         return scope;
+    }
+
+    // Decided by id, because a runbook can have any name, the project's included.
+    private static ProcessScope ReadProcessScope(JsonElement variable, Dictionary<string, string> processTypes)
+    {
+        if (!variable.TryGetProperty("Scope", out var s) || s.ValueKind != JsonValueKind.Object
+            || !s.TryGetProperty("ProcessOwner", out var owners) || owners.ValueKind != JsonValueKind.Array)
+        {
+            return ProcessScope.TypeNotGiven;
+        }
+
+        var types = owners.EnumerateArray()
+            .Select(AsString)
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Select(id => processTypes.GetValueOrDefault(id!))
+            .ToList();
+        return types.Any(t => string.Equals(t, "Deployment", StringComparison.OrdinalIgnoreCase)) ? ProcessScope.Deployment
+            : types.Count > 0 && types.All(t => string.Equals(t, "Runbook", StringComparison.OrdinalIgnoreCase)) ? ProcessScope.RunbooksOnly
+            : ProcessScope.TypeNotGiven;
     }
 
     private static JsonElement? FindByIdSlugOrName(JsonElement list, string wanted)

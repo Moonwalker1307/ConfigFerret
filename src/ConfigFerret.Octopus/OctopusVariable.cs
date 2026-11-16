@@ -19,7 +19,24 @@ public sealed record OctopusVariable(
     string Type,
     string SetName,
     bool IsProjectVariable,
-    IReadOnlyDictionary<string, IReadOnlyList<string>> Scope);
+    IReadOnlyDictionary<string, IReadOnlyList<string>> Scope)
+{
+    /// <summary>What the <c>ProcessOwner</c> scope names, as the loader tells it from the process ids.</summary>
+    internal ProcessScope Process { get; init; }
+}
+
+/// <summary>What the process scope of a variable names.</summary>
+internal enum ProcessScope
+{
+    /// <summary>Processes whose type is not known, as in a snapshot built from entries, or no process.</summary>
+    TypeNotGiven,
+
+    /// <summary>The deployment process, maybe with runbooks.</summary>
+    Deployment,
+
+    /// <summary>Only runbooks.</summary>
+    RunbooksOnly,
+}
 
 /// <summary>A pointer to an Octopus Deploy variable.</summary>
 /// <param name="SetName">The project or library variable set that holds the variable.</param>
