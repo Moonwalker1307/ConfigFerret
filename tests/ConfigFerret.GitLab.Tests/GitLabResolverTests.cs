@@ -1056,6 +1056,28 @@ public class GitLabResolverTests
     }
 
     [Fact]
+    public void Gives_each_warning_to_every_trace_step_it_applies_to()
+    {
+        // The tracer may ask with diagnostics it then drops, so a warning given once could be lost.
+        var variables = new GitLabVariables([new("REVIEW_ONLY", "r", GitLabVariableLevel.Project, "contoso/api", "review/*")], ["skipped group"]);
+        var resolver = Resolver(o => o.AddCiFileText("job-a:\n  variables:\n    MODE: x\njob-b:\n  variables:\n    MODE: y\n", ".gitlab-ci.yml"), variables);
+        var first = new TraceDiagnostics();
+        var second = new TraceDiagnostics();
+
+        foreach (var diagnostics in new[] { first, second })
+        {
+            resolver.Resolve(EnvStep("REVIEW_ONLY", "r"), diagnostics);
+            resolver.Resolve(EnvStep("MODE", "x"), diagnostics);
+        }
+
+        Assert.Equal(3, first.Warnings.Count);
+        Assert.Equal(first.Warnings, second.Warnings);
+        Assert.Contains("GitLab variable REVIEW_ONLY is set only for environment scopes review/*, and none applies to a job with no environment.", second.Warnings);
+        Assert.Contains("skipped group", second.Warnings);
+        Assert.Contains(second.Warnings, w => w.StartsWith("GitLab CI jobs job-a, job-b set MODE differently", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Passes_load_warnings_to_the_trace_once_and_checks_arguments()
     {
         var resolver = new GitLabResolver(new GitLabVariables([], ["skipped group"]), new GitLabTraceOptions());

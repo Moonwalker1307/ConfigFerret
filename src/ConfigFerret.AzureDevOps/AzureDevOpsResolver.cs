@@ -20,12 +20,12 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
     private const int MaxSteps = 1_000;
 
     private readonly List<string> _pipelineWarnings = options.ReadConfiguredPipelines();
-    private readonly HashSet<string> _partWarnings = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _secretVariables = groups.Variables.Where(IsSensitive).Select(v => v.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
     private readonly ILookup<string, (AzureDevOpsVariable Variable, int Index)> _groupsByName = groups.Variables.Select((v, i) => (v, i)).ToLookup(g => g.v.Name, StringComparer.OrdinalIgnoreCase);
     private readonly ILookup<string, (AzureDevOpsVariable Variable, int Index)> _groupsByEnvironmentName =
         groups.Variables.Select((v, i) => (v, i)).ToLookup(g => AzureDevOpsVariableGroups.ToEnvironmentName(g.v.Name), StringComparer.OrdinalIgnoreCase);
     private readonly ConditionalWeakTable<ProvenanceStep, string> _seen = new();
+    private readonly ConditionalWeakTable<TraceDiagnostics, TraceDiagnostics> _loadWarned = new();
     private ILookup<string, AzurePipelinesVariable> _byScope = Array.Empty<AzurePipelinesVariable>().ToLookup(v => v.Name);
     private ILookup<string, AzurePipelinesVariable> _byScopeNotSelf = Array.Empty<AzurePipelinesVariable>().ToLookup(v => v.Name);
     private ILookup<string, AzurePipelinesVariable> _byEnvironmentScope = Array.Empty<AzurePipelinesVariable>().ToLookup(v => v.Name);
@@ -37,7 +37,6 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
     private int _indexed = -1;
     private int _room;
     private bool _cut;
-    private bool _warned;
 
     /// <summary>How many pipeline entries the resolver looked at, so a test can check that the work grows with the file.</summary>
     internal long Examined { get; private set; }
@@ -56,9 +55,9 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
     {
         ArgumentNullException.ThrowIfNull(layer);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        if (!_warned)
+        // Once for each diagnostics, not once in all, since the tracer may ask with diagnostics it then drops.
+        if (_loadWarned.TryAdd(diagnostics, diagnostics))
         {
-            _warned = true;
             foreach (var warning in groups.Warnings.Concat(_pipelineWarnings))
             {
                 diagnostics.Warn(warning);
@@ -69,7 +68,7 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         _room = MaxSteps;
         _cut = false;
         var found = Find(layer, diagnostics);
-        if (_cut && (layer.Reference is AzurePipelinesVariableRef cut ? cut.Name : LayerNames.Of(layer)) is { } subject && _partWarnings.Add("\0" + subject))
+        if (_cut && (layer.Reference is AzurePipelinesVariableRef cut ? cut.Name : LayerNames.Of(layer)) is { } subject)
         {
             diagnostics.Warn(string.Create(CultureInfo.InvariantCulture, $"{subject} is linked or set in more Azure Pipelines stages, jobs and variables than the trace follows for one step ({MaxSteps:N0}), so not all of them were followed; the steps listed are marked inferred and sensitive."));
         }
@@ -373,13 +372,8 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         return marked;
     }
 
-    private void WarnParts(string what, IEnumerable<PipelineScope> parts, TraceDiagnostics diagnostics)
+    private static void WarnParts(string what, IEnumerable<PipelineScope> parts, TraceDiagnostics diagnostics)
     {
-        if (!_partWarnings.Add(what))
-        {
-            return;
-        }
-
         var names = parts.Distinct().Select(p => p.ToString()).ToList();
         var list = string.Join(", ", names.Take(5)) + (names.Count > 5 ? $" and {names.Count - 5} more" : string.Empty);
         diagnostics.Warn($"Azure Pipelines {list} {what}, and the trace cannot tell which one ran this, so their steps are marked inferred.");
