@@ -35,11 +35,20 @@ public sealed partial class CodeReadScanner
     private const int MaxFiles = 5000;
     private const long MaxFileBytes = 1024 * 1024;
 
+    // The patterns are linear, so this only stops a file that a pattern somehow still can't finish: the file is skipped.
+    private const int MatchTimeoutMilliseconds = 10_000;
+
+    // How many base classes a class takes properties from, so a long chain of them can't make the scan quadratic.
+    private const int MaxBaseClasses = 16;
+
     private readonly HashSet<string> _keys = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _sections = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _bound = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OptionsShape> _shapes = new(StringComparer.Ordinal);
     private readonly List<(string File, int Line)> _dynamic = [];
+    private readonly List<string> _skipped = [];
+    private CancellationToken _cancellationToken;
+    private int _steps;
 
     private CodeReadScanner()
     {
@@ -47,6 +56,9 @@ public sealed partial class CodeReadScanner
 
     /// <summary>How many C# files were read.</summary>
     public int FilesScanned { get; private set; }
+
+    /// <summary>C# files the scan gave up on because reading them took too long, so a key only they read counts as not read.</summary>
+    public IReadOnlyList<string> SkippedFiles => _skipped;
 
     /// <summary>Where code reads a key the scanner cannot work out, such as <c>config[name]</c>, as file and line.</summary>
     public IReadOnlyList<string> DynamicReads => _dynamic.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.Line).Select(d => $"{d.File} (line {d.Line})").Distinct().ToList();
@@ -64,13 +76,15 @@ public sealed partial class CodeReadScanner
     /// Reads the C# files in <paramref name="folder"/> and in the projects its project files reference, skipping
     /// <c>bin</c>, <c>obj</c> and test projects.
     /// </summary>
-    public static CodeReadScanner Scan(string folder)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static CodeReadScanner Scan(string folder, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         var scanner = new CodeReadScanner();
         var sources = new List<(string Path, string Text)>();
         foreach (var file in SourceFiles(folder))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 if (new FileInfo(file).Length <= MaxFileBytes)
@@ -86,16 +100,21 @@ public sealed partial class CodeReadScanner
             }
         }
 
-        scanner.Read(sources.Select(s => (Path.GetRelativePath(folder, s.Path), s.Text)));
+        scanner.Read(sources.Select(s => (Path.GetRelativePath(folder, s.Path), s.Text)), null, cancellationToken);
         return scanner;
     }
 
     /// <summary>Reads C# sources given as text, for tests and callers that already have the files.</summary>
-    public static CodeReadScanner FromSources(IEnumerable<(string Name, string Text)> sources)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static CodeReadScanner FromSources(IEnumerable<(string Name, string Text)> sources, CancellationToken cancellationToken = default) =>
+        FromSources(sources, null, cancellationToken);
+
+    // For tests: atStep runs with the file name and "types", "properties" or "calls" where a pattern could time out.
+    internal static CodeReadScanner FromSources(IEnumerable<(string Name, string Text)> sources, Action<string, string>? atStep, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(sources);
         var scanner = new CodeReadScanner();
-        scanner.Read(sources);
+        scanner.Read(sources, atStep, cancellationToken);
         return scanner;
     }
 
@@ -144,9 +163,9 @@ public sealed partial class CodeReadScanner
                 return null; // A class we can't see, or a collection: the binder may take anything under it.
             }
 
-            if (!shape.Properties.TryGetValue(segment, out var propertyType))
+            if (!TryGetProperty(shape, segment, out var propertyType, out var open))
             {
-                return (current, segment);
+                return open ? null : (current, segment);
             }
 
             if (propertyType is null)
@@ -160,37 +179,161 @@ public sealed partial class CodeReadScanner
         return null;
     }
 
-    private void Read(IEnumerable<(string Name, string Text)> sources)
+    // Looks a property up in the class and then in its bases, at most MaxBaseClasses up, so no class copies the
+    // properties of its bases. Open is true when the class or a base it reached may have properties the scan can't see.
+    private bool TryGetProperty(OptionsShape shape, string name, out string? type, out bool open)
     {
-        var files = sources.Select(s => (s.Name, Text: StripComments(s.Text))).ToList();
-        FilesScanned = files.Count;
-        var constants = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (_, text) in files)
+        open = false;
+        var seen = new HashSet<OptionsShape> { shape };
+        var current = shape;
+        while (true)
         {
-            foreach (Match m in StringConstant().Matches(text))
+            if (current.Properties.TryGetValue(name, out type))
             {
-                constants.TryAdd(m.Groups["name"].Value, m.Groups["value"].Value);
+                return true;
             }
 
-            ReadShapes(text);
+            open |= current.Open;
+            if (current.Base is null || !_shapes.TryGetValue(current.Base, out var parent))
+            {
+                break;
+            }
+
+            // A cycle doesn't compile, and adds nothing more to find.
+            if (!seen.Add(parent))
+            {
+                break;
+            }
+
+            // A base past the last one followed may hold any property.
+            if (seen.Count > MaxBaseClasses + 1)
+            {
+                open = true;
+                break;
+            }
+
+            current = parent;
         }
 
-        foreach (var (name, text) in files)
+        type = null;
+        return false;
+    }
+
+    private void Read(IEnumerable<(string Name, string Text)> sources, Action<string, string>? atStep, CancellationToken cancellationToken)
+    {
+        _cancellationToken = cancellationToken;
+        var files = new List<(string Name, string Text)>();
+        foreach (var (name, text) in sources)
         {
-            ReadCalls(name, text, constants);
+            cancellationToken.ThrowIfCancellationRequested();
+            files.Add((name, StripComments(text)));
         }
 
-        ResolveInheritance();
+        // A file a pattern times out on is skipped from then on. What it gave before the timeout stays.
+        var skipped = new bool[files.Count];
+        // The classes of a file skipped in the first pass may have lost properties, so they are left open.
+        var constants = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 0; i < files.Count; i++)
+        {
+            var (name, text) = files[i];
+            var declared = new List<OptionsShape>();
+            skipped[i] = !TryRead(name, "types", () =>
+            {
+                foreach (Match m in StringConstant().Matches(text))
+                {
+                    Step();
+                    constants.TryAdd(m.Groups["name"].Value, m.Groups["value"].Value);
+                }
+
+                ReadShapes(text, declared, () => atStep?.Invoke(name, "properties"));
+            });
+
+            if (skipped[i])
+            {
+                declared.ForEach(shape => shape.Open = true);
+            }
+        }
+
+        for (var i = 0; i < files.Count; i++)
+        {
+            var (name, text) = files[i];
+            skipped[i] = skipped[i] || !TryRead(name, "calls", () => ReadCalls(name, text, constants));
+        }
+
+        FilesScanned = skipped.Count(s => !s);
+        _skipped.AddRange(files.Where((_, i) => skipped[i]).Select(f => f.Name));
+
+        bool TryRead(string name, string step, Action read)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                atStep?.Invoke(name, step);
+                read();
+                return true;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return false;
+            }
+        }
+    }
+
+    // Called for each match in a file, so a cancelled scan stops inside a long file too.
+    private void Step()
+    {
+        if (++_steps % 1024 == 0)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 
     private void ReadCalls(string file, string text, Dictionary<string, string> constants)
     {
         var consumed = new List<(int Start, int End)>();
+        var newlines = new List<int>();
+        for (var i = text.IndexOf('\n', StringComparison.Ordinal); i >= 0; i = text.IndexOf('\n', i + 1))
+        {
+            newlines.Add(i);
+        }
 
-        bool Consumed(int index) => consumed.Any(c => index >= c.Start && index < c.End);
+        // The chains are added in text order and never overlap, so the one that may hold a position is found by halving.
+        bool Consumed(int index)
+        {
+            var low = 0;
+            var high = consumed.Count - 1;
+            while (low <= high)
+            {
+                var middle = low + ((high - low) / 2);
+                if (consumed[middle].End <= index)
+                {
+                    low = middle + 1;
+                }
+                else if (consumed[middle].Start > index)
+                {
+                    high = middle - 1;
+                }
+                else
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        var covered = new HashSet<int>();
+
+        void Dynamic(int index)
+        {
+            var before = newlines.BinarySearch(index);
+            _dynamic.Add((file, (before >= 0 ? before : ~before) + 1));
+        }
 
         foreach (Match m in SectionCall().Matches(text))
         {
+            Step();
+
             // A GetSection that continues an earlier chain, such as the second one in GetRequiredSection("A").GetSection("B").
             if (Consumed(m.Index))
             {
@@ -201,7 +344,7 @@ public sealed partial class CodeReadScanner
             var end = m.Index + m.Length;
             if (path is null)
             {
-                Dynamic(file, text, m.Index);
+                Dynamic(m.Index);
             }
 
             // Follow the chain: .GetSection("B"), ["C"], .GetValue<T>("D"), .Get<T>(), .Bind(x). A chain that starts
@@ -223,7 +366,7 @@ public sealed partial class CodeReadScanner
                     {
                         if (path is not null)
                         {
-                            Dynamic(file, text, next.Index);
+                            Dynamic(next.Index);
                         }
 
                         path = null;
@@ -274,6 +417,8 @@ public sealed partial class CodeReadScanner
 
         foreach (Match m in ValueCall().Matches(text))
         {
+            Step();
+            covered.Add(m.Index);
             if (Consumed(m.Index))
             {
                 continue;
@@ -282,7 +427,7 @@ public sealed partial class CodeReadScanner
             var key = Resolve(m.Groups["arg"].Value, constants);
             if (key is null)
             {
-                Dynamic(file, text, m.Index);
+                Dynamic(m.Index);
                 continue;
             }
 
@@ -310,6 +455,8 @@ public sealed partial class CodeReadScanner
 
         foreach (Match m in ConfigIndexer().Matches(text))
         {
+            Step();
+            covered.Add(m.Index);
             if (Consumed(m.Index))
             {
                 continue;
@@ -318,7 +465,7 @@ public sealed partial class CodeReadScanner
             var key = Resolve(m.Groups["arg"].Value, constants);
             if (key is null)
             {
-                Dynamic(file, text, m.Index);
+                Dynamic(m.Index);
             }
             else
             {
@@ -329,6 +476,7 @@ public sealed partial class CodeReadScanner
         // Libraries that take the configuration and a section name, such as AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd").
         foreach (Match m in SectionNameArgument().Matches(text))
         {
+            Step();
             if (!Consumed(m.Index) && Resolve(m.Groups["arg"].Value, constants) is { } section)
             {
                 _sections.Add(section);
@@ -339,6 +487,17 @@ public sealed partial class CodeReadScanner
         if (text.Contains("ReadFrom.Configuration", StringComparison.Ordinal))
         {
             _sections.Add("Serilog");
+        }
+
+        // A read the patterns above could not take apart, such as GetSection(string.Join(":", parts.Take(2))) or
+        // GetValue<List<string>>("A"), is listed, so no key counts as dead because of code the scan could not read.
+        foreach (Match m in ReadStart().Matches(text))
+        {
+            Step();
+            if (!covered.Contains(m.Index) && !Consumed(m.Index))
+            {
+                Dynamic(m.Index);
+            }
         }
     }
 
@@ -358,20 +517,6 @@ public sealed partial class CodeReadScanner
         }
 
         _bound[path] = type;
-    }
-
-    private void Dynamic(string file, string text, int index)
-    {
-        var line = 1;
-        for (var i = 0; i < index && i < text.Length; i++)
-        {
-            if (text[i] == '\n')
-            {
-                line++;
-            }
-        }
-
-        _dynamic.Add((file, line));
     }
 
     // Configure<T>(...GetSection, AddOptions<T>().Bind(...GetSection, AddOptions<T>().BindConfiguration(...
@@ -411,12 +556,19 @@ public sealed partial class CodeReadScanner
         return null;
     }
 
-    private void ReadShapes(string text)
+    // Reads the types in text into _shapes, and adds each to declared as soon as it is known.
+    private void ReadShapes(string text, List<OptionsShape> declared, Action beforeProperties)
     {
+        var bodies = new List<(OptionsShape Shape, int Open, int Close)>();
+        Dictionary<int, int>? closes = null;
+        var parsed = new List<(int Start, int End)>();
         foreach (Match m in TypeDeclaration().Matches(text))
         {
+            Step();
             var name = m.Groups["name"].Value;
+            parsed.Add((m.Index, m.Index + m.Length));
             var shape = new OptionsShape(m.Groups["base"].Success ? Simple(m.Groups["base"].Value.Split(',')[0]) : null);
+            declared.Add(shape);
 
             if (m.Groups["parameters"].Success)
             {
@@ -430,35 +582,118 @@ public sealed partial class CodeReadScanner
                 }
             }
 
+            // A brace inside a string, such as "class A {", is no body.
             var open = m.Index + m.Length - 1;
-            if (text[open] == '{')
+            closes ??= text[open] == '{' ? MatchBraces(text) : null;
+            if (closes is not null && closes.TryGetValue(open, out var close))
             {
-                var body = Body(text, open);
-                foreach (Match p in Property().Matches(body))
-                {
-                    var key = p.Groups["key"].Success ? p.Groups["key"].Value : p.Groups["name"].Value;
-                    shape.Properties[key] = PropertyType(p.Groups["type"].Value);
-                }
+                bodies.Add((shape, open, close));
             }
 
             _shapes.TryAdd(name, shape);
         }
-    }
 
-    private void ResolveInheritance()
-    {
-        foreach (var shape in _shapes.Values)
+        // A type the pattern above could not take apart, such as one with a where clause over 1000 characters, may have
+        // properties the scan can't see, so it is left open.
+        var next = 0;
+        foreach (Match m in TypeStart().Matches(text))
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var baseName = shape.Base;
-            while (baseName is not null && seen.Add(baseName) && _shapes.TryGetValue(baseName, out var parent))
+            Step();
+            while (next < parsed.Count && parsed[next].End <= m.Index)
             {
-                foreach (var (key, type) in parent.Properties)
+                next++;
+            }
+
+            if (!m.Groups["interface"].Success && (next == parsed.Count || parsed[next].Start > m.Index))
+            {
+                var name = m.Groups["name"].Value;
+                if (!_shapes.TryGetValue(name, out var shape))
                 {
-                    shape.Properties.TryAdd(key, type);
+                    shape = new OptionsShape(null);
+                    _shapes.Add(name, shape);
                 }
 
-                baseName = parent.Base;
+                shape.Open = true;
+                declared.Add(shape);
+            }
+        }
+
+        if (bodies.Count == 0)
+        {
+            return;
+        }
+
+        beforeProperties();
+
+        // A property belongs to the innermost type around it. Matches come in text order, so the text is matched once,
+        // however deep types nest.
+        var around = new Stack<(OptionsShape Shape, int Close)>();
+        var body = 0;
+        OptionsShape? Around(int index)
+        {
+            for (; body < bodies.Count && bodies[body].Open < index; body++)
+            {
+                around.Push((bodies[body].Shape, bodies[body].Close));
+            }
+
+            while (around.Count > 0 && around.Peek().Close <= index)
+            {
+                around.Pop();
+            }
+
+            return around.Count > 0 ? around.Peek().Shape : null;
+        }
+
+        var matched = new List<(int Start, int End)>();
+        foreach (Match p in Property().Matches(text))
+        {
+            Step();
+            matched.Add((p.Index, p.Index + p.Length));
+            if (Around(p.Index) is { } shape)
+            {
+                var key = p.Groups["key"].Success ? p.Groups["key"].Value : p.Groups["name"].Value;
+                shape.Properties[key] = PropertyType(p.Groups["type"].Value);
+            }
+        }
+
+        // A property the pattern above can't take apart, such as one of a tuple type, a global:: type or a type of more
+        // than 11 words, may take any key, so its class is left open.
+        around.Clear();
+        body = 0;
+        next = 0;
+        foreach (Match p in PropertyStart().Matches(text))
+        {
+            Step();
+            while (next < matched.Count && matched[next].End <= p.Index)
+            {
+                next++;
+            }
+
+            if ((next == matched.Count || matched[next].Start > p.Index) && Around(p.Index) is { } shape)
+            {
+                shape.Open = true;
+            }
+        }
+
+        // ConfigurationKeyName("x") names a key the class takes, wherever it stands, such as after more attributes than
+        // the pattern above takes. A name the scan can't read leaves the class open.
+        around.Clear();
+        body = 0;
+        foreach (Match k in ConfigurationKeyName().Matches(text))
+        {
+            Step();
+            if (Around(k.Index) is not { } shape)
+            {
+                continue;
+            }
+
+            if (k.Groups["key"].Success)
+            {
+                shape.Properties.TryAdd(k.Groups["key"].Value, null);
+            }
+            else
+            {
+                shape.Open = true;
             }
         }
     }
@@ -487,22 +722,34 @@ public sealed partial class CodeReadScanner
         return type.Split('.')[^1].Trim();
     }
 
-    private static string Body(string text, int open)
+    // Where each { closes, or the end of the text for one that never does, in one pass. Braces in strings and characters,
+    // as StripComments finds them, don't count.
+    private static Dictionary<int, int> MatchBraces(string text)
     {
-        var depth = 0;
-        for (var i = open; i < text.Length; i++)
+        var closes = new Dictionary<int, int>();
+        var open = new Stack<int>();
+        for (var i = 0; i < text.Length; i++)
         {
-            if (text[i] == '{')
+            if (LiteralEnd(text, i) is var end && end > i)
             {
-                depth++;
+                i = end - 1;
             }
-            else if (text[i] == '}' && --depth == 0)
+            else if (text[i] == '{')
             {
-                return text[(open + 1)..i];
+                open.Push(i);
+            }
+            else if (text[i] == '}' && open.Count > 0)
+            {
+                closes[open.Pop()] = i;
             }
         }
 
-        return text[(open + 1)..];
+        while (open.Count > 0)
+        {
+            closes[open.Pop()] = text.Length;
+        }
+
+        return closes;
     }
 
     private static List<string> SplitTopLevel(string text)
@@ -562,52 +809,10 @@ public sealed partial class CodeReadScanner
 
                 i += 2;
             }
-            else if (c == '"' || (c == '@' && next == '"'))
+            else if (LiteralEnd(text, i) is var end && end > i)
             {
-                var verbatim = c == '@';
-                var start = i;
-                i += verbatim ? 2 : 1;
-                while (i < text.Length)
-                {
-                    if (!verbatim && text[i] == '\\')
-                    {
-                        i += 2;
-                        continue;
-                    }
-
-                    if (text[i] == '"')
-                    {
-                        if (verbatim && i + 1 < text.Length && text[i + 1] == '"')
-                        {
-                            i += 2;
-                            continue;
-                        }
-
-                        i++;
-                        break;
-                    }
-
-                    if (!verbatim && text[i] == '\n')
-                    {
-                        break;
-                    }
-
-                    i++;
-                }
-
-                sb.Append(text, start, Math.Min(i, text.Length) - start);
-            }
-            else if (c == '\'')
-            {
-                var start = i;
-                i++;
-                while (i < text.Length && text[i] != '\'' && text[i] != '\n')
-                {
-                    i += text[i] == '\\' ? 2 : 1;
-                }
-
-                i++;
-                sb.Append(text, start, Math.Min(i, text.Length) - start);
+                sb.Append(text, i, Math.Min(end, text.Length) - i);
+                i = end;
             }
             else
             {
@@ -617,6 +822,59 @@ public sealed partial class CodeReadScanner
         }
 
         return sb.ToString();
+    }
+
+    // Where the string or character that starts at i ends, which can be past the end of the text, or i when none starts there.
+    private static int LiteralEnd(string text, int i)
+    {
+        var c = text[i];
+        var next = i + 1 < text.Length ? text[i + 1] : '\0';
+        if (c == '"' || (c == '@' && next == '"'))
+        {
+            var verbatim = c == '@';
+            i += verbatim ? 2 : 1;
+            while (i < text.Length)
+            {
+                if (!verbatim && text[i] == '\\')
+                {
+                    i += 2;
+                    continue;
+                }
+
+                if (text[i] == '"')
+                {
+                    if (verbatim && i + 1 < text.Length && text[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+
+                    return i + 1;
+                }
+
+                if (!verbatim && text[i] == '\n')
+                {
+                    break;
+                }
+
+                i++;
+            }
+
+            return i;
+        }
+
+        if (c == '\'')
+        {
+            i++;
+            while (i < text.Length && text[i] != '\'' && text[i] != '\n')
+            {
+                i += text[i] == '\\' ? 2 : 1;
+            }
+
+            return i + 1;
+        }
+
+        return i;
     }
 
     private static IEnumerable<string> SourceFiles(string folder)
@@ -713,50 +971,84 @@ public sealed partial class CodeReadScanner
     {
         public string? Base { get; } = baseName;
 
+        // True when the class may have properties the scan can't see, so a key it lacks may still be bound.
+        public bool Open { get; set; }
+
         public Dictionary<string, string?> Properties { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
-    private const string Arg = @"(?<arg>@?""[^""\r\n]*""|nameof\(\s*[\w.]+\s*\)|[A-Za-z_][\w.]*|[^)\]\r\n]+?)";
+    // Every pattern runs in time linear in the text, whatever the text: parts next to each other can't pass the same
+    // characters back and forth, and a part that could run on is bounded. Each also has a timeout, in case one still can't
+    // finish.
+    // The last kind of argument, an expression, is at most 300 characters or bracketed parts long, starts and ends with
+    // something other than a blank, and closes every ( and [ it opens, one level deep. So it ends at the next call or
+    // index that is left open, and an argument can't run on over a line of them.
+    private const string ArgPart = @"(?:[^()\[\]\r\n]|\([^()\r\n]*\)|\[[^\[\]\r\n]*\])";
+    private const string ArgEdge = @"(?:[^()\[\]\s]|\([^()\r\n]*\)|\[[^\[\]\r\n]*\])";
+    private const string Arg = @"(?<arg>@?""[^""\r\n]*""|nameof\(\s*[\w.]+\s*\)|[A-Za-z_][\w.]*|" + ArgEdge + "(?:" + ArgPart + "{0,300}?" + ArgEdge + ")??)";
 
-    [GeneratedRegex(@"\bGet(?:Required)?Section\s*\(\s*" + Arg + @"\s*\)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\bGet(?:Required)?Section\s*\(\s*" + Arg + @"\s*\)", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex SectionCall();
 
     [GeneratedRegex(
-        @"\G\s*(?:\?|!)?\s*(?:\.\s*Get(?:Required)?Section\s*\(\s*(?<section>)" + Arg + @"\s*\)" +
+        @"\G\s*(?:[?!]\s*)?(?:\.\s*Get(?:Required)?Section\s*\(\s*(?<section>)" + Arg + @"\s*\)" +
         @"|\[\s*(?<index>)" + Arg + @"\s*\]" +
-        @"|\.\s*GetValue\s*(?:<[^>()]+>)?\s*\(\s*(?<value>)" + Arg + @"\s*[,)]" +
+        @"|\.\s*GetValue\s*(?:<[^<>()]+>\s*)?\(\s*(?<value>)" + Arg + @"\s*[,)]" +
         @"|\.\s*Get\s*<\s*(?<get>[\w.]+)\s*>\s*\(" +
         @"|\.\s*Bind\s*\()",
-        RegexOptions.CultureInvariant)]
+        RegexOptions.CultureInvariant,
+        MatchTimeoutMilliseconds)]
     private static partial Regex ChainStep();
 
-    [GeneratedRegex(@"\b(?<kind>GetValue|GetConnectionString|BindConfiguration)\s*(?:<[^>()]+>)?\s*\(\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(?<kind>GetValue|GetConnectionString|BindConfiguration)\s*(?:<[^<>()]+>\s*)?\(\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex ValueCall();
 
-    [GeneratedRegex(@"\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*\??\s*\[\s*" + Arg + @"\s*\]", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*(?:\?\s*)?\[\s*" + Arg + @"\s*\]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex ConfigIndexer();
 
-    [GeneratedRegex(@"\b\w+\s*\(\s*(?:[\w.]*\.)?[Cc]onfiguration\s*,\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b\w+\s*\(\s*(?:[\w.]*\.)?[Cc]onfiguration\s*,\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex SectionNameArgument();
 
-    [GeneratedRegex(@"(?:Configure\s*<\s*(?<type>[\w.]+)\s*>\s*\(\s*(?:""[^""]*""\s*,\s*)?[\w.]*\s*\.?\s*|AddOptions\s*<\s*(?<type>[\w.]+)\s*>\s*\([^()]*\)\s*\.\s*(?:Bind\s*\(\s*[\w.]*\s*\.?\s*)?)$", RegexOptions.CultureInvariant)]
+    // Where a read starts, as SectionCall, ValueCall and ConfigIndexer start, whatever follows. The ValueCall start also
+    // takes a type argument of any shape, such as GetValue<List<string>>(.
+    [GeneratedRegex(@"\bGet(?:Required)?Section\s*\(|\b(?:GetValue|GetConnectionString|BindConfiguration)\s*[<(]|\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*(?:\?\s*)?\[", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex ReadStart();
+
+    // Runs on the 200 characters before a call only, so its cost is bounded by that.
+    [GeneratedRegex(@"(?:Configure\s*<\s*(?<type>[\w.]+)\s*>\s*\(\s*(?:""[^""]*""\s*,\s*)?[\w.]*\s*\.?\s*|AddOptions\s*<\s*(?<type>[\w.]+)\s*>\s*\([^()]*\)\s*\.\s*(?:Bind\s*\(\s*[\w.]*\s*\.?\s*)?)$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex OptionsTypeTail();
 
-    [GeneratedRegex(@"\bconst\s+string\s+(?<name>\w+)\s*=\s*""(?<value>[^""\r\n]*)""|\bstatic\s+readonly\s+string\s+(?<name>\w+)\s*=\s*""(?<value>[^""\r\n]*)""", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\bconst\s+string\s+(?<name>\w+)\s*=\s*""(?<value>[^""\r\n]*)""|\bstatic\s+readonly\s+string\s+(?<name>\w+)\s*=\s*""(?<value>[^""\r\n]*)""", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex StringConstant();
 
-    [GeneratedRegex(@"^nameof\(\s*(?<name>[\w.]+)\s*\)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^nameof\(\s*(?<name>[\w.]+)\s*\)$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex NameOf();
 
-    [GeneratedRegex(@"^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex Identifier();
 
-    [GeneratedRegex(@"\b(?:class|record(?:\s+class)?|struct)\s+(?<name>[A-Za-z_]\w*)\s*(?:<[^>{]*>\s*)?(?:\((?<parameters>[^()]*)\)\s*)?(?::\s*(?<base>[\w.<>, ]+?)\s*)?(?:where\b[^{;]*)?[{;]", RegexOptions.CultureInvariant)]
+    // The base list is words split by spaces, each taken whole, and stops before where; a where clause is at most 1000
+    // characters long. A type parameter list and a parameter list can't hold the < or ( that starts another one.
+    [GeneratedRegex(@"\b(?:class|record(?:\s+class)?|struct)\s+(?<name>[A-Za-z_]\w*)\s*(?:<[^<>{]*>\s*)?(?:\((?<parameters>[^()]*)\)\s*)?(?::\s*(?<base>(?>[\w.<>,]+(?: +(?!where\b)[\w.<>,]+)*))\s*)?(?:where\b[^{;]{0,1000})?[{;]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex TypeDeclaration();
 
-    [GeneratedRegex(@"^\s*(?:\[[^\]]*\]\s*)*(?<type>[\w.<>\[\], ?]+?)\s+(?<name>[A-Za-z_]\w*)\s*(?:=.*)?$", RegexOptions.CultureInvariant | RegexOptions.Singleline)]
+    // Where a type declaration starts, as TypeDeclaration starts, whatever follows.
+    [GeneratedRegex(@"\b(?:class|record|struct|(?<interface>interface))\s+(?<name>[A-Za-z_]\w*)", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex TypeStart();
+
+    // Runs on one parameter of a record. The type is words split by spaces, each taken whole.
+    [GeneratedRegex(@"^\s*(?>(?:\[[^\]]*\]\s*)*)(?<type>(?>[\w.<>\[\],?]+)(?:(?> +)(?>[\w.<>\[\],?]+))*?)\s+(?<name>[A-Za-z_]\w*)\s*(?:=.*)?$", RegexOptions.CultureInvariant | RegexOptions.Singleline, MatchTimeoutMilliseconds)]
     private static partial Regex Parameter();
 
-    [GeneratedRegex(@"(?:\[\s*ConfigurationKeyName\s*\(\s*""(?<key>[^""]+)""\s*\)\s*\]\s*)?(?:\[[^\]]*\]\s*)*\bpublic\s+(?:(?:required|virtual|override|new|sealed)\s+)*(?<type>[\w.<>\[\], ?]+?)\s+(?<name>[A-Za-z_]\w*)\s*\{\s*(?:get|init|set)", RegexOptions.CultureInvariant)]
+    // At most ten attributes, five modifiers and eleven words of type, each taken whole.
+    [GeneratedRegex(@"(?:\[\s*ConfigurationKeyName\s*\(\s*""(?<key>[^""]+)""\s*\)\s*\]\s*)?(?>(?:\[[^\[\]]*\]\s*){0,10})\bpublic\s+(?>(?:(?:required|virtual|override|new|sealed)\s+){0,5})(?<type>(?>[\w.<>\[\],?]+)(?:(?> +)(?>[\w.<>\[\],?]+)){0,10}?)\s+(?<name>[A-Za-z_]\w*)\s*\{\s*(?:get|init|set)", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex Property();
+
+    // Where a settable public property starts, whatever its type: at most 400 characters before its accessors.
+    [GeneratedRegex(@"\bpublic\b[^;{}=]{0,400}\{\s*(?:get|init|set)\b", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex PropertyStart();
+
+    // ConfigurationKeyName("x"), or one with a name the scan can't read, in which case key doesn't match.
+    [GeneratedRegex(@"\bConfigurationKeyName(?:Attribute)?\s*\(\s*(?:""(?<key>[^""\r\n]+)""\s*\))?", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex ConfigurationKeyName();
 }

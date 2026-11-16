@@ -136,7 +136,7 @@ public class CodeReadScannerTests
         temp.Write("src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
         temp.Write("src/Api.Tests/Tests.cs", """var t = configuration["Test:Key"];""");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"));
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, scanner.FilesScanned);
         Assert.True(scanner.Check("A:B").IsRead);
@@ -192,7 +192,7 @@ public class CodeReadScannerTests
     [Fact]
     public void Without_any_code_the_reason_says_so()
     {
-        var verdict = CodeReadScanner.FromSources([]).Check("A:B");
+        var verdict = CodeReadScanner.FromSources([], TestContext.Current.CancellationToken).Check("A:B");
 
         Assert.False(verdict.IsRead);
         Assert.Equal("No C# code found to read it", verdict.Reason);
@@ -202,9 +202,9 @@ public class CodeReadScannerTests
     [Fact]
     public void Rejects_missing_arguments()
     {
-        Assert.Throws<ArgumentException>(() => CodeReadScanner.Scan(" "));
-        Assert.Throws<ArgumentNullException>(() => CodeReadScanner.Scan(null!));
-        Assert.Throws<ArgumentNullException>(() => CodeReadScanner.FromSources(null!));
+        Assert.Throws<ArgumentException>(() => CodeReadScanner.Scan(" ", TestContext.Current.CancellationToken));
+        Assert.Throws<ArgumentNullException>(() => CodeReadScanner.Scan(null!, TestContext.Current.CancellationToken));
+        Assert.Throws<ArgumentNullException>(() => CodeReadScanner.FromSources(null!, TestContext.Current.CancellationToken));
         Assert.Throws<ArgumentNullException>(() => Scan("var x = 1;").Check(null!));
     }
 
@@ -215,7 +215,8 @@ public class CodeReadScannerTests
         [
             ("b.cs", "var x = 1;\n\n\nvar a = configuration[name];"),
             ("a.cs", "var z = 1;\nvar b = configuration[other];\nvar c = configuration[third];"),
-        ]);
+        ],
+        TestContext.Current.CancellationToken);
 
         Assert.Equal(["a.cs (line 2)", "a.cs (line 3)", "b.cs (line 4)"], scanner.DynamicReads);
     }
@@ -584,7 +585,7 @@ public class CodeReadScannerTests
         temp.Write(".git/D.cs", """var a = configuration["Git:Key"];""");
         temp.Write("binary/E.cs", """var a = configuration["Binary:Key"];""");
 
-        var scanner = CodeReadScanner.Scan(temp.Path);
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(3, scanner.FilesScanned);
         Assert.True(scanner.Check("Top:Key").IsRead);
@@ -610,7 +611,7 @@ public class CodeReadScannerTests
         temp.Write("Program.cs", """var a = configuration["Top:Key"];""");
         Directory.CreateSymbolicLink(temp.Full("link"), outside.Path);
 
-        var scanner = CodeReadScanner.Scan(temp.Path);
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, scanner.FilesScanned);
         Assert.False(scanner.Check("Linked:Key").IsRead);
@@ -624,7 +625,7 @@ public class CodeReadScannerTests
         temp.Write("Exact.cs", Code + new string(' ', 1024 * 1024 - Code.Length));
         temp.Write("Over.cs", """var a = configuration["Over:Key"];""" + new string(' ', 1024 * 1024));
 
-        var scanner = CodeReadScanner.Scan(temp.Path);
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, scanner.FilesScanned);
         Assert.True(scanner.Check("Big:Key").IsRead);
@@ -640,7 +641,7 @@ public class CodeReadScannerTests
             File.WriteAllText(temp.Full($"F{i}.cs"), "var x = 1;");
         }
 
-        Assert.Equal(5000, CodeReadScanner.Scan(temp.Path).FilesScanned);
+        Assert.Equal(5000, CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken).FilesScanned);
     }
 
     [Fact]
@@ -654,7 +655,7 @@ public class CodeReadScannerTests
             temp.Write($"P{i}/Code.cs", "var x = 1;");
         }
 
-        Assert.Equal(50, CodeReadScanner.Scan(temp.Full("P0")).FilesScanned);
+        Assert.Equal(50, CodeReadScanner.Scan(temp.Full("P0"), TestContext.Current.CancellationToken).FilesScanned);
     }
 
     [Fact]
@@ -667,7 +668,7 @@ public class CodeReadScannerTests
         temp.Write("B/B.cs", """var b = configuration["B:Key"];""");
         temp.Write("A/Broken.csproj", "<Project");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("A"));
+        var scanner = CodeReadScanner.Scan(temp.Full("A"), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, scanner.FilesScanned);
         Assert.True(scanner.Check("A:Key").IsRead);
@@ -696,6 +697,235 @@ public class CodeReadScannerTests
     }
 
     [Fact]
+    public void Every_pattern_has_a_match_timeout()
+    {
+        var patterns = typeof(CodeReadScanner)
+            .GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            .Where(m => m.ReturnType == typeof(System.Text.RegularExpressions.Regex) && m.GetParameters().Length == 0)
+            .Select(m => (m.Name, Regex: (System.Text.RegularExpressions.Regex)m.Invoke(null, null)!))
+            .ToList();
+
+        Assert.True(patterns.Count >= 10, $"Found only {patterns.Count} patterns.");
+        Assert.All(patterns, p => Assert.True(p.Regex.MatchTimeout != System.Text.RegularExpressions.Regex.InfiniteMatchTimeout, p.Name));
+    }
+
+    [Fact]
+    public void A_file_a_pattern_times_out_on_is_skipped_and_listed()
+    {
+        var scanner = CodeReadScanner.FromSources(
+            [
+                ("Slow.cs", """var a = configuration["Slow:Key"];"""),
+                ("Fine.cs", """var b = configuration["Fine:Key"];"""),
+            ],
+            (name, _) =>
+            {
+                if (name == "Slow.cs")
+                {
+                    throw new System.Text.RegularExpressions.RegexMatchTimeoutException();
+                }
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, scanner.FilesScanned);
+        Assert.Equal(["Slow.cs"], scanner.SkippedFiles);
+        Assert.True(scanner.Check("Fine:Key").IsRead);
+        Assert.False(scanner.Check("Slow:Key").IsRead);
+    }
+
+    [Fact]
+    public void The_classes_of_a_file_that_times_out_while_its_properties_are_read_are_left_open()
+    {
+        var scanner = CodeReadScanner.FromSources(
+            [
+                ("Options.cs", """public class AppOptions : AppBase { public int Port { get; set; } }"""),
+                ("Base.cs", """public class AppBase { public int Size { get; set; } }"""),
+                ("Program.cs", """services.Configure<AppOptions>(cfg.GetSection("App")); services.Configure<AppBase>(cfg.GetSection("Base"));"""),
+            ],
+            (name, step) =>
+            {
+                if (name == "Options.cs" && step == "properties")
+                {
+                    throw new System.Text.RegularExpressions.RegexMatchTimeoutException();
+                }
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Options.cs"], scanner.SkippedFiles);
+        Assert.Equal(new ReadVerdict(true, string.Empty), scanner.Check("App:Port"));
+        Assert.True(scanner.Check("App:Size").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Base is bound to AppBase, which has no property Port"), scanner.Check("Base:Port"));
+    }
+
+    [Fact]
+    public void A_cancelled_scan_stops_inside_a_long_file()
+    {
+        using var cancel = new CancellationTokenSource();
+        var source = string.Concat(Enumerable.Repeat("var a = configuration[\"A:Key\"];\n", 5_000));
+
+        Assert.Throws<OperationCanceledException>(() => CodeReadScanner.FromSources([("Long.cs", source)], (_, step) =>
+        {
+            if (step == "calls")
+            {
+                cancel.Cancel();
+            }
+        },
+        cancel.Token));
+    }
+
+    [Fact]
+    public void Reads_the_patterns_cannot_take_apart_are_listed()
+    {
+        var scanner = Scan(
+            "var a = config.GetSection(string.Join(\":\", parts.Take(2)));\n"
+            + "var b = configuration[Keys.For(nameof(X))];\n"
+            + "var c = configuration.GetValue<List<string>>(\"Hosts\");\n"
+            + "var d = configuration.GetSection(" + string.Join(" + ", Enumerable.Repeat("x", 200)) + ");\n"
+            + "var e = configuration.GetSection(\"Plain\")[\"Key\"];\n");
+
+        Assert.Equal(["File0.cs (line 1)", "File0.cs (line 2)", "File0.cs (line 3)", "File0.cs (line 4)"], scanner.DynamicReads);
+        Assert.True(scanner.Check("Plain:Key").IsRead);
+    }
+
+    [Fact]
+    public void A_brace_in_a_string_or_character_does_not_close_a_class()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<AppOptions>(cfg.GetSection("App"));
+            public class AppOptions
+            {
+                public class Inner { public string F { get; set; } = "{"; public char C { get; set; } = '{'; }
+                public int Port { get; set; }
+                public string Close { get; set; } = "}";
+                public string Verbatim { get; set; } = @"}""}";
+                public int Last { get; set; }
+            }
+            """);
+
+        Assert.True(scanner.Check("App:Port").IsRead);
+        Assert.True(scanner.Check("App:Last").IsRead);
+        Assert.False(scanner.Check("App:F").IsRead);
+    }
+
+    [Fact]
+    public void A_cancelled_scan_stops_at_the_next_file()
+    {
+        using var cancel = new CancellationTokenSource();
+
+        IEnumerable<(string, string)> Sources()
+        {
+            yield return ("A.cs", """var a = configuration["A:Key"];""");
+            cancel.Cancel();
+            yield return ("B.cs", """var b = configuration["B:Key"];""");
+        }
+
+        Assert.Throws<OperationCanceledException>(() => CodeReadScanner.FromSources(Sources(), cancel.Token));
+
+        using var temp = new TempFolder();
+        temp.Write("Program.cs", """var a = configuration["A:Key"];""");
+        Assert.Throws<OperationCanceledException>(() => CodeReadScanner.Scan(temp.Path, cancel.Token));
+    }
+
+    [Fact]
+    public void A_nested_type_keeps_its_properties_to_itself()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<Outer>(configuration.GetSection("O"));
+            services.Configure<Inner>(configuration.GetSection("I"));
+            """,
+            """
+            public class Outer
+            {
+                public class Inner { public int Deep { get; set; } }
+                public int Top { get; set; }
+                public Inner Child { get; set; } = new();
+            }
+            """);
+
+        Assert.True(scanner.Check("O:Top").IsRead);
+        Assert.True(scanner.Check("O:Child:Deep").IsRead);
+        Assert.True(scanner.Check("I:Deep").IsRead);
+        Assert.False(scanner.Check("O:Deep").IsRead);
+        Assert.False(scanner.Check("I:Top").IsRead);
+    }
+
+    [Fact]
+    public void A_property_the_patterns_cannot_take_apart_leaves_its_class_open()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<TupleOptions>(cfg.GetSection("Tuple"));
+            services.Configure<GlobalOptions>(cfg.GetSection("Global"));
+            services.Configure<WideOptions>(cfg.GetSection("Wide"));
+            services.Configure<PlainOptions>(cfg.GetSection("Plain"));
+            """,
+            """
+            public class TupleOptions { public (int Low, int High) Range { get; set; } }
+            public class GlobalOptions { public global::System.String Name { get; set; } = ""; }
+            public class WideOptions { public Dictionary<string, Func<int, int, int, int, int, int, int, int, int, int>> Handlers { get; set; } = new(); }
+            public class PlainOptions { public int Size { get; set; } public int Twice => Size * 2; }
+            """);
+
+        Assert.True(scanner.Check("Tuple:Range:Low").IsRead);
+        Assert.True(scanner.Check("Global:Name").IsRead);
+        Assert.True(scanner.Check("Wide:Handlers:a").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Plain is bound to PlainOptions, which has no property Color"), scanner.Check("Plain:Color"));
+    }
+
+    [Fact]
+    public void A_configuration_key_name_counts_after_any_number_of_attributes()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<NamedOptions>(cfg.GetSection("Named"));
+            services.Configure<ConstantOptions>(cfg.GetSection("Constant"));
+            """,
+            """
+            public class NamedOptions
+            {
+                [ConfigurationKeyName("pwd")] [A] [B] [C] [D] [E] [F] [G] [H] [I] [J] [K]
+                public string Password { get; set; } = "";
+            }
+
+            public class ConstantOptions
+            {
+                [ConfigurationKeyName(Keys.Token)]
+                public string Token { get; set; } = "";
+            }
+            """);
+
+        Assert.True(scanner.Check("Named:pwd").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Named is bound to NamedOptions, which has no property Color"), scanner.Check("Named:Color"));
+        Assert.True(scanner.Check("Constant:token_key").IsRead);
+    }
+
+    [Fact]
+    public void A_base_too_far_up_or_one_the_scan_cannot_take_apart_leaves_the_class_open()
+    {
+        // C0 derives from C1 and so on: C16 is the 16th base of C0, and C17 the 17th.
+        var chain = string.Concat(Enumerable.Range(0, 17).Select(i => $"class C{i} : C{i + 1} {{ }}\n")) + "class C17 { public int Far { get; set; } }";
+        var constraints = string.Join(", ", Enumerable.Range(0, 150).Select(i => $"IConstraint{i}"));
+        var scanner = Scan(
+            """
+            services.Configure<C0>(cfg.GetSection("Deep"));
+            services.Configure<C1>(cfg.GetSection("Near"));
+            services.Configure<Derived>(cfg.GetSection("Derived"));
+            """,
+            chain,
+            $$"""
+            public class Derived : Base<int> { public int Own { get; set; } }
+            public class Base<T> where T : {{constraints}} { public int Inherited { get; set; } }
+            """);
+
+        Assert.True(scanner.Check("Deep:Other").IsRead);
+        Assert.True(scanner.Check("Near:Far").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Near is bound to C1, which has no property Other"), scanner.Check("Near:Other"));
+        Assert.True(scanner.Check("Derived:Own").IsRead);
+        Assert.True(scanner.Check("Derived:Inherited").IsRead);
+    }
+
+    [Fact]
     public void Class_declarations_with_generics_parameters_base_and_constraints_still_parse()
     {
         var scanner = Scan("""
@@ -708,4 +938,82 @@ public class CodeReadScannerTests
 
         Assert.True(scanner.Check("Opt:A").IsRead);
     }
+}
+
+// The hostile files run alone, after the tests that run in parallel, so other tests don't eat the time limit.
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class HostileCodeFiles
+{
+    public const string Name = "Hostile code files";
+}
+
+[Collection(HostileCodeFiles.Name)]
+public class CodeReadScannerHostileFileTests
+{
+    // Each of these took far longer than the limit, up to days, before the patterns and the loops around them were made
+    // linear. Now each takes well under a second, so the limit leaves room for a slow, busy machine. The scan runs on a
+    // thread of its own, so a thread pool kept busy by other tests doesn't delay its start.
+    [Theory]
+    [InlineData("blanks after a base list colon")]
+    [InlineData("base lists with where clauses that never open a body")]
+    [InlineData("type parameter lists that never close")]
+    [InlineData("a long line of public words in a class")]
+    [InlineData("attributes that never close in a class")]
+    [InlineData("many attributes in a class")]
+    [InlineData("a record parameter followed by blanks")]
+    [InlineData("GetSection calls that never close")]
+    [InlineData("GetValue calls that never close")]
+    [InlineData("indexers that never close")]
+    [InlineData("blanks after GetValue")]
+    [InlineData("blanks after a config variable")]
+    [InlineData("blanks after a GetSection call")]
+    [InlineData("generic GetValue calls that never close")]
+    [InlineData("many reads the scanner cannot work out")]
+    [InlineData("classes nested without end")]
+    [InlineData("a long chain of base classes")]
+    [InlineData("public words before a brace again and again")]
+    [InlineData("configuration key names that never close")]
+    [InlineData("many GetSection calls")]
+    [InlineData("many classes deriving from a class with many properties")]
+    public async Task A_hostile_file_is_scanned_in_linear_time(string shape)
+    {
+        var source = HostileSource(shape);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var scan = Task.Factory.StartNew(() => CodeReadScanner.FromSources([("File0.cs", source)]), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == scan;
+
+        Assert.True(finished, $"Scanning {source.Length} characters of {shape} took longer than {watch.Elapsed.TotalSeconds:0}s.");
+        Assert.Equal(1, (await scan).FilesScanned);
+    }
+
+    private static string HostileSource(string shape) => shape switch
+    {
+        "blanks after a base list colon" => "class A : " + new string(' ', 20_000),
+        "base lists with where clauses that never open a body" => Repeat("class A : B where ", 3_000_000),
+        "type parameter lists that never close" => Repeat("class A<", 3_000_000),
+        "a long line of public words in a class" => "class A {" + Repeat("public a ", 200_000),
+        "attributes that never close in a class" => "class A {" + Repeat("[a ", 3_000_000),
+        "many attributes in a class" => "class A {" + Repeat("[a] ", 200_000),
+        "a record parameter followed by blanks" => "record A(a" + new string(' ', 200_000) + ");",
+        "GetSection calls that never close" => Repeat("GetSection(", 200_000),
+        "GetValue calls that never close" => Repeat("GetValue(", 200_000),
+        "indexers that never close" => Repeat("config[", 200_000),
+        "blanks after GetValue" => "GetValue" + new string(' ', 200_000),
+        "blanks after a config variable" => "config" + new string(' ', 200_000),
+        "blanks after a GetSection call" => "config.GetSection(\"A\")" + new string(' ', 200_000),
+        "generic GetValue calls that never close" => Repeat("GetValue<", 2_000_000),
+        "many reads the scanner cannot work out" => Repeat("config[x];\n", 1_000_000),
+        "classes nested without end" => Repeat("class A {", 400_000),
+        "public words before a brace again and again" => "class A {" + Repeat("public " + new string('a', 390) + " ", 3_000_000),
+        "configuration key names that never close" => "class A {" + Repeat("[ConfigurationKeyName(\"", 3_000_000),
+        "a long chain of base classes" => string.Concat(Enumerable.Range(0, 40_000).Select(i => $"class C{i} : C{i + 1} {{ }}\n")),
+        "many GetSection calls" => Repeat("GetSection(\"a\")", 3_000_000),
+        "many classes deriving from a class with many properties" =>
+            "class B {\n" + string.Concat(Enumerable.Range(0, 12_000).Select(i => $"public int P{i} {{ get; }}\n")) + "}\n"
+            + string.Concat(Enumerable.Range(0, 12_000).Select(i => $"class D{i} : B {{ }}\n")),
+        _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+    };
+
+    private static string Repeat(string unit, int length) => string.Concat(Enumerable.Repeat(unit, length / unit.Length));
 }

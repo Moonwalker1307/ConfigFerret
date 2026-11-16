@@ -238,7 +238,12 @@ public sealed class TraceRunner
 
         // Dead settings: configured keys that no code in the app reads. Only an app trace has code to read.
         var app = profile.Mode == TraceMode.App ? sources.OfType<AppSettingsSource>().FirstOrDefault(a => Directory.Exists(a.Folder)) : null;
-        CodeReadScanner? code = app is null ? null : CodeReadScanner.Scan(app.Folder);
+        CodeReadScanner? code = app is null ? null : CodeReadScanner.Scan(app.Folder, cancellationToken);
+        if (code is { SkippedFiles.Count: > 0 })
+        {
+            notes.Add(SkippedCodeNote(code.SkippedFiles));
+        }
+
         UnusedReport unused;
         var dead = new List<DeadSetting>();
         if (code is { FilesScanned: > 0 })
@@ -274,6 +279,11 @@ public sealed class TraceRunner
 
         static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
     }
+
+    // Names the first five files the code scan skipped, and how many more.
+    internal static string SkippedCodeNote(IReadOnlyList<string> files) =>
+        $"Reading {string.Join(", ", files.Take(5))}{(files.Count > 5 ? $" and {files.Count - 5} more" : string.Empty)} for the keys the app reads took too long, "
+        + $"so {(files.Count == 1 ? "it was" : "they were")} skipped. A setting marked dead may still be read there.";
 
     private static List<UnusedVariable> FindUnusedVariables(
         ProvenanceReport report,
