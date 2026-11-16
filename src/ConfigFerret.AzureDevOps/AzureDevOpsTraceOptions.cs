@@ -67,12 +67,24 @@ public sealed partial class AzureDevOpsTraceOptions
     /// <c>value: V</c>, and <c>N: V</c>), and every <c>NAME: $(Var)</c> line elsewhere, for example in a step's
     /// <c>env:</c> block, so <c>NAME</c> is traced to <c>Var</c>. <c>$[variables.Var]</c> and
     /// <c>${{ variables.Var }}</c> work too. The stage and job each one is in is read as well, so that a job only gets
-    /// the pipeline's variables and groups, its stage's and its own.
+    /// the pipeline's variables and groups, its stage's and its own. The report names the file by its path from the
+    /// current directory, with <c>/</c> between folders, or by its full path when it is not below the current directory.
     /// </summary>
     public AzureDevOpsTraceOptions AddPipeline(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return AddPipelineText(File.ReadAllText(path), Path.GetFileName(path));
+        return AddPipelineText(File.ReadAllText(path), NameOf(path));
+    }
+
+    // A file inside the current directory is named by its path from there, and any other by its full path, so that files
+    // of the same name in different folders get different names and locations. Only the system's own separator becomes
+    // "/": on Linux and macOS a "\" is part of a file name.
+    private static string NameOf(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), full);
+        var outside = relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relative);
+        return (outside ? full : relative).Replace(Path.DirectorySeparatorChar, '/');
     }
 
     /// <summary>Like <see cref="AddPipeline"/>, for pipeline YAML you already have in memory.</summary>
@@ -275,7 +287,7 @@ public sealed record AzurePipelinesMapping(string Name, string VariableName, str
 /// <summary>A variable set in pipeline YAML.</summary>
 /// <param name="Name">The variable name.</param>
 /// <param name="Value">The value as written, which may refer to another variable, for example <c>$(Shared.Timeout)</c>.</param>
-/// <param name="File">The file name.</param>
+/// <param name="File">The file's name in the report, as <see cref="AzureDevOpsTraceOptions.AddPipeline"/> gives it or as passed to <see cref="AzureDevOpsTraceOptions.AddPipelineText"/>.</param>
 /// <param name="Line">The 1-based line.</param>
 /// <param name="Order">Its position among the variables and groups read, used for precedence: a later one wins.</param>
 public sealed record AzurePipelinesVariable(string Name, string Value, string File, int Line, int Order);
