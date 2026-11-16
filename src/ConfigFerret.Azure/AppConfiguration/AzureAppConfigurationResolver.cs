@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.Azure;
@@ -143,7 +144,7 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
         return name.Equals("Name", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Parameters:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static ProvenanceStep ToStep(AzureAppConfigurationSetting setting, ProvenanceStep layer, bool inferred, string? how)
+    private ProvenanceStep ToStep(AzureAppConfigurationSetting setting, ProvenanceStep layer, bool inferred, string? how)
     {
         var notes = new List<string>();
         if (how is not null)
@@ -179,7 +180,7 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
         }
 
         if (!secret && setting.Kind == AzureAppConfigurationSettingKind.KeyValue && layer.Value is not null && setting.Value is not null
-            && !string.Equals(layer.Value, setting.Value, StringComparison.Ordinal))
+            && !SameValue(setting, layer.Value))
         {
             // Never print either value here: notes are not redacted.
             notes.Add("the store's value differs from the value seen here, so the app may need a refresh or the value was transformed");
@@ -196,6 +197,34 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
             Note = notes.Count == 0 ? null : string.Join("; ", notes),
             Reference = AzureAppConfigurationSettings.Reference(setting),
         };
+    }
+
+    // The same text, or, for a stored key-value with a JSON content type, the same JSON: other spacing or member order, or
+    // a number written another way, is not a difference. A text that does not parse within the depth the provider reads
+    // is compared as text. A value flattened from JSON is compared as text, as the provider writes it as text.
+    private bool SameValue(AzureAppConfigurationSetting setting, string seen)
+    {
+        var stored = setting.Value!;
+        if (string.Equals(seen, stored, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!AzureAppConfigurationSettings.IsJson(setting.ContentType) || !settings.Find(setting.Key).Any(s => ReferenceEquals(s, setting)))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var storedJson = JsonDocument.Parse(stored, AzureAppConfigurationSettings.JsonOptions);
+            using var seenJson = JsonDocument.Parse(seen, AzureAppConfigurationSettings.JsonOptions);
+            return JsonElement.DeepEquals(storedJson.RootElement, seenJson.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string DescribeFlag(bool? enabled, IReadOnlyCollection<string> filters)

@@ -148,7 +148,9 @@ key-value as stored. A value that is not valid JSON, or nests more than 63 level
 more level and stops at 64), sets its own key as it is stored. Bounds keep a large store from slowing the trace: at
 most 1,000 JSON elements are read from one key-value, and one load takes at most 100,000 values whose keys hold at
 most 10 million characters. Past a bound a trace warning names the key or the store, never a value, and what is left
-is traced as it is stored or left out.
+is traced as it is stored or left out. When a step holds a JSON key-value as stored, it is compared with the value seen
+as JSON, so other spacing, another member order or a number written another way (`3.0` for `3`) is not noted as a
+difference; a flattened value is compared as text.
 
 ## Permissions
 
