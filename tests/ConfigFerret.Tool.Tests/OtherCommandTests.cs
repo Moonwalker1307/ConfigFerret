@@ -206,6 +206,95 @@ public class InputErrorTests
         }
     }
 
+    [Theory]
+    [InlineData("octopus")]
+    [InlineData("github")]
+    public async Task Reports_a_request_timeout_in_one_line_with_exit_code_2(string service)
+    {
+        using var handler = new NeverAnswers();
+        var (host, output, error) = RemoteHost(() => new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromMilliseconds(200) });
+
+        var code = await Cli.RunAsync(RemoteArgs(service), host, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, code);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Single(error.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.StartsWith("configferret: ", error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("   at ", error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(FakeSecret, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Ends_quietly_with_exit_code_130_when_the_user_cancels()
+    {
+        using var handler = new NeverAnswers();
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var (host, output, error) = RemoteHost(() => new HttpClient(handler, disposeHandler: false));
+
+        var run = Cli.RunAsync(RemoteArgs("octopus"), host, cancel.Token);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        var code = await run;
+
+        Assert.Equal(130, code);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    // Ctrl+C reaches the action through a token that System.CommandLine owns, not through the one RunAsync is given.
+    [Fact]
+    public async Task Ends_quietly_with_exit_code_130_when_a_request_is_cancelled_by_the_console()
+    {
+        using var handler = new NeverAnswers { Cancelled = new TaskCanceledException("A task was canceled.") };
+        var (host, output, error) = RemoteHost(() => new HttpClient(handler, disposeHandler: false));
+
+        var code = await Cli.RunAsync(RemoteArgs("github"), host, TestContext.Current.CancellationToken);
+
+        Assert.Equal(130, code);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    private const string FakeSecret = "fake-token-never-printed";
+
+    private static (CliHost Host, StringWriter Output, StringWriter Error) RemoteHost(Func<HttpClient> client)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var host = new CliHost
+        {
+            Out = output,
+            Error = error,
+            Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["OCTOPUS_API_KEY"] = FakeSecret, ["GITHUB_TOKEN"] = FakeSecret },
+            HttpClientFactory = client,
+        };
+        return (host, output, error);
+    }
+
+    private static string[] RemoteArgs(string service) => service == "octopus"
+        ? ["trace", "-a", ToolRunner.Golden("local-dev"), "--no-user-secrets", "--octopus-server", "https://octopus.example.com", "--octopus-project", "api"]
+        : ["trace", "-a", ToolRunner.Golden("local-dev"), "--no-user-secrets", "--github-repo", "contoso/api"];
+
+    // A server that accepts the request and never answers, so only a timeout or a cancellation ends it.
+    private sealed class NeverAnswers : HttpMessageHandler
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Exception? Cancelled { get; init; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            if (Cancelled is not null)
+            {
+                throw Cancelled;
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("Unreachable: the delay only ends by cancellation.");
+        }
+    }
+
     [Fact]
     public async Task Refuses_a_user_secrets_id_that_leaves_the_secrets_folder()
     {

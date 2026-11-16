@@ -11,4 +11,7 @@ internal static class ExitCodes
 
     /// <summary>Bad arguments, or an input that could not be read.</summary>
     public const int Usage = 2;
+
+    /// <summary>The user cancelled with Ctrl+C, or the process was asked to stop. The shell convention: 128 plus SIGINT.</summary>
+    public const int Cancelled = 130;
 }

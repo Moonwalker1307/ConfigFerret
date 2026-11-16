@@ -32,6 +32,17 @@ internal static class Cli
             var invocation = new InvocationConfiguration { Output = host.Out, Error = host.Error, EnableDefaultExceptionHandler = false };
             return await parse.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException ex) when (ex.InnerException is TimeoutException && !cancellationToken.IsCancellationRequested)
+        {
+            // HttpClient reports its Timeout as a cancellation with a TimeoutException inside.
+            host.Error.WriteLine("configferret: " + ex.Message);
+            return ExitCodes.Usage;
+        }
+        catch (OperationCanceledException)
+        {
+            // Ctrl+C or a termination signal. System.CommandLine cancels its own token, not the one passed in here.
+            return ExitCodes.Cancelled;
+        }
         catch (InvalidDataException ex)
         {
             host.Error.WriteLine("configferret: " + DescribeInvalidData(ex));
