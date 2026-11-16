@@ -491,7 +491,7 @@ public sealed class GitOpsHelmChartTests : IDisposable
         Assert.Equal(
             [
                 new HelmValueStep("Flux HelmRelease rel (valuesFrom ConfigMap vals, key values.yaml)", 30, "60", false),
-                new HelmValueStep("Flux HelmRelease rel (valuesFrom ConfigMap elsewhere, key timeout)", 4, "null", false),
+                new HelmValueStep("Flux HelmRelease rel (valuesFrom ConfigMap elsewhere, key timeout in extra.yaml)", 4, "null", false),
                 new HelmValueStep("Flux HelmRelease rel (spec.values)", 22, "99", false),
             ],
             chart.History["db.timeout"]);
@@ -541,6 +541,64 @@ public sealed class GitOpsHelmChartTests : IDisposable
     }
 
     [Fact]
+    public void Values_from_another_file_name_it_and_point_at_its_lines()
+    {
+        var password = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("db:\n  a: 1\n  b: 2\n  c: 3\n  d: 4\n  e: 5\n  password: fake-b64-s3cr3t\n"));
+        var alias = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("a: 1\nb: *fake-alias-s3cr3t\n"));
+        var data = KubernetesManifests.Parse($"""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {"{"}name: vals{"}"}
+            data:
+              values.yaml: |
+                db:
+                  timeout: 60
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {"{"}name: creds{"}"}
+            data:
+              values.yaml: {password}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {"{"}name: broken{"}"}
+            stringData:
+              values.yaml: |
+                a: 1
+                b: *fake-alias-s3cr3t
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata: {"{"}name: broken-b64{"}"}
+            data:
+              values.yaml: {alias}
+            """, "cluster-export.yaml");
+        var release = Flux(
+            "      version: 1.0.0",
+            """
+              valuesFrom:
+                - {kind: ConfigMap, name: vals}
+                - {kind: Secret, name: creds}
+                - {kind: Secret, name: broken}
+                - {kind: Secret, name: broken-b64}
+            """);
+
+        var chart = HelmChart.ForGitOps(release, new GitOpsOptions { ChartFolder = _root, Data = data });
+
+        // A literal block keeps its lines, so a value is on its own line; base64 text has none, so it is on the key's.
+        Assert.Equal(new HelmValueStep("Flux HelmRelease rel (valuesFrom ConfigMap vals, key values.yaml in cluster-export.yaml)", 7, "60", false), chart.History["db.timeout"][^1]);
+        Assert.Equal(new HelmValueStep("Flux HelmRelease rel (valuesFrom Secret creds, key values.yaml in cluster-export.yaml)", 13, "fake-b64-s3cr3t", false), chart.History["db.password"][^1]);
+        Assert.True(chart.IsSensitivePath("db.password"));
+        Assert.Equal(
+            [
+                "Could not parse Helm values in Flux HelmRelease rel (valuesFrom Secret broken, key values.yaml in cluster-export.yaml): The alias at line 21 is used before its anchor is defined.",
+                "Could not parse Helm values in Flux HelmRelease rel (valuesFrom Secret broken-b64, key values.yaml in cluster-export.yaml): The alias at line 27 is used before its anchor is defined.",
+            ],
+            chart.Warnings);
+    }
+
+    [Fact]
     public void A_secret_whose_values_break_with_an_alias_does_not_show_it_in_the_warning()
     {
         var release = Flux(
@@ -559,8 +617,7 @@ public sealed class GitOpsHelmChartTests : IDisposable
         var warnings = HelmChart.ForGitOps(release, new GitOpsOptions { ChartFolder = _root }).Warnings;
 
         var warning = Assert.Single(warnings);
-        Assert.StartsWith("Could not parse Helm values in Flux HelmRelease rel (valuesFrom Secret s, key values.yaml): ", warning, StringComparison.Ordinal);
-        Assert.DoesNotContain("fake-alias-s3cr3t", warning, StringComparison.Ordinal);
+        Assert.Equal("Could not parse Helm values in Flux HelmRelease rel (valuesFrom Secret s, key values.yaml): The alias at line 17 is used before its anchor is defined.", warning);
     }
 
     [Fact]

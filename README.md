@@ -158,7 +158,10 @@ var report = ConfigTracer.ForContainer(KubernetesManifests.LoadFile("rendered.ya
 parameters show as layers named after the object, for example `Argo CD Application orders-prod (helm.values)`, in
 Argo CD's order (`valueFiles`, then `values` or `valuesObject`, then `parameters`) or Flux's (chart `valuesFiles`,
 then each `valuesFrom` ConfigMap or Secret, then `spec.values`). Values from a Secret are sensitive. A chart from a
-remote repository cannot be fetched, so the trace warns and still shows the values the manifest sets.
+remote repository cannot be fetched, so the trace warns and still shows the values the manifest sets. A `valuesFrom`
+object from another file names it, for example `(valuesFrom ConfigMap vals, key values.yaml in cluster-export.yaml)`,
+and its lines are lines of that file: a value in a literal block (`|`) is on its own line, and a value in base64
+`data` or in a quoted string is on the key's line, and so is an alias error in its YAML.
 
 `WithGitOps` also links ConfigMap keys to inline Argo CD kustomize patches that set them, and, for a Flux
 Kustomization with `postBuild`, links each value to the `${VAR}` placeholder in the manifests under `spec.path` and

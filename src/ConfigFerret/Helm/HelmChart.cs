@@ -98,12 +98,15 @@ public sealed partial class HelmChart
 
     private void AddValuesFile(string path, string displayName) => AddValues(displayName, File.ReadAllText(path));
 
-    private void AddValues(string displayName, string yaml, int lineOffset = 0)
+    /// <param name="displayName">The name of the values layer.</param>
+    /// <param name="yaml">The values.</param>
+    /// <param name="fileLine">For values taken from a value in another file, the line of that file a line of the values is on.</param>
+    private void AddValues(string displayName, string yaml, Func<int, int>? fileLine = null)
     {
         List<YamlNode> docs;
         try
         {
-            docs = Yaml.LoadDocuments(yaml);
+            docs = Yaml.LoadDocuments(yaml, fileLine);
         }
         catch (YamlException ex)
         {
@@ -112,16 +115,16 @@ public sealed partial class HelmChart
 
         foreach (var doc in docs)
         {
-            Walk(doc, prefix: null, displayName, lineOffset);
+            Walk(doc, prefix: null, displayName, fileLine);
         }
     }
 
-    private void Walk(YamlNode node, string? prefix, string file, int lineOffset = 0)
+    private void Walk(YamlNode node, string? prefix, string file, Func<int, int>? fileLine = null)
     {
         foreach (var (key, value) in node.Pairs())
         {
             var path = prefix is null ? key : prefix + "." + key;
-            var line = value.Line() + lineOffset;
+            var line = fileLine is null ? value.Line() : fileLine(value.Line());
             if (value.IsNull())
             {
                 Remove(path, file, line);
@@ -129,7 +132,7 @@ public sealed partial class HelmChart
             else if (value is YamlMappingNode)
             {
                 RemoveLeaf(path, file, line);
-                Walk(value, path, file, lineOffset);
+                Walk(value, path, file, fileLine);
             }
             else
             {
