@@ -240,7 +240,7 @@ public sealed partial class TraceRunner
         // revealed those values are hidden too, wherever they occur.
         tracer.WithOptions(o => o.RevealSensitiveValues = true);
         var revealed = tracer.Trace();
-        var secrets = SecretAudit.Audit(revealed, RenderedBy(kubernetes.FirstOrDefault()));
+        var secrets = SecretAudit.Audit(manifests is null ? revealed : WithWrittenValues(revealed, manifests), RenderedBy(kubernetes.FirstOrDefault()));
         var credentials = revealSecrets ? null : CredentialMask.From(revealed, tracer.Options.RedactedText);
         tracer.WithOptions(o => o.RevealSensitiveValues = revealSecrets);
         var report = tracer.Trace();
@@ -317,6 +317,41 @@ public sealed partial class TraceRunner
         static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
 
         bool HidesCredential(string? value) => credentials?.Holds(value) == true || SecretAudit.LooksLikeCredential(value);
+    }
+
+    // An env entry that refers with $(NAME) to a variable from a Secret takes on the Secret's sensitivity, and has no value
+    // at all when the variable's is not known, such as one from a Secret outside the repository. The text written in the
+    // manifest may still hold a password of its own. When that text looks like a credential, the audit gets it as a plain
+    // layer, so the entry is rated as the committed configuration it is. Only the audit sees this report.
+    private static ProvenanceReport WithWrittenValues(ProvenanceReport revealed, KubernetesManifests manifests)
+    {
+        var written = new Dictionary<(string Workload, string Container, string Name, string Location), string>();
+        foreach (var workload in manifests.Workloads)
+        {
+            foreach (var container in workload.Containers)
+            {
+                foreach (var entry in container.Env)
+                {
+                    if (entry.Source is EnvValueSource.Literal literal)
+                    {
+                        written[(workload.Name, container.Name, entry.Name, $"{workload.SourceName}:{entry.Line}")] = literal.Value;
+                    }
+                }
+            }
+        }
+
+        return written.Count == 0 ? revealed : revealed.With([.. revealed.Settings.Select(s => s with { Steps = [.. s.Steps.Select(Fill)] })], revealed.Warnings);
+
+        ProvenanceStep Fill(ProvenanceStep step) => step with
+        {
+            Value = Written(step) ?? step.Value,
+            IsSensitive = Written(step) is null && step.IsSensitive,
+            Origins = [.. step.Origins.Select(Fill)],
+        };
+
+        string? Written(ProvenanceStep step) =>
+            (step.Value is null || step.IsSensitive) && !step.IsRemoval && step.Reference is WorkloadEnvRef r && step.Location is { } location
+            && written.TryGetValue((r.Workload, r.Container, r.Name, location), out var text) && SecretAudit.LooksLikeCredential(text) ? text : null;
     }
 
     // Names the first five files the code scan skipped, and how many more of all it counted, and says when every class is

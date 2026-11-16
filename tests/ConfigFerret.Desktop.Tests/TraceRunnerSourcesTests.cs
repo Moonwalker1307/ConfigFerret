@@ -813,6 +813,28 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Equal("app: app/appsettings.json is a symbolic link that leads out of the repository, so it was not read.", ex.Message);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_committed_password_next_to_a_reference_to_a_secret_is_exposed(bool secretInRepository)
+    {
+        const string password = "hunter2-fake-committed";
+        var fromSecret = "        - name: TENANT\n          valueFrom:\n            secretKeyRef:\n              name: tenant\n              key: tenant\n";
+        var k8s = ContainerSetting(fromSecret + Variable("Db__ConnectionString", $"Server=db;Password={password};Tenant=$(TENANT)"));
+        if (secretInRepository)
+        {
+            k8s.Paths.Add(Write("k8s/secret.yaml", "apiVersion: v1\nkind: Secret\nmetadata:\n  name: tenant\nstringData:\n  tenant: fake-tenant\n"));
+        }
+
+        var result = await Run(ProfileOf(App("{}"), k8s));
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:ConnectionString");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.DoesNotContain(password, finding.Reason + finding.Where, StringComparison.Ordinal);
+        Assert.DoesNotContain(ValuesOf(result), v => v?.Contains(password, StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(result.Notes, n => n.Contains(password, StringComparison.Ordinal));
+    }
+
     private const string FakeAccountKey = "hunter2-fake-account-key";
 
     private const string FakeGitHubToken = "ghp" + "_FakeTokenForTestsOnly000000000000";
