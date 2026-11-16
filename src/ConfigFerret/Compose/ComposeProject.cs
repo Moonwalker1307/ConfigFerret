@@ -60,6 +60,11 @@ public sealed class ComposeProject
 
     // Shared by the root project and every project it includes.
     private OriginBudget _origins = new(MaxOriginSteps);
+    private readonly HashSet<string> _includedWarnings = new(StringComparer.Ordinal);
+
+    // Every included project loaded for the root project, by its files, project directory, env files and depth, so a
+    // file included many times, or by many files, is loaded once.
+    private Dictionary<string, ComposeProject> _loaded = new(StringComparer.Ordinal);
 
     private ComposeProject(ComposeOptions options, string? projectDirectory, string? displayRoot)
     {
@@ -132,7 +137,7 @@ public sealed class ComposeProject
         options ??= new ComposeOptions();
         var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : Path.GetDirectoryName(paths[0])!;
         var texts = paths.Select(p => new ComposeText(p, File.ReadAllText(p))).ToList();
-        return Create(texts, options, directory, null, 0, paths, new(MaxOriginSteps));
+        return Create(texts, options, directory, null, 0, paths, new(StringComparer.Ordinal), new(MaxOriginSteps));
     }
 
     /// <summary>
@@ -149,12 +154,12 @@ public sealed class ComposeProject
         options ??= new ComposeOptions();
         var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : null;
         var texts = files.Select(f => new ComposeText(null, f.Text, f.Name)).ToList();
-        return Create(texts, options, directory, null, 0, [], new(MaxOriginSteps));
+        return Create(texts, options, directory, null, 0, [], new(StringComparer.Ordinal), new(MaxOriginSteps));
     }
 
-    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including, OriginBudget origins)
+    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including, Dictionary<string, ComposeProject> loaded, OriginBudget origins)
     {
-        var project = new ComposeProject(options, directory, displayRoot) { _origins = origins };
+        var project = new ComposeProject(options, directory, displayRoot) { _loaded = loaded, _origins = origins };
         project.LoadEnvironment(fromCaller: depth == 0);
         foreach (var text in texts)
         {
@@ -296,7 +301,10 @@ public sealed class ComposeProject
                 throw new FormatException($"{at}: includes nest more than {MaxIncludeDepth} deep.");
             }
 
-            var full = paths.Select(p => FullPath(file.Base, InterpolatedName(p, at, _warnings)!)!).ToList();
+            string Resolve(string text, string what) =>
+                FullPath(file.Base, InterpolatedName(text, at, _warnings)!) ?? throw new FormatException($"{at}: the include's {what} is empty or not a valid path.");
+
+            var full = paths.Select(p => Resolve(p!, "path")).ToList();
             if (full.Find(p => including.Contains(p, StringComparer.Ordinal)) is { } cycle)
             {
                 throw new FormatException($"{at}: {Display(cycle)} includes itself.");
@@ -314,11 +322,19 @@ public sealed class ComposeProject
                 continue;
             }
 
-            var projectDirectory = InterpolatedName(item.Str("project_directory"), at, _warnings) is { } dir ? FullPath(file.Base, dir)! : Path.GetDirectoryName(full[0])!;
+            // Like compose, an empty project_directory stands for the default: the first included file's folder.
+            var projectDirectory = item.Str("project_directory") is { Length: > 0 } dir && InterpolatedName(dir, at, _warnings) is { Length: > 0 } interpolated
+                ? FullPath(file.Base, interpolated) ?? throw new FormatException($"{at}: the include's project_directory is not a valid path.")
+                : Path.GetDirectoryName(full[0])!;
             var envFiles = ItemsOrSelf(item.Get("env_file")).Select(e => e.Scalar()).Where(e => e is not null)
-                .Select(e => FullPath(file.Base, InterpolatedName(e, at, _warnings)!)!);
-            var texts = full.Select(p => new ComposeText(p, ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
-            var sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full], _origins);
+                .Select(e => Resolve(e!, "env_file")).ToList();
+            var key = string.Join('\0', [depth.ToString(CultureInfo.InvariantCulture), projectDirectory, .. full, string.Empty, .. envFiles]);
+            if (!_loaded.TryGetValue(key, out var sub))
+            {
+                var texts = full.Select(p => new ComposeText(p, ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
+                _loaded[key] = sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full], _loaded, _origins);
+            }
+
             foreach (var name in sub.ServiceNames)
             {
                 if (_parts.ContainsKey(name) || _included.ContainsKey(name))
@@ -330,7 +346,8 @@ public sealed class ComposeProject
                 _serviceNames.Add(name);
             }
 
-            _warnings.AddRange(sub.Warnings);
+            // A file that several includes bring in reports its problems once.
+            _warnings.AddRange(sub.Warnings.Where(_includedWarnings.Add));
         }
     }
 
