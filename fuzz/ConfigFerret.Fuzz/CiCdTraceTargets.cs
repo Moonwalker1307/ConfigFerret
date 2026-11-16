@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ConfigFerret.AzureDevOps;
 using ConfigFerret.GitLab;
 using Microsoft.Extensions.Configuration;
@@ -18,8 +17,8 @@ internal static partial class Targets
     // The value of the secret server variables. No fuzzed input is likely to hold it, so it shows up if it leaks.
     private const string ServerSecret = "server-secret-m3z7";
 
-    // libFuzzer stops an input after 10 seconds. A trace that keeps to its bounds ends well within this.
-    private static readonly TimeSpan TraceLimit = TimeSpan.FromSeconds(5);
+    // Names the trace hides the value of whatever the server says, such as Smtp.Password.
+    private static readonly System.Text.RegularExpressions.Regex SecretName = new TraceOptions().SensitiveKeyPattern!;
 
     private static readonly string[] CiFileNames = [".gitlab-ci.yml", "ci/deploy.yml", "ci/review/.gitlab-ci.yml"];
 
@@ -93,11 +92,13 @@ internal static partial class Targets
             var type = keyVault && g == 0 ? AzureDevOpsGroupType.AzureKeyVault : AzureDevOpsGroupType.Vsts;
             var vault = type == AzureDevOpsGroupType.AzureKeyVault ? "contoso-kv" : null;
             var inGroup = names.Where((_, i) => i % groupNames.Count == g)
-                .Select((name, i) => new AzureDevOpsVariable(name, i % 2 == 0 || vault is not null ? null : LayerValue, i % 2 == 0, group, g + 1, type, vault))
+                .Select((name, i) => new AzureDevOpsVariable(name, i % 2 == 0 || vault is not null ? null : SecretName.IsMatch(name) ? ServerSecret : LayerValue, i % 2 == 0, group, g + 1, type, vault))
                 .ToList();
             return new AzureDevOpsVariableGroup(g + 1, group, type, null, vault, null, inGroup);
         }));
-        var secrets = groups.Variables.Where(v => v.IsSensitive).Select(v => (v.Group, v.Name)).ToHashSet();
+        // Azure DevOps never returns the value of a secret, so the only values to leak are those of variables that are
+        // secret by name only.
+        var secrets = groups.Variables.Where(v => v.IsSensitive || v.Value == ServerSecret).Select(v => (v.Group, v.Name)).ToHashSet();
 
         var environment = pipelines.Mappings.Select(m => m.Name)
             .Concat(pipelines.Variables.SelectMany(v => new[] { v.Name, AzureDevOpsVariableGroups.ToEnvironmentName(v.Name) }));
@@ -134,23 +135,18 @@ internal static partial class Targets
     }
 
     /// <summary>
-    /// Traces, renders and checks what the trace promises whatever the text: it ends in time and without an exception,
-    /// no setting has more origin steps than the bound or a chain deeper than MaxDepth, a setting whose trace was cut or
-    /// whose winning chain reaches a secret is redacted, no sensitive step shows a value, and a secret's value appears
-    /// nowhere.
+    /// Traces, renders and checks what the trace promises whatever the text: it ends without an exception, no setting has
+    /// more origin steps than the bound or a chain deeper than MaxDepth, a setting whose trace was cut or whose winning
+    /// chain reaches a secret is redacted, no sensitive step shows a value, and a secret's value appears nowhere. How
+    /// long it takes is left to libFuzzer's -timeout, since the work is bounded by the steps and a slow run on a busy or
+    /// instrumented machine is no bug.
     /// </summary>
     private static void CheckTrace(ConfigTracer tracer, string input, Func<ProvenanceStep, bool> isSecret)
     {
-        var watch = Stopwatch.StartNew();
         var report = tracer.Trace();
         var text = report.ToText();
         var json = report.ToJson();
         var explained = report.Settings.Select(s => report.Explain(s.Key)).ToList();
-        if (watch.Elapsed > TraceLimit)
-        {
-            throw new InvariantException($"The trace took {watch.Elapsed.TotalSeconds:0.0}s for {report.Settings.Count} settings.");
-        }
-
         var redacted = tracer.Options.RedactedText;
         var total = 0;
         var settingsCut = report.Settings.Count;
