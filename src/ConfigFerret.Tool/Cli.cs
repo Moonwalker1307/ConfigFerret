@@ -18,9 +18,10 @@ internal static class Cli
         var parse = BuildRootCommand(host, appArgs).Parse(split < 0 ? args : args[..split]);
         if (parse.Errors.Count > 0)
         {
-            foreach (var error in parse.Errors)
+            // An error that quotes a token with = in it, such as a second NAME=VALUE after one --env, could print a value.
+            foreach (var message in parse.Errors.Select(e => e.Message.Contains('=', StringComparison.Ordinal) ? PairNotTaken : e.Message).Distinct(StringComparer.Ordinal))
             {
-                host.Error.WriteLine(error.Message);
+                host.Error.WriteLine(message);
             }
 
             host.Error.WriteLine("Run 'configferret --help' for usage.");
@@ -186,16 +187,25 @@ internal static class Cli
             Arity = ArgumentArity.ZeroOrMore,
         };
 
-        // An unknown option would otherwise be taken for a key and reported as "not set".
+        // An unknown option would otherwise be taken for a key and reported as "not set". So would a second NAME=VALUE
+        // after one --env, which takes one token; a key with = in it can only be traced in the whole report.
         keys.Validators.Add(result =>
         {
-            foreach (var token in result.Tokens.Where(t => t.Value.StartsWith('-')))
+            if (result.Tokens.Any(t => t.Value.Contains('=', StringComparison.Ordinal)))
+            {
+                result.AddError(PairNotTaken);
+            }
+
+            foreach (var token in result.Tokens.Where(t => t.Value.StartsWith('-') && !t.Value.Contains('=', StringComparison.Ordinal)))
             {
                 result.AddError($"Unrecognized option '{token.Value}'.");
             }
         });
         return keys;
     }
+
+    private const string PairNotTaken =
+        "An argument with = in it was not taken by any option. Give each variable its own --env, as in --env A=1 --env B=2.";
 
     /// <summary>One invocation: reads the inputs, builds the tracer and writes the report.</summary>
     private sealed class Run(CliHost host, ParseResult result, OutputOptions output)
