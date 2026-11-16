@@ -1042,7 +1042,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         var tracing = ++_tracing;
         var result = await RunAsync("Tracing the configuration…", async cancellationToken =>
         {
-            profile = _analyzer.BuildProfile(scan, choices, connections, notes);
+            profile = _analyzer.BuildProfile(scan, choices, connections, notes, cancellationToken);
             foreach (var source in profile.Sources.Where(s => SourceFamily(s) is { } family && choices.TurnedOff.Contains(family, StringComparer.Ordinal)))
             {
                 source.Enabled = false;

@@ -642,7 +642,7 @@ public class TraceRunnerSourcesTests : IDisposable
         var scan = RepositoryScanner.Scan(Path.Join(_temp.FullName, "repo"));
         var choices = new AnalysisChoices();
         RepositoryAnalyzer.SuggestChoices(scan, choices, []);
-        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, choices, NoConnections, []);
+        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, choices, NoConnections, [], TestContext.Current.CancellationToken);
         profile.Sources.OfType<KubernetesSource>().Single().Name = "Rendered manifests";
 
         var result = await Run(profile);
