@@ -70,7 +70,7 @@ public sealed class OctopusAccount
         using var document = await GetAsync("api/spaces/all", cancellationToken).ConfigureAwait(false);
         var spaces = Items(document).ToList();
         var match = _space is null
-            ? spaces.FirstOrDefault(s => s.TryGetProperty("IsDefault", out var d) && d.ValueKind == JsonValueKind.True)
+            ? spaces.FirstOrDefault(s => s.ValueKind == JsonValueKind.Object && s.TryGetProperty("IsDefault", out var d) && d.ValueKind == JsonValueKind.True)
             : spaces.FirstOrDefault(s => string.Equals(Text(s, "Name"), _space, StringComparison.OrdinalIgnoreCase) || string.Equals(Text(s, "Id"), _space, StringComparison.OrdinalIgnoreCase));
         _spaceId = match.ValueKind == JsonValueKind.Object && Text(match, "Id") is { } id
             ? id

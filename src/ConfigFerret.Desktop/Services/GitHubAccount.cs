@@ -70,9 +70,7 @@ public sealed class GitHubAccount
     public async Task<string> GetLoginAsync(CancellationToken cancellationToken = default)
     {
         using var document = await GetJsonAsync("user", cancellationToken).ConfigureAwait(false);
-        return document.RootElement.TryGetProperty("login", out var login) && login.ValueKind == JsonValueKind.String
-            ? login.GetString()!
-            : throw new HttpRequestException("GitHub did not say who the token belongs to.");
+        return Text(document.RootElement, "login") ?? throw new HttpRequestException("GitHub did not say who the token belongs to.");
     }
 
     /// <summary>Every repository the user owns, collaborates on or can read through an organization, most recently pushed first.</summary>
@@ -123,7 +121,9 @@ public sealed class GitHubAccount
         try
         {
             using var document = await GetJsonAsync($"repos/{RepositoryPath(fullName)}/environments?per_page=100", cancellationToken).ConfigureAwait(false);
-            if (!document.RootElement.TryGetProperty("environments", out var environments) || environments.ValueKind != JsonValueKind.Array)
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("environments", out var environments)
+                || environments.ValueKind != JsonValueKind.Array)
             {
                 return [];
             }
