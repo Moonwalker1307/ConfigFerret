@@ -10,6 +10,8 @@ namespace ConfigFerret.AzureDevOps;
 internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, AzureDevOpsTraceOptions options) : IOriginResolver
 {
     private readonly List<string> _pipelineWarnings = options.ReadConfiguredPipelines();
+    private ILookup<string, AzurePipelinesVariable>? _byName;
+    private int _indexed = -1;
     private bool _warned;
 
     /// <summary>One entry per variable group variable, matching the steps' references.</summary>
@@ -81,7 +83,10 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
             : $"matched by name: scripts see {candidate.Name} as {name}";
 
     // Every group and pipeline variable that sets name, lowest priority first: a group or variable listed later in the
-    // pipeline's variables wins, and groups no pipeline file links come first.
+    // pipeline's variables wins, and groups no pipeline file links come first. When except refers to name, a pipeline
+    // variable that refers back to name cannot supply a value, so it is left out: Version: $(Version) in every stage
+    // would otherwise lead from each stage to all the others, for each level followed. What a variable that refers to
+    // itself leads to in the file is only inferred, since it is not certain which one Azure Pipelines expands it to.
     private List<Candidate> Chain(string name, string? group, AzurePipelinesVariable? except, bool byEnvironmentName = false)
     {
         bool Named(string candidate) => byEnvironmentName
@@ -92,12 +97,27 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
             .Select((v, index) => (Variable: v, Index: index))
             .Where(v => Named(v.Variable.Name) && (group is null || string.Equals(v.Variable.Group, group, StringComparison.OrdinalIgnoreCase)))
             .Select(v => new Candidate(v.Variable.Name, v.Variable, null, options.GroupOrder(v.Variable.Group) ?? -1, v.Index));
+        var self = except is not null && string.Equals(except.Name, name, StringComparison.OrdinalIgnoreCase);
         var fromYaml = group is not null
             ? []
-            : options.Variables
-                .Where(v => Named(v.Name) && !ReferenceEquals(v, except))
-                .Select(v => new Candidate(v.Name, null, v, v.Order, 0));
+            : except is null
+                ? options.Variables.Where(v => Named(v.Name)).Select(v => new Candidate(v.Name, null, v, v.Order, 0))
+                : Exactly(name)
+                    .Where(v => !ReferenceEquals(v, except) && !string.Equals(AzureDevOpsTraceOptions.MacroTarget(v.Value), name, StringComparison.OrdinalIgnoreCase))
+                    .Select(v => new Candidate(v.Name, null, v, v.Order, 0, self));
         return fromGroups.Concat(fromYaml).OrderBy(c => c.Order).ThenBy(c => c.Index).ToList();
+    }
+
+    // The pipeline variables named name, in file order. They are indexed once, and again only when a pipeline was added.
+    private IEnumerable<AzurePipelinesVariable> Exactly(string name)
+    {
+        if (_byName is null || _indexed != options.Variables.Count)
+        {
+            _byName = options.Variables.ToLookup(v => v.Name, StringComparer.OrdinalIgnoreCase);
+            _indexed = options.Variables.Count;
+        }
+
+        return _byName[name];
     }
 
     private ProvenanceStep ToStep(Candidate candidate, ProvenanceStep layer, string how, bool inferred)
@@ -162,7 +182,7 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
             Location = $"{yaml.File} line {yaml.Line}",
             Value = yaml.Value,
             IsSensitive = SensitiveName().IsMatch(yaml.Name),
-            IsInferred = inferred,
+            IsInferred = inferred || candidate.Inferred,
             Note = string.Join("; ", notes),
             Reference = new AzurePipelinesVariableRef(yaml.File, yaml.Line, yaml.Name),
         };
@@ -176,7 +196,7 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
 
     private AzureDevOpsVariableRef Reference(AzureDevOpsVariable variable) => new(groups.Project, variable.Group, variable.Name);
 
-    private sealed record Candidate(string Name, AzureDevOpsVariable? Variable, AzurePipelinesVariable? Yaml, int Order, int Index);
+    private sealed record Candidate(string Name, AzureDevOpsVariable? Variable, AzurePipelinesVariable? Yaml, int Order, int Index, bool Inferred = false);
 
     // The default rule a trace uses for configuration keys. A resolver is built without the trace, so it cannot see the
     // trace's own SensitiveKeyPattern.
