@@ -12,6 +12,7 @@ internal sealed record AppInputs(
     IReadOnlyList<string> ConfigFiles,
     bool ConfigFilesBeforeEnvironment,
     IReadOnlyList<string> EnvironmentPrefixes,
+    bool UseHostEnvironmentVariables,
     IReadOnlyDictionary<string, string?> Environment,
     IReadOnlyList<string> CommandLine,
     string? UserSecretsId,
@@ -19,8 +20,9 @@ internal sealed record AppInputs(
 
 /// <summary>
 /// Builds configuration the way <c>WebApplication.CreateBuilder</c> and <c>Host.CreateApplicationBuilder</c> do,
-/// from files on disk instead of a running app: <c>appsettings.json</c>, <c>appsettings.{Environment}.json</c>, user
-/// secrets in Development, environment variables, the command line, then the settings files the app adds itself.
+/// from files on disk instead of a running app: the <c>ASPNETCORE_</c> and <c>DOTNET_</c> environment variables,
+/// <c>appsettings.json</c>, <c>appsettings.{Environment}.json</c>, user secrets in Development, environment variables,
+/// the command line, then the settings files the app adds itself.
 /// </summary>
 internal static partial class AppConfiguration
 {
@@ -48,7 +50,14 @@ internal static partial class AppConfiguration
         var configFiles = inputs.ConfigFiles.Select(file => Path.GetFullPath(InputReader.RequireFile(file))).ToList();
         var configTargets = configFiles.Select(f => Kustomization.RealPath(f)).OfType<string>().ToHashSet(PathComparer);
 
+        // WebApplication.CreateBuilder adds these with their prefix removed, below everything else.
         var builder = new ConfigurationBuilder();
+        if (inputs.UseHostEnvironmentVariables)
+        {
+            builder.Add(new SimulatedEnvironmentVariablesSource(inputs.Environment, "ASPNETCORE_"));
+            builder.Add(new SimulatedEnvironmentVariablesSource(inputs.Environment, "DOTNET_"));
+        }
+
         var baseFile = Path.Join(directory, "appsettings.json");
         var environmentFile = Path.Join(directory, $"appsettings.{environmentName}.json");
         var foundAny = false;
@@ -95,7 +104,8 @@ internal static partial class AppConfiguration
             }
         }
 
-        foreach (var prefix in inputs.EnvironmentPrefixes)
+        // The hosts always add the environment variables without a prefix; each prefix is another call after it.
+        foreach (var prefix in inputs.UseHostEnvironmentVariables ? [string.Empty, .. inputs.EnvironmentPrefixes] : inputs.EnvironmentPrefixes)
         {
             builder.Add(new SimulatedEnvironmentVariablesSource(inputs.Environment, prefix));
         }

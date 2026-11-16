@@ -83,6 +83,35 @@ public class UnusedCommandTests
     }
 
     [Fact]
+    public async Task Leaves_out_the_raw_key_of_an_ASPNETCORE_or_DOTNET_variable_the_app_reads()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Timeout": 30 } }""", ct);
+            var reads = Path.Join(app.FullName, "reads.txt");
+            await File.WriteAllTextAsync(reads, "Db:Timeout\nKestrel:Endpoints:Http:Url\n", ct);
+
+            var result = await new ToolRunner().RunAsync(
+                "unused", "-a", app.FullName, "--no-user-secrets", "--reads", reads, "--format", "json",
+                "--env", "DOTNET_Db__Timeout=5", "--env", "ASPNETCORE_Kestrel__Endpoints__Http__Url=http://+:8080", "--env", "DOTNET_Unread__Key=x");
+
+            Assert.Equal(0, result.ExitCode);
+            using var json = JsonDocument.Parse(result.Output);
+            var notRead = json.RootElement.GetProperty("notRead").EnumerateArray().Select(s => s.GetProperty("key").GetString()).ToList();
+            Assert.DoesNotContain("DOTNET_Db:Timeout", notRead);
+            Assert.DoesNotContain("ASPNETCORE_Kestrel:Endpoints:Http:Url", notRead);
+            Assert.Contains("Unread:Key", notRead);
+            Assert.Contains("DOTNET_Unread:Key", notRead);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Exits_with_1_on_findings_only_with_exit_code()
     {
         Assert.Equal(0, (await new ToolRunner().RunAsync(HelmRelease())).ExitCode);
