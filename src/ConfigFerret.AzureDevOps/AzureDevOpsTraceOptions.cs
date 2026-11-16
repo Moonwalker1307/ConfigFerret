@@ -7,8 +7,10 @@ namespace ConfigFerret.AzureDevOps;
 public sealed partial class AzureDevOpsTraceOptions
 {
     private readonly Dictionary<string, AzurePipelinesMapping> _mappings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(PipelineScope Scope, string Name), AzurePipelinesMapping> _links = [];
     private readonly List<AzurePipelinesVariable> _variables = [];
     private readonly List<AzurePipelinesGroupLink> _groups = [];
+    private readonly Dictionary<object, PipelineScope> _scopes = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<string> _readPipelines = new(StringComparer.Ordinal);
     private int _order;
 
@@ -32,7 +34,10 @@ public sealed partial class AzureDevOpsTraceOptions
     /// </summary>
     public IList<string> Pipelines { get; } = [];
 
-    /// <summary>The <c>NAME: $(Var)</c> links read from pipeline files.</summary>
+    /// <summary>
+    /// The <c>NAME: $(Var)</c> links read from pipeline files: one link per name, ignoring case, a later line replacing
+    /// an earlier one. The trace itself follows each stage's or job's own link.
+    /// </summary>
     public IReadOnlyCollection<AzurePipelinesMapping> Mappings => _mappings.Values;
 
     /// <summary>The variables set in pipeline files (<c>- name: N</c> with <c>value: V</c>, or <c>N: V</c>), in file order.</summary>
@@ -40,6 +45,9 @@ public sealed partial class AzureDevOpsTraceOptions
 
     /// <summary>The variable groups pipeline files link with <c>- group: NAME</c>, in file order.</summary>
     public IReadOnlyList<AzurePipelinesGroupLink> GroupLinks => _groups;
+
+    /// <summary>How many pipeline files were read, so a resolver knows when what it indexed is out of date.</summary>
+    internal int Version { get; private set; }
 
     /// <summary>
     /// Links the environment variable, Kubernetes env entry or ConfigMap/Secret key <paramref name="name"/> to the variable
@@ -58,7 +66,8 @@ public sealed partial class AzureDevOpsTraceOptions
     /// Reads a pipeline YAML file: its <c>variables:</c> blocks (<c>- group: NAME</c>, <c>- name: N</c> with
     /// <c>value: V</c>, and <c>N: V</c>), and every <c>NAME: $(Var)</c> line elsewhere, for example in a step's
     /// <c>env:</c> block, so <c>NAME</c> is traced to <c>Var</c>. <c>$[variables.Var]</c> and
-    /// <c>${{ variables.Var }}</c> work too.
+    /// <c>${{ variables.Var }}</c> work too. The stage and job each one is in is read as well, so that a job only gets
+    /// the pipeline's variables and groups, its stage's and its own.
     /// </summary>
     public AzureDevOpsTraceOptions AddPipeline(string path)
     {
@@ -76,6 +85,7 @@ public sealed partial class AzureDevOpsTraceOptions
         var lines = yaml.Split('\n');
         var blockIndent = -1;
         Item? item = null;
+        var parts = new List<(int Indent, bool Stage, string Name)>();
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i].TrimEnd('\r');
@@ -86,6 +96,15 @@ public sealed partial class AzureDevOpsTraceOptions
 
             var indent = YamlLine.Indent(line);
             var text = line[indent..].TrimEnd();
+
+            // The stage and job a line is in: - stage: NAME, - job: NAME and - deployment: NAME items.
+            parts.RemoveAll(p => indent <= p.Indent);
+            if (Part().Match(text) is { Success: true } part && YamlLine.Scalar(part.Groups["name"].Value) is { Length: > 0 } partName)
+            {
+                parts.Add((indent, part.Groups["kind"].Value == "stage", partName));
+            }
+
+            var scope = new PipelineScope(parts.FindLast(p => p.Stage).Name, parts.FindLast(p => !p.Stage).Name);
             if (blockIndent >= 0 && (indent < blockIndent || (indent == blockIndent && text[0] != '-')))
             {
                 Flush(item, sourceName);
@@ -101,9 +120,11 @@ public sealed partial class AzureDevOpsTraceOptions
                 }
                 else if (Link().Match(text) is { Success: true } link)
                 {
-                    // A later line (usually a narrower job or step env block) replaces an earlier one with the same name.
+                    // A later line replaces an earlier one with the same name, in Mappings and in the same stage or job.
                     var name = link.Groups["name"].Value;
-                    _mappings[name] = new AzurePipelinesMapping(name, link.Groups["var"].Value, null, Where(sourceName, i));
+                    var mapping = new AzurePipelinesMapping(name, link.Groups["var"].Value, null, Where(sourceName, i));
+                    _mappings[name] = mapping;
+                    _links[(scope, name.ToUpperInvariant())] = mapping;
                 }
 
                 continue;
@@ -112,7 +133,7 @@ public sealed partial class AzureDevOpsTraceOptions
             if (text[0] == '-')
             {
                 Flush(item, sourceName);
-                item = new Item();
+                item = new Item(scope);
                 text = text[1..].TrimStart();
             }
 
@@ -130,11 +151,12 @@ public sealed partial class AzureDevOpsTraceOptions
             }
             else if (value is not null)
             {
-                _variables.Add(new AzurePipelinesVariable(key, value, sourceName, i + 1, _order++));
+                _variables.Add(Scoped(new AzurePipelinesVariable(key, value, sourceName, i + 1, _order++), scope));
             }
         }
 
         Flush(item, sourceName);
+        Version++;
         return this;
     }
 
@@ -147,34 +169,43 @@ public sealed partial class AzureDevOpsTraceOptions
 
         if (item.Fields.TryGetValue("group", out var group) && !string.IsNullOrWhiteSpace(group.Value))
         {
-            _groups.Add(new AzurePipelinesGroupLink(group.Value, Where(sourceName, group.Line), _order++));
+            _groups.Add(Scoped(new AzurePipelinesGroupLink(group.Value, Where(sourceName, group.Line), _order++), item.Scope));
         }
         else if (item.Fields.TryGetValue("name", out var name) && !string.IsNullOrWhiteSpace(name.Value) && VariableName().IsMatch(name.Value))
         {
             var value = item.Fields.TryGetValue("value", out var v) ? v.Value : null;
-            _variables.Add(new AzurePipelinesVariable(name.Value, value ?? string.Empty, sourceName, name.Line + 1, _order++));
+            _variables.Add(Scoped(new AzurePipelinesVariable(name.Value, value ?? string.Empty, sourceName, name.Line + 1, _order++), item.Scope));
         }
+    }
+
+    private T Scoped<T>(T read, PipelineScope scope)
+        where T : notnull
+    {
+        _scopes[read] = scope;
+        return read;
     }
 
     private static string Where(string sourceName, int index) => string.Create(CultureInfo.InvariantCulture, $"{sourceName} line {index + 1}");
 
-    internal AzurePipelinesMapping? FindMapping(string name)
+    internal AzurePipelinesMapping? ExplicitLink(string name)
     {
-        if (Links.TryGetValue(name, out var link) && !string.IsNullOrWhiteSpace(link))
+        if (!Links.TryGetValue(name, out var link) || string.IsNullOrWhiteSpace(link))
         {
-            link = link.Trim();
-            var slash = link.LastIndexOf('/');
-            return slash > 0 && slash < link.Length - 1
-                ? new AzurePipelinesMapping(name, link[(slash + 1)..].Trim(), link[..slash].Trim(), null)
-                : new AzurePipelinesMapping(name, link.Trim('/'), null, null);
+            return null;
         }
 
-        return _mappings.GetValueOrDefault(name);
+        link = link.Trim();
+        var slash = link.LastIndexOf('/');
+        return slash > 0 && slash < link.Length - 1
+            ? new AzurePipelinesMapping(name, link[(slash + 1)..].Trim(), link[..slash].Trim(), null)
+            : new AzurePipelinesMapping(name, link.Trim('/'), null, null);
     }
 
-    /// <summary>The position of the first <c>- group:</c> line for <paramref name="group"/>, or null when no file links it.</summary>
-    internal int? GroupOrder(string group) =>
-        _groups.FirstOrDefault(g => string.Equals(g.Group, group, StringComparison.OrdinalIgnoreCase))?.Order;
+    /// <summary>The links from pipeline files, the last one for each stage or job and name, with the stage or job each one is in.</summary>
+    internal IEnumerable<(AzurePipelinesMapping Mapping, PipelineScope Scope)> FileLinks() => _links.Select(l => (l.Value, l.Key.Scope));
+
+    /// <summary>The stage and job a pipeline variable or <c>- group:</c> line is in.</summary>
+    internal PipelineScope ScopeOf(object read) => _scopes.GetValueOrDefault(read);
 
     /// <summary>Reads the files in <see cref="Pipelines"/> once, and returns a warning for each one that cannot be read.</summary>
     internal List<string> ReadConfiguredPipelines()
@@ -203,10 +234,15 @@ public sealed partial class AzureDevOpsTraceOptions
     internal static string? MacroTarget(string? value) =>
         value is not null && WholeMacro().Match(value) is { Success: true } match ? match.Groups["var"].Value : null;
 
-    private sealed class Item
+    private sealed class Item(PipelineScope scope)
     {
+        public PipelineScope Scope { get; } = scope;
+
         public Dictionary<string, (string? Value, int Line)> Fields { get; } = new(StringComparer.Ordinal);
     }
+
+    [GeneratedRegex("""^-\s+(?<kind>stage|job|deployment)\s*:(?:\s+(?<name>.*))?$""", RegexOptions.CultureInvariant)]
+    private static partial Regex Part();
 
     [GeneratedRegex("""^variables\s*:\s*(?:#.*)?$""", RegexOptions.CultureInvariant)]
     private static partial Regex VariablesKey();
@@ -249,3 +285,17 @@ public sealed record AzurePipelinesVariable(string Name, string Value, string Fi
 /// <param name="Where">The file and line.</param>
 /// <param name="Order">Its position among the variables and groups read, used for precedence: a later one wins.</param>
 public sealed record AzurePipelinesGroupLink(string Group, string Where, int Order);
+
+/// <summary>The stage and job a pipeline file line is in; both null at the pipeline's top level.</summary>
+internal readonly record struct PipelineScope(string? Stage, string? Job)
+{
+    public bool IsPipeline => Stage is null && Job is null;
+
+    /// <summary>Whether a job in <paramref name="other"/> gets what is set here: this is the pipeline, its stage or itself.</summary>
+    public bool Covers(PipelineScope other) =>
+        (Stage is null || string.Equals(Stage, other.Stage, StringComparison.OrdinalIgnoreCase))
+        && (Job is null || string.Equals(Job, other.Job, StringComparison.OrdinalIgnoreCase));
+
+    public override string ToString() =>
+        IsPipeline ? "the pipeline" : Job is null ? $"stage {Stage}" : Stage is null ? $"job {Job}" : $"job {Job} in stage {Stage}";
+}

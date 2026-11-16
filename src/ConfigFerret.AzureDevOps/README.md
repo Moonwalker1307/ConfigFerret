@@ -96,8 +96,32 @@ variables that are themselves `Other: $(Other)`, since they cannot supply a valu
 marked as inferred, since which one Azure Pipelines expands the reference to is not certain, and variable group
 variables are listed as usual.
 
-When several groups or pipeline variables set the same name, they are listed lowest priority first, in the order the
-pipeline's `variables:` lists them (`- group: X` lines and variables), so the last one wins, the same as Azure Pipelines.
+A job gets the pipeline's variables and groups, its stage's and its own (`- stage:`, `- job:` and `- deployment:`
+items), never another stage's or job's: a `- group:` line, a variable and an `env:` link count for the stage or job
+they are in, and a variable followed from a stage or job is looked up there. A group that no pipeline file links counts
+everywhere. Steps for a stage or job variable name it, as in `Azure Pipelines variable Db.Name (stage Staging)`.
+
+Once a name has a pipeline file link, every stage or job that may give scripts that name is followed: the links in
+stages, jobs and at the top level, and the stages and jobs without a link for it where a pipeline variable, or a group
+variable that is not secret, has that name. When they come to different values, every one of them is listed as an
+inferred step and a warning names them; the same goes for stages or jobs that set a name to different values in
+`variables:`, where a stage's variable counts for the stage's jobs that do not set it again, so a stage and one of its
+jobs can disagree too. A value that is a reference is compared by what it comes to in its own stage or job, and group
+variables are compared by value. A value the trace cannot compare, such as a secret, a value with a reference inside it
+or a reference that stages or jobs below may set again, keeps them alternatives, and the warning then says the values
+cannot be compared rather than that they differ. None of the alternatives is compared with the value seen here, and
+the one that comes to that value goes last (the tracer marks the last step effective), also when it is reached through
+a whole-value reference such as `Alias: $(Timeout)`. When any of them may hold a secret, all of them are marked
+sensitive. There is no option to say which stage or job the trace is about.
+
+One trace step looks at no more than 1,000 pipeline variables and group variables, the most upstream steps the tracer
+keeps for a setting. Past that, the stages and jobs not reached are left out, every step listed is marked inferred and
+sensitive, and a warning says that not all of them were followed.
+
+When several groups or pipeline variables set the same name, they are listed lowest priority first, so the last one
+wins, as in Azure Pipelines: a job's own win over its stage's, and a stage's over the pipeline's, wherever their
+`variables:` block is written; within one of them, the order its `variables:` lists them (`- group: X` lines and
+variables) decides.
 Groups that no pipeline file read links come first and say so. Without pipeline files, groups are in `GroupNames` order
 (or by id when every group is read).
 
@@ -118,6 +142,7 @@ Groups that no pipeline file read links come first and say so. Without pipeline 
 ## Limits
 
 - Pipeline YAML is read line by line, not with a full YAML parser: templates (`- template:`), template expressions and
-  runtime conditions are not evaluated, and every `variables:` block in a file counts.
+  runtime conditions are not evaluated, so every `variables:` block counts for its stage or job, whatever its
+  condition, and a job's `environment:` is not used to pick it.
 - Variable group permissions per pipeline and library security are not checked.
 - At most 100 pages of 100 groups are read per group name.
