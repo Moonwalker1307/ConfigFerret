@@ -578,6 +578,45 @@ public class ConfigTracerTests
     }
 
     [Theory]
+    [InlineData("MYSQLCONNSTR_")]
+    [InlineData("SQLAZURECONNSTR_")]
+    [InlineData("SQLCONNSTR_")]
+    [InlineData("POSTGRESQLCONNSTR_")]
+    [InlineData("CUSTOMCONNSTR_")]
+    [InlineData("APIHUBCONNSTR_")]
+    [InlineData("DOCDBCONNSTR_")]
+    [InlineData("EVENTHUBCONNSTR_")]
+    [InlineData("NOTIFICATIONHUBCONNSTR_")]
+    [InlineData("REDISCACHECONNSTR_")]
+    [InlineData("SERVICEBUSCONNSTR_")]
+    public void Names_and_redacts_each_connection_string_variable_without_a_key_pattern(string csPrefix)
+    {
+        // The variable name alone makes the value secret, so this holds with the sensitive-key pattern turned off.
+        var variable = csPrefix + "CfTestEach";
+        Environment.SetEnvironmentVariable(variable, "Server=db;Password=fake-each");
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+            var report = ConfigTracer.For(configuration)
+                .WithOptions(o =>
+                {
+                    o.Environment = new Dictionary<string, string?> { [variable] = "Server=db;Password=fake-each" };
+                    o.SensitiveKeyPattern = null;
+                })
+                .Trace();
+
+            var setting = Assert.Single(report.Settings, s => s.Key == "ConnectionStrings:CfTestEach");
+            Assert.Equal("environment variable " + variable, setting.EffectiveStep!.Source);
+            Assert.True(setting.IsSensitive);
+            Assert.Equal("***", setting.Value);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    [Theory]
     [InlineData("Db:Password", true)]
     [InlineData("Db:Pass", true)]
     [InlineData("DB_PASS", true)]

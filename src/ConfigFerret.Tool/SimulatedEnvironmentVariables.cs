@@ -1,3 +1,4 @@
+using ConfigFerret.DotNet;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.EnvironmentVariables;
 
@@ -20,15 +21,6 @@ internal sealed class SimulatedEnvironmentVariablesSource(IReadOnlyDictionary<st
 internal sealed class SimulatedEnvironmentVariablesProvider(IReadOnlyDictionary<string, string?> variables, string prefix)
     : EnvironmentVariablesConfigurationProvider(prefix)
 {
-    private static readonly (string Prefix, string? ProviderName)[] ConnectionStringPrefixes =
-    [
-        ("MYSQLCONNSTR_", "MySql.Data.MySqlClient"),
-        ("SQLAZURECONNSTR_", "System.Data.SqlClient"),
-        ("SQLCONNSTR_", "System.Data.SqlClient"),
-        ("POSTGRESQLCONNSTR_", "Npgsql"),
-        ("CUSTOMCONNSTR_", null),
-    ];
-
     private readonly string _normalizedPrefix = Normalize(prefix);
 
     public override void Load()
@@ -36,7 +28,7 @@ internal sealed class SimulatedEnvironmentVariablesProvider(IReadOnlyDictionary<
         var data = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in variables)
         {
-            var connectionString = ConnectionStringPrefixes.FirstOrDefault(c => name.StartsWith(c.Prefix, StringComparison.OrdinalIgnoreCase));
+            var connectionString = ProviderDescriber.ConnectionStringPrefixes.FirstOrDefault(c => name.StartsWith(c.Prefix, StringComparison.OrdinalIgnoreCase));
             if (connectionString.Prefix is not null)
             {
                 var key = "ConnectionStrings:" + Normalize(name[connectionString.Prefix.Length..]);

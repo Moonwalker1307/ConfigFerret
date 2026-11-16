@@ -53,6 +53,12 @@ public sealed class ProviderDescriberTests : IDisposable
     [InlineData("SQLCONNSTR_")]
     [InlineData("CUSTOMCONNSTR_")]
     [InlineData("POSTGRESQLCONNSTR_")]
+    [InlineData("APIHUBCONNSTR_")]
+    [InlineData("DOCDBCONNSTR_")]
+    [InlineData("EVENTHUBCONNSTR_")]
+    [InlineData("NOTIFICATIONHUBCONNSTR_")]
+    [InlineData("REDISCACHECONNSTR_")]
+    [InlineData("SERVICEBUSCONNSTR_")]
     public void Maps_every_connection_string_prefix(string csPrefix)
     {
         var name = "APP_" + csPrefix + "Main";

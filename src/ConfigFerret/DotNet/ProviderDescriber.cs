@@ -11,8 +11,24 @@ namespace ConfigFerret.DotNet;
 /// <summary>Turns a .NET configuration provider and key into a provenance step.</summary>
 internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> environment, TraceDiagnostics diagnostics)
 {
-    private static readonly string[] ConnectionStringPrefixes =
-        ["MYSQLCONNSTR_", "SQLAZURECONNSTR_", "SQLCONNSTR_", "CUSTOMCONNSTR_", "POSTGRESQLCONNSTR_"];
+    /// <summary>
+    /// The variable prefixes the .NET environment variables provider maps to <c>ConnectionStrings</c> keys, with the
+    /// provider name it also sets as <c>ConnectionStrings:{name}_ProviderName</c>, if any.
+    /// </summary>
+    internal static readonly (string Prefix, string? ProviderName)[] ConnectionStringPrefixes =
+    [
+        ("MYSQLCONNSTR_", "MySql.Data.MySqlClient"),
+        ("SQLAZURECONNSTR_", "System.Data.SqlClient"),
+        ("SQLCONNSTR_", "System.Data.SqlClient"),
+        ("POSTGRESQLCONNSTR_", "Npgsql"),
+        ("CUSTOMCONNSTR_", null),
+        ("APIHUBCONNSTR_", null),
+        ("DOCDBCONNSTR_", null),
+        ("EVENTHUBCONNSTR_", null),
+        ("NOTIFICATIONHUBCONNSTR_", null),
+        ("REDISCACHECONNSTR_", null),
+        ("SERVICEBUSCONNSTR_", null),
+    ];
 
     // Configuration providers that read only secrets, so every value they set is secret whatever its key. They are
     // matched by type name so the package does not have to depend on them. Stores that also hold plain settings, such
@@ -121,7 +137,7 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
     {
         var rest = name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? name[prefix.Length..] : name;
         return ConnectionStringPrefixes.Any(cs =>
-            name.StartsWith(cs, StringComparison.OrdinalIgnoreCase) || rest.StartsWith(cs, StringComparison.OrdinalIgnoreCase));
+            name.StartsWith(cs.Prefix, StringComparison.OrdinalIgnoreCase) || rest.StartsWith(cs.Prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     internal string? FindEnvironmentVariable(string prefix, string key, string? value)
@@ -155,9 +171,9 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
             return true;
         }
 
-        foreach (var cs in ConnectionStringPrefixes)
+        foreach (var (cs, _) in ConnectionStringPrefixes)
         {
-            // Without a prefix, .NET maps SQLCONNSTR_Main to ConnectionStrings:Main, and most of these also add
+            // Without a prefix, .NET maps SQLCONNSTR_Main to ConnectionStrings:Main, and some of these also add
             // ConnectionStrings:Main_ProviderName.
             if (name.StartsWith(cs, StringComparison.OrdinalIgnoreCase))
             {
