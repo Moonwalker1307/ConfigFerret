@@ -479,6 +479,82 @@ public sealed class KustomizationGeneratorTests : IDisposable
         Assert.Contains("Kustomization cycle at", Assert.Throws<InvalidOperationException>(() => Load()).Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("resources")]
+    [InlineData("components")]
+    public async Task Stops_when_bases_fan_out_so_far_that_loading_would_never_finish(string field)
+    {
+        // Each folder names both folders of the next level, so the last level is reached 2^24 times.
+        const int depth = 24;
+        var kind = field == "components" ? "Component" : "Kustomization";
+        for (var i = 0; i < depth; i++)
+        {
+            foreach (var side in new[] { "a", "b" })
+            {
+                Write($"l{i}{side}/kustomization.yaml", $"kind: {kind}\n{field}: [../l{i + 1}a, ../l{i + 1}b]\n");
+            }
+        }
+
+        foreach (var side in new[] { "a", "b" })
+        {
+            Write($"l{depth}{side}/kustomization.yaml", $"kind: {kind}\nconfigMapGenerator:\n  - name: c\n    behavior: merge\n    literals: [A=1]\n");
+        }
+
+        Write("app/kustomization.yaml", field == "components" ? "resources: [../base]\ncomponents: [../l0a]\n" : "resources: [../base, ../l0a]\n");
+        Write("base/kustomization.yaml", "configMapGenerator:\n  - name: c\n    literals: [A=0]\n");
+
+        var load = Task.Run(() => Load(), TestContext.Current.CancellationToken);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => load.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken));
+        Assert.Contains("more than 10000 kustomizations", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Stops_at_bases_nested_more_than_100_deep()
+    {
+        // d0 names d1, which names d2, down to d100: 101 kustomizations in one line of bases.
+        for (var i = 0; i < 100; i++)
+        {
+            Write($"d{i}/kustomization.yaml", $"resources: [../d{i + 1}]\n");
+        }
+
+        Write("d100/kustomization.yaml", "configMapGenerator:\n  - name: c\n    literals: [A=1]\n");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Load("d0"));
+        Assert.Contains("more than 100 deep", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("d100", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("1", Load("d1").ConfigMaps["c"].Keys["A"][0].Value);
+    }
+
+    [Theory]
+    [InlineData("env file", "envs", "big.env")]
+    [InlineData("kustomization", "big", "kustomization.yaml")]
+    public void Stops_when_the_files_it_reads_hold_more_than_256_MiB(string kind, string folder, string file)
+    {
+        // An env file of 2,097,155 characters, named 127 times, is read again for each name: with the two small
+        // kustomizations that is 266,339,9xx characters, 2,095,5xx below 256 MiB, so the next read of a file that size
+        // crosses it. That is a 128th name of the env file, or else the kustomization in big.
+        var big = "# " + new string('x', 2 * 1024 * 1024) + "\n";
+        Write("envs/big.env", big);
+        Write("big/kustomization.yaml", big);
+        var envs = string.Join(", ", Enumerable.Repeat("big.env", kind == "env file" ? 128 : 127));
+        Write("envs/kustomization.yaml", $"configMapGenerator:\n  - name: c\n    envs: [{envs}]\n");
+        Write("app/kustomization.yaml", kind == "env file" ? "resources: [../envs]\n" : "resources: [../envs, ../big]\n");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Load());
+        Assert.Contains("more than 256 MiB", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.Join(_root, folder, file), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Stops_at_a_kustomization_that_holds_more_than_16_MiB()
+    {
+        Write("app/kustomization.yaml", "#" + new string('x', 16 * 1024 * 1024) + "\n");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Load());
+        Assert.Contains("more than 16 MiB", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.Join(_root, "app", "kustomization.yaml"), ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Resolver_lists_each_kustomization_step_for_a_key()
     {

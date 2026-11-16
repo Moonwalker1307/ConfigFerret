@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using ConfigFerret.Internal;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
@@ -17,6 +18,19 @@ namespace ConfigFerret.Kustomize;
 public sealed class Kustomization
 {
     private static readonly string[] FileNames = ["kustomization.yaml", "kustomization.yml", "Kustomization"];
+
+    // Like kustomize, a base or component is read again for every kustomization that names it, so bases that each name
+    // two folders of the next level are read 2^levels times. These limits are far above what a real overlay needs.
+    private const int MaxLoads = 10_000;
+
+    // Each nested base or component is a level of recursion, and a stack overflow ends the process.
+    private const int MaxDepth = 100;
+
+    // The text of the kustomization and env files one Load reads, counted again each time a file is read again.
+    private const long MaxChars = 256L * 1024 * 1024;
+
+    // The text of one kustomization or env file. Real ones hold a few KB, and each is kept whole while it is parsed.
+    private const int MaxFileChars = 16 * 1024 * 1024;
 
     private Kustomization(List<GeneratedData> generated)
     {
@@ -41,16 +55,18 @@ public sealed class Kustomization
     /// <c>kustomize build --load-restrictor LoadRestrictionsNone</c> does. Bases and resources may be anywhere either way.
     /// </param>
     /// <exception cref="InvalidOperationException">
-    /// An env file is outside its kustomization's folder, the bases or components form a cycle, or a <c>merge</c> or
-    /// <c>replace</c> generator without a <c>namespace</c> of its own fits more than one generated object by its current or
-    /// an earlier name.
+    /// An env file is outside its kustomization's folder, a <c>merge</c> or <c>replace</c> generator without a
+    /// <c>namespace</c> of its own fits more than one generated object by its current or an earlier name, or the bases and
+    /// components form a cycle. Also when they nest more than 100 deep, when reading them takes more than 10,000
+    /// kustomizations, when one kustomization or env file holds more than 16 MiB of text, or when all the kustomization and
+    /// env files read hold more than 256 MiB. A base, component or env file counts again each time something names it.
     /// </exception>
     public static Kustomization Load(string directory, bool allowFilesOutsideFolder = false)
     {
         ArgumentNullException.ThrowIfNull(directory);
         var root = Path.GetFullPath(directory);
         var state = new List<GeneratedData>();
-        LoadDirectory(root, allowFilesOutsideFolder, [], state);
+        LoadDirectory(root, allowFilesOutsideFolder, [], state, new Budget());
 
         // Show kustomization files relative to the closest folder that holds all of them.
         var files = state.SelectMany(g => g.Keys.Values).SelectMany(h => h).Select(h => h.Kustomization).Distinct().ToList();
@@ -93,11 +109,23 @@ public sealed class Kustomization
     /// Applies the kustomization in <paramref name="directory"/> to <paramref name="state"/>: an empty list for a base,
     /// or the list of the kustomization that names it as a component.
     /// </summary>
-    private static void LoadDirectory(string directory, bool allowFilesOutsideFolder, HashSet<string> visiting, List<GeneratedData> state)
+    private static void LoadDirectory(string directory, bool allowFilesOutsideFolder, HashSet<string> visiting, List<GeneratedData> state, Budget budget)
     {
         if (!visiting.Add(directory))
         {
             throw new InvalidOperationException($"Kustomization cycle at {directory}.");
+        }
+
+        if (visiting.Count > MaxDepth)
+        {
+            throw new InvalidOperationException($"Stopped reading bases and components at {directory}: they nest more than {MaxDepth} deep.");
+        }
+
+        if (++budget.Loads > MaxLoads)
+        {
+            throw new InvalidOperationException(
+                $"Stopped reading bases and components at {directory}: that is more than {MaxLoads} kustomizations, " +
+                "counting a base or component once for every kustomization that names it.");
         }
 
         var file = FileNames.Select(f => Path.Combine(directory, f)).FirstOrDefault(File.Exists)
@@ -107,7 +135,7 @@ public sealed class Kustomization
         YamlNode doc;
         try
         {
-            doc = Yaml.LoadDocuments(File.ReadAllText(file)).FirstOrDefault() ?? new YamlMappingNode();
+            doc = Yaml.LoadDocuments(ReadText(file, budget)).FirstOrDefault() ?? new YamlMappingNode();
         }
         catch (YamlException ex)
         {
@@ -117,7 +145,7 @@ public sealed class Kustomization
         foreach (var child in Folders(doc.Get("resources").Items().Concat(doc.Get("bases").Items()), directory))
         {
             var resources = new List<GeneratedData>();
-            LoadDirectory(child, allowFilesOutsideFolder, visiting, resources);
+            LoadDirectory(child, allowFilesOutsideFolder, visiting, resources, budget);
             foreach (var generated in resources)
             {
                 state.RemoveAll(g => g.Name == generated.Name && g.IsSecret == generated.IsSecret);
@@ -125,14 +153,14 @@ public sealed class Kustomization
             }
         }
 
-        ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, allowFilesOutsideFolder, state);
-        ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, allowFilesOutsideFolder, state);
+        ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, allowFilesOutsideFolder, state, budget);
+        ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, allowFilesOutsideFolder, state, budget);
 
         // Like kustomize, a component works on what this kustomization holds after its resources and generators, so its
         // generators merge into those objects and its namePrefix renames them; this kustomization's own prefix comes after.
         foreach (var component in Folders(doc.Get("components").Items(), directory))
         {
-            LoadDirectory(component, allowFilesOutsideFolder, visiting, state);
+            LoadDirectory(component, allowFilesOutsideFolder, visiting, state, budget);
         }
 
         var prefix = doc.Str("namePrefix") ?? "";
@@ -152,7 +180,32 @@ public sealed class Kustomization
     private static IEnumerable<string> Folders(IEnumerable<YamlNode> entries, string directory) =>
         entries.Select(e => e.Scalar()).OfType<string>().Select(rel => Path.GetFullPath(Path.Combine(directory, rel))).Where(Directory.Exists);
 
-    private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, bool allowFilesOutsideFolder, List<GeneratedData> state)
+    // Reads a text file and counts it against what one Load may read. Stops early on a device such as /dev/zero.
+    private static string ReadText(string path, Budget budget)
+    {
+        using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var text = new StringBuilder();
+        var buffer = new char[81920];
+        for (var read = reader.ReadBlock(buffer, 0, buffer.Length); read > 0; read = reader.ReadBlock(buffer, 0, buffer.Length))
+        {
+            if (text.Length + read > MaxFileChars)
+            {
+                throw new InvalidOperationException($"Stopped reading at {path}: it holds more than 16 MiB of text.");
+            }
+
+            budget.Chars += read;
+            if (budget.Chars > MaxChars)
+            {
+                throw new InvalidOperationException($"Stopped reading at {path}: the kustomization and env files read so far hold more than 256 MiB of text.");
+            }
+
+            text.Append(buffer, 0, read);
+        }
+
+        return text.ToString();
+    }
+
+    private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, bool allowFilesOutsideFolder, List<GeneratedData> state, Budget budget)
     {
         foreach (var generator in generators.Items())
         {
@@ -164,7 +217,7 @@ public sealed class Kustomization
             }
 
             var behavior = generator.Str("behavior") ?? "create";
-            var entries = ReadEntries(generator, directory, allowFilesOutsideFolder);
+            var entries = ReadEntries(generator, directory, allowFilesOutsideFolder, budget);
 
             // Like kustomize, merge and replace also find an object by a name it had before a namePrefix or nameSuffix,
             // and refuse to pick one when several fit.
@@ -216,7 +269,7 @@ public sealed class Kustomization
         }
     }
 
-    private static List<(string Key, string? Value, int Line, string Kind)> ReadEntries(YamlNode generator, string directory, bool allowFilesOutsideFolder)
+    private static List<(string Key, string? Value, int Line, string Kind)> ReadEntries(YamlNode generator, string directory, bool allowFilesOutsideFolder, Budget budget)
     {
         var entries = new List<(string, string?, int, string)>();
         foreach (var literal in generator.Get("literals").Items())
@@ -249,7 +302,8 @@ public sealed class Kustomization
             }
 
             var lineNo = 0;
-            foreach (var line in File.ReadLines(path))
+            using var lines = new StringReader(ReadText(path, budget));
+            for (var line = lines.ReadLine(); line is not null; line = lines.ReadLine())
             {
                 lineNo++;
                 var trimmed = line.Trim();
@@ -378,6 +432,14 @@ public sealed class Kustomization
         value.Length >= 2 && ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\''))
             ? value[1..^1]
             : value;
+
+    /// <summary>How much one Load has read so far.</summary>
+    private sealed class Budget
+    {
+        public int Loads { get; set; }
+
+        public long Chars { get; set; }
+    }
 }
 
 /// <summary>A ConfigMap or Secret produced by a kustomize generator.</summary>
