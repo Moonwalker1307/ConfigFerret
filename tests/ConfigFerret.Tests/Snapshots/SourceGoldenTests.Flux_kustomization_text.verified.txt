@@ -16,7 +16,7 @@ Billing__Mode = "live"
   [effective]  Deployment/billing env Billing__Mode (billing-rendered.yaml:35) = "live"
                container billing
     <- [effective]  apps/billing/deployment.yaml (line 16, workload billing, container billing env Billing__Mode) = "${MODE:=live}"
-                    Flux Kustomization billing replaces ${MODE} after kustomize build; no loaded substitute sets MODE, so Flux uses the default 'live'
+                    Flux Kustomization billing replaces ${MODE} after kustomize build; no loaded substitute sets MODE, so Flux uses the placeholder's default
 
 Billing__Region = "eu-west-1"
   set in ConfigMap billing-config, set in apps/billing/configmap.yaml, set in Flux Kustomization billing (substituteFrom ConfigMap cluster-vars)
@@ -40,7 +40,7 @@ Billing__Tier = "standard"
   [effective]  ConfigMap billing-config (key Billing__Tier, billing-rendered.yaml:9) = "standard"
                envFrom on Deployment/billing, container billing
     <- [effective]  apps/billing/configmap.yaml (line 9, ConfigMap billing-config key Billing__Tier) = "${TIER:=standard}"
-                    Flux Kustomization billing replaces ${TIER} after kustomize build; no loaded substitute sets TIER, so Flux uses the default 'standard'
+                    Flux Kustomization billing replaces ${TIER} after kustomize build; no loaded substitute sets TIER, so Flux uses the placeholder's default
 
 Smtp__Endpoint = "smtp.prod.internal:25"
   set in ConfigMap billing-config, set in apps/billing/configmap.yaml

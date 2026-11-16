@@ -248,10 +248,11 @@ internal sealed partial class GitOpsResolver : IOriginResolver
             reference = new GitOpsVariableRef(_app.Name, names[0]);
             if (ResolveVariable(names[0]).Count == 0)
             {
-                var fallback = template.Variables.Select(v => v.Default).FirstOrDefault(d => d is not null);
-                note += fallback is null || secret
-                    ? $"; no loaded substitute sets {names[0]}, so Flux uses the placeholder's default, or an empty string"
-                    : $"; no loaded substitute sets {names[0]}, so Flux uses the default '{fallback}'";
+                // Notes are not redacted, and whether the key is secret by its name is only decided after the resolvers ran,
+                // so the default is never written into one. It is part of the template, this step's value.
+                note += template.Variables.Any(v => v.Default is not null)
+                    ? $"; no loaded substitute sets {names[0]}, so Flux uses the placeholder's default"
+                    : $"; no loaded substitute sets {names[0]}, so Flux uses the placeholder's default, or an empty string";
             }
         }
         else
