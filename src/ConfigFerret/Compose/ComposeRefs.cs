@@ -51,7 +51,10 @@ internal static class ComposeSteps
     /// <summary>The note on a step whose <c>${VAR}</c> references were not all followed. Its value is still marked secret when one it did not follow leads to a secret.</summary>
     public const string CutNote = "more ${VAR} references are not followed, to keep the trace small";
 
-    private static readonly Regex Sensitive = new(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    // No time limit. The pattern has no loop, so a match takes time in line with the length of the name, whatever the
+    // name is. A limit is measured by the clock: it would end a match whenever the thread is held up for that long, by
+    // a garbage collection on a busy machine for one, with an exception that nothing here expects.
+    private static readonly Regex Sensitive = new(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Whether each dotenv entry leads to a secret, worked out once: an entry and its references never change.
     private static readonly ConditionalWeakTable<DotEnvEntry, StrongBox<bool>> LeadsToSecret = new();
