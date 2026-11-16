@@ -642,6 +642,30 @@ public class GitLabResolverTests
         Assert.All(steps, s => Assert.True(s.IsSensitive));
     }
 
+    [Fact]
+    public void Still_calls_an_earlier_link_missing_when_the_bound_cuts_a_later_job()
+    {
+        // job-a links MAIL_AUTH to a variable that is nowhere, job-b to X, which exactly as many hidden jobs set as one
+        // step looks at, and job-c, cut on its first entry, to its own Y.
+        var yaml = new StringBuilder("job-a:\n  script:\n    - export MAIL_AUTH=$NOT_SET\n");
+        yaml.Append("job-b:\n  script:\n    - export MAIL_AUTH=$X\n");
+        yaml.Append("job-c:\n  variables:\n    Y: y\n  script:\n    - export MAIL_AUTH=$Y\n");
+        for (var i = 0; i < 1_000; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $".t{i}:\n  variables:\n    X: v\n");
+        }
+
+        var resolver = Resolver(o => o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml"), new GitLabVariables([]));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "v"), diagnostics);
+
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.Contains(diagnostics.Warnings, w => w.Contains("than the trace follows for one step", StringComparison.Ordinal));
+        var missing = Assert.Single(diagnostics.Warnings, w => w.Contains("no such variable", StringComparison.Ordinal));
+        Assert.StartsWith("MAIL_AUTH is linked to GitLab variable NOT_SET ", missing, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
