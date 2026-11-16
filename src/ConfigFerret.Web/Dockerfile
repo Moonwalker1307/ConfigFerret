@@ -37,11 +37,13 @@ WORKDIR /source
 ENV DOTNET_NOLOGO=true DOTNET_CLI_TELEMETRY_OPTOUT=true
 
 # One publish, restore included: the framework's Blazor script is added at publish time, and a separate restore of the
-# project files alone leaves it out. The package cache is kept between builds instead.
+# project files alone leaves it out. The package cache is kept between builds instead. It is locked while a publish
+# uses it: a multi-platform build runs this step once per platform at the same time, and two restores that write to one
+# package folder from separate containers delete each other's files.
 COPY Directory.Build.props README.md LICENSE ./
 COPY assets/ assets/
 COPY src/ src/
-RUN --mount=type=cache,id=configferret-nuget,target=/root/.nuget/packages \
+RUN --mount=type=cache,id=configferret-nuget,target=/root/.nuget/packages,sharing=locked \
     arch="$TARGETARCH"; [ "$arch" = amd64 ] && arch=x64; \
     dotnet publish src/ConfigFerret.Web/ConfigFerret.Web.csproj -c Release -f net10.0 -r "linux-$arch" \
       --self-contained false -p:Version="$VERSION" -p:DebugType=none -o /app \
