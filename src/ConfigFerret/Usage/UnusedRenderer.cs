@@ -60,7 +60,7 @@ internal static class UnusedRenderer
         if (report.SkippedEnvironmentKeys > 0)
         {
             sb.Append("  (").Append(report.SkippedEnvironmentKeys)
-                .AppendLine(" plain process environment variables such as PATH are left out)");
+                .AppendLine(" environment variables are left out: plain ones such as PATH, and ones the app reads under another key)");
         }
 
         return sb.ToString();

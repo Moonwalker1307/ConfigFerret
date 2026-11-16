@@ -19,6 +19,21 @@ public class UnusedTests
             layer.Kind == LayerKind.DotNetProvider ? chain : [];
     }
 
+    // Environment variables from a dictionary instead of the test process, mapped as the .NET provider maps them.
+    private sealed class GivenEnvironmentVariables(IReadOnlyDictionary<string, string?> variables, string prefix)
+        : Microsoft.Extensions.Configuration.EnvironmentVariables.EnvironmentVariablesConfigurationProvider(prefix), IConfigurationSource
+    {
+        private readonly string _normalizedPrefix = prefix.Replace("__", ":", StringComparison.Ordinal);
+
+        public IConfigurationProvider Build(IConfigurationBuilder builder) => this;
+
+        public override void Load() =>
+            Data = variables
+                .Select(v => (Key: v.Key.Replace("__", ":", StringComparison.Ordinal), v.Value))
+                .Where(v => v.Key.StartsWith(_normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(v => v.Key[_normalizedPrefix.Length..], v => v.Value, StringComparer.OrdinalIgnoreCase);
+    }
+
     private static IConfigurationRoot Layer(Dictionary<string, string?> layer) => Layers([layer]);
 
     private static IConfigurationRoot Layers(params Dictionary<string, string?>[] layers)
@@ -186,6 +201,48 @@ public class UnusedTests
     }
 
     [Fact]
+    public void Lists_a_key_set_by_a_variable_the_app_reads_when_a_file_sets_it_too()
+    {
+        // AddEnvironmentVariables("APP_") and AddEnvironmentVariables(): APP_Db__Host sets Db:Host and the raw key
+        // APP_Db:Host, which a file sets as well.
+        var environment = new Dictionary<string, string?> { ["APP_Db__Host"] = "db.env" };
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["APP_Db:Host"] = "db.file" })
+            .Add(new GivenEnvironmentVariables(environment, "APP_"))
+            .Add(new GivenEnvironmentVariables(environment, string.Empty))
+            .Build();
+
+        var unused = ConfigTracer.For(config).WithOptions(o => o.Environment = environment).Trace().FindUnused(["Db:Host"]);
+
+        Assert.Equal(["APP_Db:Host"], unused.NotRead!.Select(s => s.Key));
+        Assert.Equal(0, unused.SkippedEnvironmentKeys);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Leaves_out_the_raw_key_of_a_variable_the_app_reads_under_another_key_whether_or_not_it_wins(bool loses)
+    {
+        // APP_Db__Host sets Db:Host and the raw key APP_Db:Host; with a file after it, it loses under Db:Host.
+        var environment = new Dictionary<string, string?> { ["APP_Db__Host"] = "db.env" };
+        var builder = new ConfigurationBuilder()
+            .Add(new GivenEnvironmentVariables(environment, "APP_"))
+            .Add(new GivenEnvironmentVariables(environment, string.Empty));
+        if (loses)
+        {
+            builder.AddInMemoryCollection(new Dictionary<string, string?> { ["Db:Host"] = "db.file" });
+        }
+
+        var report = ConfigTracer.For(builder.Build()).WithOptions(o => o.Environment = environment).Trace();
+        var unused = report.FindUnused(["Db:Host"]);
+
+        Assert.Equal(loses, report.Find("Db:Host")!.EffectiveStep!.Reference is not EnvironmentVariableRef);
+        Assert.DoesNotContain(unused.NotRead!, s => s.Key == "APP_Db:Host");
+        Assert.Empty(unused.NotRead!);
+        Assert.Equal(1, unused.SkippedEnvironmentKeys);
+    }
+
+    [Fact]
     public void Keeps_prefixed_environment_variables()
     {
         var env = new Dictionary<string, string?> { ["CFPREFIXTEST_Plain"] = "x" };
@@ -221,7 +278,7 @@ public class UnusedTests
         {
             var unused = new ConfigurationBuilder().AddEnvironmentVariables().Build().TraceProvenance().FindUnused([]);
 
-            Assert.Contains($"  ({unused.SkippedEnvironmentKeys} plain process environment variables such as PATH are left out)", unused.ToText(), StringComparison.Ordinal);
+            Assert.Contains($"  ({unused.SkippedEnvironmentKeys} environment variables are left out: plain ones such as PATH, and ones the app reads under another key)", unused.ToText(), StringComparison.Ordinal);
         }
         finally
         {

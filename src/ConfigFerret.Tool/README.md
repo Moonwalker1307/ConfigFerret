@@ -87,7 +87,11 @@ or as a JSON array. Repeat it to combine several runs.
 2. Each `--config` file, in order.
 3. User secrets, in Development only, using the `UserSecretsId` in the folder's project file (or `--user-secrets-id`).
    `--no-user-secrets` turns this off.
-4. Environment variables, through one `AddEnvironmentVariables` call per `--env-prefix` (one without a prefix by default).
+4. Environment variables: the `AddEnvironmentVariables` call without a prefix that the host makes, then one call per
+   `--env-prefix`, in order. `--no-default-env` leaves out the call without a prefix, for an app that builds its
+   configuration without the host defaults. The tool puts the `--env-prefix` calls below the app's command line,
+   but an app that calls `AddEnvironmentVariables(prefix)` itself reads them above it: with
+   `--env-prefix ORDERS_ --env ORDERS_Db__Timeout=42 -- --Db:Timeout=7` the tool says 7 where the app reads 42.
 5. The app's command line: everything after `--`.
 
 The tool reads at most 64 MB from a file it finds by itself: the two `appsettings` files and the files in a

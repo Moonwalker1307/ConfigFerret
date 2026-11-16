@@ -90,7 +90,8 @@ configferret container -m pod.yaml -c api --chart charts/api -f release-values.y
 
 `trace` explains the keys you name, or every key. `unused` lists values that never win and, with `--reads`, keys the
 app never read. `container` traces one container from outside the app. The container's environment variables come
-from `-m`, and `--env`, `--env-file` and `--env-prefix` add to or shape them. GitHub and Octopus variables are read with
+from `-m`, and `--env` and `--env-file` add to them. Each `--env-prefix` adds an `AddEnvironmentVariables` call with
+that prefix after the one without a prefix that the host makes. GitHub and Octopus variables are read with
 `--github-repo` and `--octopus-project`, with the token in `GITHUB_TOKEN` and the API key in `OCTOPUS_API_KEY`, never in
 an option. See the [tool's readme](src/ConfigFerret.Tool/README.md) for every command, option and exit code.
 
@@ -478,7 +479,9 @@ Console.WriteLine(unused.ToText());
 - **Keys the app did not read.** Configured keys that `RecordReads()` never saw the app read, with every layer
   that sets them, so you can see where each one lives. Reads through `configuration["X"]`, `GetValue`, `GetSection`
   and options binding are all recorded, since the recorder sits under every provider. Plain process environment
-  variables such as `PATH` are left out.
+  variables such as `PATH` are left out, and so is a key set only by variables that also set a key the app reads,
+  whether or not they win there (`ORDERS_Db__Host` sets `ORDERS_Db:Host` as well as `Db:Host` when the app also adds
+  variables without a prefix).
 
 ```
 Values that never win (2)

@@ -54,7 +54,8 @@ public sealed class UnusedReport
 
     /// <summary>
     /// How many unread keys were left out of <see cref="NotRead"/> because they are plain process environment
-    /// variables such as <c>PATH</c> or <c>HOME</c>: no <c>__</c> in the name, no prefix, and not set by Kubernetes.
+    /// variables such as <c>PATH</c> or <c>HOME</c> (no <c>__</c> in the name, no prefix, and not set by Kubernetes),
+    /// or set only by variables that also set a key the app reads, whether or not they win there.
     /// </summary>
     public int SkippedEnvironmentKeys { get; }
 
@@ -83,6 +84,22 @@ public sealed class UnusedReport
             reads.Add(key.Replace("__", ":", StringComparison.Ordinal));
         }
 
+        // A variable read under one key can also set another: with a prefix provider and one without, ORDERS_Db__Host
+        // sets Db:Host and ORDERS_Db:Host. A variable behind any step of a key the app reads counts, whether or not it
+        // wins there: it was meant for that key, and a value that loses is listed under the values that never win. So
+        // the second key is not listed as one the app did not read.
+        var readVariables = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var setting in report.Settings.Where(s => reads.Contains(s.Key)))
+        {
+            foreach (var step in setting.Steps)
+            {
+                if (step.Reference is EnvironmentVariableRef env)
+                {
+                    readVariables.Add(env.Name);
+                }
+            }
+        }
+
         var notRead = new List<TracedSetting>();
         var skipped = 0;
         foreach (var setting in report.Settings)
@@ -92,7 +109,7 @@ public sealed class UnusedReport
                 continue;
             }
 
-            if (IsPlainEnvironmentVariable(setting))
+            if (IsPlainEnvironmentVariable(setting) || IsReadUnderAnotherKey(setting, readVariables))
             {
                 skipped++;
             }
@@ -153,6 +170,10 @@ public sealed class UnusedReport
     private static bool SameValue(ProvenanceStep step, ProvenanceStep winner) =>
         !step.IsSensitive && !winner.IsSensitive && !step.IsRemoval && !winner.IsRemoval
         && step.Value is not null && string.Equals(step.Value, winner.Value, StringComparison.Ordinal);
+
+    private static bool IsReadUnderAnotherKey(TracedSetting setting, HashSet<string> readVariables) =>
+        setting.Steps.Count > 0
+        && setting.Steps.All(s => s.Reference is EnvironmentVariableRef env && readVariables.Contains(env.Name));
 
     private static bool IsPlainEnvironmentVariable(TracedSetting setting) =>
         !setting.Key.Contains(':', StringComparison.Ordinal)

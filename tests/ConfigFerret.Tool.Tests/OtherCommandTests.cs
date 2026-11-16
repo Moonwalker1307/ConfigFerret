@@ -58,6 +58,31 @@ public class UnusedCommandTests
     }
 
     [Fact]
+    public async Task Leaves_out_the_raw_key_of_a_variable_the_app_reads_under_its_prefix()
+    {
+        var file = Path.Join(Path.GetTempPath(), $"configferret-reads-{Guid.NewGuid():N}.txt");
+        try
+        {
+            await File.WriteAllTextAsync(file, "Db:Host\nDb:Password\nApi:BaseUrl\n", TestContext.Current.CancellationToken);
+
+            var result = await new ToolRunner().RunAsync(HelmRelease("--reads", file, "--format", "json"));
+
+            Assert.Equal(0, result.ExitCode);
+            using var json = JsonDocument.Parse(result.Output);
+            var notRead = json.RootElement.GetProperty("notRead").EnumerateArray().Select(s => s.GetProperty("key").GetString()).ToList();
+            Assert.DoesNotContain("ORDERS_Db:Host", notRead);
+            Assert.DoesNotContain("ORDERS_Db:Password", notRead);
+            Assert.DoesNotContain("ORDERS_Api:BaseUrl", notRead);
+            Assert.Contains("Cache:Ttl", notRead);
+            Assert.Contains("ORDERS_Cache:Ttl", notRead);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
     public async Task Exits_with_1_on_findings_only_with_exit_code()
     {
         Assert.Equal(0, (await new ToolRunner().RunAsync(HelmRelease())).ExitCode);

@@ -165,6 +165,56 @@ public class TraceCommandTests
     }
 
     [Fact]
+    public async Task Keeps_the_variables_without_a_prefix_when_an_env_prefix_is_given()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Logging": { "LogLevel": { "Default": "Information" } }, "Db": { "Timeout": 30 } }""", TestContext.Current.CancellationToken);
+
+            var result = await new ToolRunner().RunAsync(
+                "trace", "-a", app.FullName, "--no-user-secrets", "--env-prefix", "ORDERS_",
+                "--env", "Logging__LogLevel__Default=Debug", "--env", "ORDERS_Db__Timeout=42", "Logging:LogLevel:Default", "Db:Timeout");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Logging:LogLevel:Default = "Debug""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[effective]  environment variable Logging__LogLevel__Default = "Debug""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[effective]  environment variable ORDERS_Db__Timeout = "42""", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Leaves_out_the_variables_without_a_prefix_with_no_default_env()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Logging": { "LogLevel": { "Default": "Information" } }, "Db": { "Timeout": 30 } }""", TestContext.Current.CancellationToken);
+            string[] env = ["--env", "Logging__LogLevel__Default=Debug", "--env", "ORDERS_Db__Timeout=42", "Logging:LogLevel:Default", "Db:Timeout"];
+
+            var prefixed = await new ToolRunner().RunAsync(["trace", "-a", app.FullName, "--no-user-secrets", "--no-default-env", "--env-prefix", "ORDERS_", .. env]);
+            var none = await new ToolRunner().RunAsync(["trace", "-a", app.FullName, "--no-user-secrets", "--no-default-env", .. env]);
+
+            Assert.Equal(0, prefixed.ExitCode);
+            Assert.Contains("""[effective]  appsettings.json (line 1) = "Information""", prefixed.Output, StringComparison.Ordinal);
+            Assert.Contains("""[effective]  environment variable ORDERS_Db__Timeout = "42""", prefixed.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Logging__LogLevel__Default", prefixed.Output, StringComparison.Ordinal);
+
+            Assert.Equal(0, none.ExitCode);
+            Assert.Contains("""Db:Timeout = "30""", none.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("environment variable", none.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Traces_a_Kustomize_overlay()
     {
         var dir = ToolRunner.Golden("kustomize-overlay");
