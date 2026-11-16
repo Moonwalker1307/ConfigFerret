@@ -11,6 +11,17 @@ public class TraceRunnerTests
     private const string Token = "ghp" + "_testtoken0000000000000000000000000";
 
     [Fact]
+    public void The_note_on_skipped_code_files_names_the_first_five()
+    {
+        Assert.Equal(
+            "Reading A.cs for the keys the app reads took too long, so it was skipped. A setting marked dead may still be read there.",
+            TraceRunner.SkippedCodeNote(["A.cs"]));
+        Assert.Equal(
+            "Reading F0.cs, F1.cs, F2.cs, F3.cs, F4.cs and 4995 more for the keys the app reads took too long, so they were skipped. A setting marked dead may still be read there.",
+            TraceRunner.SkippedCodeNote(Enumerable.Range(0, 5000).Select(i => $"F{i}.cs").ToList()));
+    }
+
+    [Fact]
     public async Task Traces_the_app_with_its_rendered_manifests()
     {
         var result = await new TraceRunner(new InMemoryCredentialStore()).RunAsync(OrdersProfile(), revealSecrets: false, TestContext.Current.CancellationToken);

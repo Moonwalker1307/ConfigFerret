@@ -61,7 +61,9 @@ is dead when `DbOptions` has no `Timeout`. Keys the host reads itself, such as `
 count as read, and commented-out code doesn't.
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are
-listed under the scan, and a dead setting may still be read there. Check other environments and apps before deleting.
+listed under the scan, and a dead setting may still be read there. So is a file the scan gave up on because reading it
+took too long. A class whose declaration or one of whose properties the scan can't take apart, or whose bases go more
+than 16 levels up, counts as having any property. Check other environments and apps before deleting.
 
 ## Download
 
