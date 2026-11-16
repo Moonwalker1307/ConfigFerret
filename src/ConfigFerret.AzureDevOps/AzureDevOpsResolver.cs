@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.AzureDevOps;
@@ -6,7 +7,7 @@ namespace ConfigFerret.AzureDevOps;
 /// Links environment variables, Kubernetes env entries and ConfigMap/Secret keys to Azure Pipelines variable group
 /// variables and pipeline YAML variables.
 /// </summary>
-internal sealed class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, AzureDevOpsTraceOptions options) : IOriginResolver
+internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, AzureDevOpsTraceOptions options) : IOriginResolver
 {
     private readonly List<string> _pipelineWarnings = options.ReadConfiguredPipelines();
     private bool _warned;
@@ -15,7 +16,7 @@ internal sealed class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, Azur
     public IEnumerable<SourceEntry> Entries() => groups.Variables.Select(v => new SourceEntry(
         v.Name,
         Reference(v),
-        v.IsSensitive,
+        IsSensitive(v),
         v.GroupType == AzureDevOpsGroupType.AzureKeyVault
             ? $"variable group {v.Group}, linked to Azure Key Vault {v.KeyVaultName ?? "(unknown vault)"}"
             : $"variable group {v.Group}{(v.IsSecret ? ", secret" : string.Empty)}",
@@ -146,7 +147,7 @@ internal sealed class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, Azur
                 Source = $"Azure DevOps variable group {v.Group} {(v.IsSensitive ? "secret" : "variable")} {v.Name}",
                 Location = Location(v),
                 Value = v.Value,
-                IsSensitive = v.IsSensitive,
+                IsSensitive = IsSensitive(v),
                 IsInferred = inferred,
                 Note = string.Join("; ", notes),
                 Reference = Reference(v),
@@ -160,11 +161,15 @@ internal sealed class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, Azur
             Source = $"Azure Pipelines variable {yaml.Name}",
             Location = $"{yaml.File} line {yaml.Line}",
             Value = yaml.Value,
+            IsSensitive = SensitiveName().IsMatch(yaml.Name),
             IsInferred = inferred,
             Note = string.Join("; ", notes),
             Reference = new AzurePipelinesVariableRef(yaml.File, yaml.Line, yaml.Name),
         };
     }
+
+    // Azure DevOps hides a value only when it is marked secret, so a variable named like a secret is treated as secret too.
+    private static bool IsSensitive(AzureDevOpsVariable variable) => variable.IsSensitive || SensitiveName().IsMatch(variable.Name);
 
     private static string Location(AzureDevOpsVariable variable) =>
         variable.GroupType == AzureDevOpsGroupType.AzureKeyVault && variable.KeyVaultName is not null ? variable.KeyVaultName : variable.Group;
@@ -172,4 +177,9 @@ internal sealed class AzureDevOpsResolver(AzureDevOpsVariableGroups groups, Azur
     private AzureDevOpsVariableRef Reference(AzureDevOpsVariable variable) => new(groups.Project, variable.Group, variable.Name);
 
     private sealed record Candidate(string Name, AzureDevOpsVariable? Variable, AzurePipelinesVariable? Yaml, int Order, int Index);
+
+    // The default rule a trace uses for configuration keys. A resolver is built without the trace, so it cannot see the
+    // trace's own SensitiveKeyPattern.
+    [GeneratedRegex(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SensitiveName();
 }

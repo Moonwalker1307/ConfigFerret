@@ -104,6 +104,9 @@ Groups that no pipeline file read links come first and say so. Without pipeline 
 - The token is sent only in the `Authorization` header, only over HTTPS, and redirects are not followed. A token that
   Azure DevOps does not accept fails with a clear message (Azure DevOps answers it with a 203 sign-in page).
 - Azure DevOps never returns secret values, so secret variables show up by name only and are marked sensitive.
+- Variables whose name looks like a secret's (`Smtp.Password`, by `TraceOptions.DefaultSensitiveKeyPattern`, whatever
+  `SensitiveKeyPattern` is set to) are marked sensitive even when they are not secret, both in variable groups and in
+  pipeline YAML, so every layer they set is redacted.
 - Groups linked to an Azure Key Vault list the vault's secret names; each is marked sensitive, its location is the vault
   name, and the note says which vault the value comes from.
 - Secret variables reach scripts only when mapped in an `env:` block, which the note on a same-name match says.

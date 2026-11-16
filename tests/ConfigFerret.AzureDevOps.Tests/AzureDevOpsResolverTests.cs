@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.AzureDevOps.Tests;
@@ -437,6 +438,76 @@ public class AzureDevOpsResolverTests
             Environment.SetEnvironmentVariable(prefix + "DB_TIMEOUT", null);
             Environment.SetEnvironmentVariable(prefix + "DB_PASSWORD", null);
         }
+    }
+
+    [Fact]
+    public void Marks_variables_named_like_secrets_sensitive_even_when_not_secret()
+    {
+        var groups = new AzureDevOpsVariableGroups("contoso/api",
+        [
+            new(1, "mail", AzureDevOpsGroupType.Vsts, null, null, null,
+            [
+                new("Smtp.Password", "fake-smtp-pass", false, "mail", 1),
+                new("Smtp.Host", "smtp.example.com", false, "mail", 1),
+            ]),
+        ]);
+        var resolver = new AzureDevOpsResolver(groups, new AzureDevOpsTraceOptions().AddPipelineText("variables:\n  Smtp.Password: fake-smtp-pass\n", "azure-pipelines.yml"));
+
+        Assert.Equal([true, false], resolver.Entries().Select(e => e.IsSensitive));
+        var chain = resolver.Resolve(EnvStep("SMTP_PASSWORD", "fake-smtp-pass"), new TraceDiagnostics());
+        Assert.Equal(["Azure DevOps variable group mail variable Smtp.Password", "Azure Pipelines variable Smtp.Password"], chain.Select(s => s.Source));
+        Assert.All(chain, s => Assert.True(s.IsSensitive));
+        Assert.DoesNotContain("secret variables reach scripts", chain[0].Note, StringComparison.Ordinal);
+        Assert.False(Assert.Single(resolver.Resolve(EnvStep("SMTP_HOST", "smtp.example.com"), new TraceDiagnostics())).IsSensitive);
+    }
+
+    [Theory]
+    [InlineData("steps:\n- script: dotnet run\n  env:\n    {0}Mail__Auth: $(Smtp.Password)\n", "{0}Mail__Auth", "Mail:Auth", "Azure DevOps variable group mail variable Smtp.Password")]
+    [InlineData("variables:\n  {0}Mail.Auth: $(Smtp.Password)\n", "{0}MAIL_AUTH", "MAIL_AUTH", "Azure DevOps variable group mail variable Smtp.Password")]
+    [InlineData("variables:\n  Smtp.Password: fake-smtp-pass\nsteps:\n- script: dotnet run\n  env:\n    {0}Mail__Auth: $(Smtp.Password)\n", "{0}Mail__Auth", "Mail:Auth", "Azure Pipelines variable Smtp.Password")]
+    public void Redacts_a_value_from_a_variable_named_like_a_secret_end_to_end(string pipeline, string variable, string key, string source)
+    {
+        const string prefix = "CFADONAMED_";
+        const string secret = "fake-smtp-pass";
+        variable = string.Format(CultureInfo.InvariantCulture, variable, prefix);
+
+        // Not marked secret in Azure DevOps. The last case sets it only in the pipeline file.
+        var groups = new AzureDevOpsVariableGroups("contoso/api", source.StartsWith("Azure DevOps", StringComparison.Ordinal)
+            ? [new(1, "mail", AzureDevOpsGroupType.Vsts, null, null, null, [new("Smtp.Password", secret, false, "mail", 1)])]
+            : []);
+        Environment.SetEnvironmentVariable(variable, secret);
+        ProvenanceReport report;
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            report = ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [variable] = secret })
+                .WithAzureDevOps(groups, o => o.AddPipelineText(string.Format(CultureInfo.InvariantCulture, pipeline, prefix), "azure-pipelines.yml"))
+                .Trace();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.Explain(key), StringComparison.Ordinal);
+        var setting = report.Find(key)!;
+        Assert.All(Flatten(setting.Steps), s =>
+        {
+            Assert.DoesNotContain(secret, s.Value ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, s.Note ?? string.Empty, StringComparison.Ordinal);
+        });
+        Assert.All(report.Warnings, w => Assert.DoesNotContain(secret, w, StringComparison.Ordinal));
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        var effective = Flatten(setting.Steps).Last(s => s.IsEffective && s.Origins.Count == 0);
+        Assert.Equal(source, effective.Source);
+        Assert.True(effective.IsSensitive);
+
+        static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
+            steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
     }
 
     [Fact]
