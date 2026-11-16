@@ -109,3 +109,9 @@ produce a warning.
   equally scoped values, or a more specific one scoped on something that was not given) and one that may apply is
   sensitive, the last value is marked sensitive too.
 - Values that reference other variables (`#{Name}`) are shown as written, not expanded.
+
+## Projects that keep variables in Git
+
+For a version-controlled project whose variables were moved to Git, Octopus keeps only the sensitive ones in its
+database. Only the variables stored in Octopus itself are read, not the `variables.ocl` file in the repository, and the
+trace says so in a warning.

@@ -97,7 +97,13 @@ public sealed partial class OctopusVariables
             }
         }
 
-        if (entries.Count == 0)
+        // A version-controlled project can keep its variables in Git; Octopus then keeps only the sensitive ones itself.
+        // When none are left in Octopus, that is the reason rather than what the API key can see.
+        if (VariablesAreInGit(project))
+        {
+            warnings.Add($"Octopus project {projectName} keeps its variables in Git, and those are not read: only the variables stored in Octopus itself, such as its sensitive ones, are traced.");
+        }
+        else if (entries.Count == 0)
         {
             warnings.Add($"Octopus project {projectName} has no variables the API key can see.");
         }
@@ -249,6 +255,14 @@ public sealed partial class OctopusVariables
         JsonValueKind.Object when root.TryGetProperty("Items", out var items) && items.ValueKind == JsonValueKind.Array => [.. items.EnumerateArray()],
         _ => [],
     };
+
+    private static bool VariablesAreInGit(JsonElement project) =>
+        project.TryGetProperty("PersistenceSettings", out var settings)
+        && string.Equals(GetString(settings, "Type"), "VersionControlled", StringComparison.OrdinalIgnoreCase)
+        && settings.TryGetProperty("ConversionState", out var state)
+        && state.ValueKind == JsonValueKind.Object
+        && state.TryGetProperty("VariablesAreInGit", out var inGit)
+        && inGit.ValueKind == JsonValueKind.True;
 
     // Ids that are not strings are skipped rather than failing the whole trace.
     private static string? AsString(JsonElement element) => element.ValueKind == JsonValueKind.String ? element.GetString() : null;

@@ -313,6 +313,42 @@ public class OctopusVariablesTests
         Assert.Single(octopus.Warnings);
     }
 
+    private const string InGitWarning = "Octopus project Api keeps its variables in Git, and those are not read: only the variables stored in Octopus itself, such as its sensitive ones, are traced.";
+
+    [Theory]
+    [InlineData("""{"Type":"VersionControlled","ConversionState":{"VariablesAreInGit":true,"RunbooksAreInGit":false}}""", true)]
+    [InlineData("""{"Type":"versioncontrolled","ConversionState":{"VariablesAreInGit":true}}""", true)]
+    [InlineData("""{"Type":"VersionControlled","ConversionState":{"VariablesAreInGit":false}}""", false)]
+    [InlineData("""{"Type":"VersionControlled"}""", false)]
+    [InlineData("""{"Type":"VersionControlled","ConversionState":"x"}""", false)]
+    [InlineData("""{"Type":"Database"}""", false)]
+    [InlineData("""[]""", false)]
+    public async Task Warns_that_variables_kept_in_Git_are_not_read(string persistenceSettings, bool inGit)
+    {
+        // Octopus then keeps only the sensitive project variables in its database, and the rest in the Git repository.
+        var octopus = await LoadSet(
+            """{"Variables":[{"Name":"Db:Password","Value":null,"Type":"Sensitive","IsSensitive":true}]}""",
+            $$"""{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1","PersistenceSettings":{{persistenceSettings}}}""");
+
+        Assert.Single(octopus.Entries);
+        Assert.Equal(
+            inGit ? [InGitWarning] : [],
+            octopus.Warnings);
+    }
+
+    [Theory]
+    [InlineData("""{"Type":"VersionControlled","ConversionState":{"VariablesAreInGit":true}}""", InGitWarning)]
+    [InlineData("""{"Type":"Database"}""", "Octopus project Api has no variables the API key can see.")]
+    public async Task Gives_one_reason_when_no_project_variables_are_stored_in_Octopus(string persistenceSettings, string warning)
+    {
+        var octopus = await LoadSet(
+            """{"Variables":[]}""",
+            $$"""{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1","PersistenceSettings":{{persistenceSettings}}}""");
+
+        Assert.Empty(octopus.Entries);
+        Assert.Equal([warning], octopus.Warnings);
+    }
+
     [Theory]
     [InlineData("""[{"Id":"Spaces-1","Name":"Default","IsDefault":false},{"Id":"Spaces-2","Name":"Other","IsDefault":"true"},5]""")]
     [InlineData("""{"Items":"x"}""")]
