@@ -103,7 +103,8 @@ The steps follow GitLab's precedence, lowest first: CI file global variables, CI
 variables, group variables from the outermost group in, then project variables, so the last one wins. For each owner,
 the variable whose environment scope fits `Environment` best is used: the exact name, then a wildcard such as
 `review/*` (a longer pattern beats a shorter one), then `*`. With no `Environment`, only `*` variables apply, as for a
-job with no environment. A key that is set only for scopes that do not apply becomes a trace warning.
+job with no environment. A key that is set only for scopes that do not apply becomes a trace warning. When a CI file
+line or an explicit link ties a layer to such a key and it is masked, the layer is still marked sensitive.
 
 ## Tokens and secrets
 

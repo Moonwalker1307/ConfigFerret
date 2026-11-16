@@ -39,9 +39,9 @@ internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptio
                 return [];
             }
 
-            return Chain(target, defined, diagnostics)
-                .Select(c => ToStep(c, layer, $"{defined!.File} line {defined.Line} sets {defined.Name} from ${target}", inferred: false))
-                .ToList();
+            var from = $"{defined!.File} line {defined.Line} sets {defined.Name} from ${target}";
+            var chain = Chain(target, defined, diagnostics);
+            return chain.Count == 0 ? MaskedInOtherScopes(target, from) : chain.Select(c => ToStep(c, layer, from, inferred: false)).ToList();
         }
 
         if (layer.Reference is ExternalSecretRef or GitLabVariableRef || LayerNames.Of(layer) is not { } name)
@@ -52,19 +52,40 @@ internal sealed class GitLabResolver(GitLabVariables variables, GitLabTraceOptio
         if (options.FindMapping(name) is { } mapping)
         {
             var linked = Chain(mapping.Key, null, diagnostics);
+            var how = mapping.Where is null ? "linked explicitly" : $"{mapping.Where} sets {mapping.Name} from ${mapping.Key}";
             if (linked.Count == 0)
             {
                 diagnostics.Warn($"{name} is linked to GitLab variable {mapping.Key}{(mapping.Where is null ? string.Empty : $" ({mapping.Where})")}, but no such variable applies.");
-                return [];
+                return MaskedInOtherScopes(mapping.Key, how);
             }
 
-            var how = mapping.Where is null ? "linked explicitly" : $"{mapping.Where} sets {mapping.Name} from ${mapping.Key}";
             return linked.Select(c => ToStep(c, layer, how, inferred: false)).ToList();
         }
 
         return options.MatchByName
             ? Chain(name, null, diagnostics).Select(c => ToStep(c, layer, "matched by name", inferred: true)).ToList()
             : [];
+    }
+
+    // A link to a variable that is masked but set only for environment scopes that do not apply, for example because
+    // Environment is not set: the layer may still hold the masked value, so keep a step that makes the layer sensitive.
+    private List<ProvenanceStep> MaskedInOtherScopes(string key, string how)
+    {
+        if (!variables.Find(key).Any(v => v.IsSensitive))
+        {
+            return [];
+        }
+
+        return
+        [
+            new ProvenanceStep
+            {
+                Kind = LayerKind.GitLabCi,
+                Source = $"GitLab variable {key}",
+                IsSensitive = true,
+                Note = $"{how}; masked, and set only for environment scopes that do not apply",
+            },
+        ];
     }
 
     // Lowest priority first, as GitLab documents it: CI file variables (global, then job), then instance, then each
