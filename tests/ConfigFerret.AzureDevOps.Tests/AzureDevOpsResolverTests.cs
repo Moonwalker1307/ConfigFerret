@@ -717,6 +717,31 @@ public class AzureDevOpsResolverTests
         Assert.InRange(resolver.Examined, stages, 20L * (stages + items));
     }
 
+    [Fact]
+    public void Still_calls_an_earlier_link_missing_when_the_bound_cuts_a_later_job()
+    {
+        // Job A links MAIL_AUTH to a variable that is nowhere, job B to X, which the pipeline sets exactly as often as one
+        // step looks at, and job C, cut on its first entry, to its own Y.
+        var pipeline = new StringBuilder("variables:\n");
+        for (var i = 0; i < 1_000; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- name: X\n  value: v{i}\n");
+        }
+
+        pipeline.Append("jobs:\n- job: A\n  steps:\n  - script: ./run.sh\n    env:\n      MAIL_AUTH: $(Not.Set)\n");
+        pipeline.Append("- job: B\n  steps:\n  - script: ./run.sh\n    env:\n      MAIL_AUTH: $(X)\n");
+        pipeline.Append("- job: C\n  variables:\n    Y: y\n  steps:\n  - script: ./run.sh\n    env:\n      MAIL_AUTH: $(Y)\n");
+        var resolver = Resolver(o => o.AddPipelineText(pipeline.ToString(), "azure-pipelines.yml"));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "v999"), diagnostics);
+
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.Contains(diagnostics.Warnings, w => w.Contains("than the trace follows for one step", StringComparison.Ordinal));
+        var missing = Assert.Single(diagnostics.Warnings, w => w.Contains("no such variable", StringComparison.Ordinal));
+        Assert.StartsWith("MAIL_AUTH is linked to Azure Pipelines variable Not.Set ", missing, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
