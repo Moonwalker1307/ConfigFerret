@@ -19,6 +19,14 @@ GitHub Actions variables and Octopus Deploy variables to what it finds, then sho
   holds the value in plain text or base64 is red, like a ConfigMap; a value encrypted with SOPS is not. A Secret value
   that a rendered Helm chart sets without its values files is orange, because the template may write it or generate it
 
+Secret values show as `***` until you turn on **Reveal secrets**: values from a Secret or a secret store, values whose
+key looks secret (see [Secrets](../../README.md#secrets)), and every value the secrets audit takes for a credential by
+its shape, whatever its key: a connection string with `Password=`, `AccountKey=` or `SharedAccessKey=`, a known token
+format such as a GitHub token, or a long random string. A setting that holds such a value in any of its layers, also
+inside a longer value, is hidden in the table, the layers and the exports, and so is a GitHub or Octopus variable
+with such a value. A note that holds one is replaced by a sentence that says it is hidden. So a hash or an id that only
+looks random is hidden too, until you reveal secrets.
+
 ### Filters
 
 The stat tiles above the table are the filters: click **overridden**, **from upstream**, **secrets protected**,
@@ -40,8 +48,8 @@ apps, the one named most like the app picked is traced, with a values file from 
 notes name the chart. An overlay named for the environment comes first, even when only the bases are named like the
 apps. Until you pick an environment, the one the container sets with `DOTNET_ENVIRONMENT` (else
 `ASPNETCORE_ENVIRONMENT`, the order `WebApplication.CreateBuilder` reads them in on .NET 7 and later) is traced and
-shown; a pick is kept per repository, and a note says when the container sets another. A value from a Secret, or one
-the repository doesn't hold, is not used, and the note names only the variable.
+shown; a pick is kept per repository, and a note says when the container sets another. A value from a Secret, one
+that looks like a credential, or one the repository doesn't hold, is not used, and the note names only the variable.
 
 A workflow `env:` entry such as `Db__Host: ${{ vars.DB_HOST }}` counts as an environment variable of the app, so
 `Db:Host` gets the variable's value and links back to it. Only entries that look like app settings are used: names with

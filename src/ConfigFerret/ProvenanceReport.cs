@@ -20,6 +20,9 @@ public sealed class ProvenanceReport
         }
     }
 
+    // The same trace with other settings and warnings, such as with more values hidden.
+    internal ProvenanceReport With(IReadOnlyList<TracedSetting> settings, IReadOnlyList<string> warnings) => new(settings, warnings, _keyComparer);
+
     /// <summary>Every setting that has a value, sorted by key.</summary>
     public IReadOnlyList<TracedSetting> Settings { get; }
 

@@ -236,10 +236,18 @@ public sealed partial class TraceRunner
         }
 
         // The audit looks at the values, so it runs on a revealed trace that is dropped right after. The findings hold no values.
+        // The audit also takes a value for a credential by its shape, which the trace does not, so unless secrets are
+        // revealed those values are hidden too, wherever they occur.
         tracer.WithOptions(o => o.RevealSensitiveValues = true);
-        var secrets = SecretAudit.Audit(tracer.Trace(), RenderedBy(kubernetes.FirstOrDefault()));
+        var revealed = tracer.Trace();
+        var secrets = SecretAudit.Audit(revealed, RenderedBy(kubernetes.FirstOrDefault()));
+        var credentials = revealSecrets ? null : CredentialMask.From(revealed, tracer.Options.RedactedText);
         tracer.WithOptions(o => o.RevealSensitiveValues = revealSecrets);
         var report = tracer.Trace();
+        if (credentials is not null)
+        {
+            report = credentials.Hide(report);
+        }
 
         var sourceResults = sources.Select(s => new SourceResult(s, results.GetValueOrDefault(s))).ToList();
 
@@ -281,7 +289,21 @@ public sealed partial class TraceRunner
         }
 
         var workflowVariables = new List<WorkflowVariable>();
-        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, github, octopusVariables, workflowVariables, tracer.Options.SensitiveKeyPattern, revealSecrets))
+        var unusedVariables = FindUnusedVariables(report, github, octopusVariables, workflowVariables, tracer.Options.SensitiveKeyPattern, revealSecrets);
+        if (credentials is not null)
+        {
+            notes = notes.Select(credentials.Scrub).ToList();
+            sourceResults = sourceResults.Select(r => r.Problem is { } problem ? r with { Problem = credentials.Scrub(problem) } : r).ToList();
+        }
+
+        // A deployment tool's variable is not traced or audited, so its own value is judged by its shape here too.
+        if (!revealSecrets)
+        {
+            unusedVariables = unusedVariables.Select(v => HidesCredential(v.Value) ? v with { Value = null } : v).ToList();
+            workflowVariables = workflowVariables.Select(v => HidesCredential(v.Value) ? v with { Value = null } : v).ToList();
+        }
+
+        return new TraceResult(report, unused, sourceResults, notes, secrets, unusedVariables)
         {
             WorkflowVariables = workflowVariables,
             DeadSettings = dead,
@@ -293,6 +315,8 @@ public sealed partial class TraceRunner
         };
 
         static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
+
+        bool HidesCredential(string? value) => credentials?.Holds(value) == true || SecretAudit.LooksLikeCredential(value);
     }
 
     // Names the first five files the code scan skipped, and how many more of all it counted, and says when every class is
@@ -626,8 +650,8 @@ public sealed partial class TraceRunner
 
     // The environment the app runs in. A chosen one is traced as it is; a default gives way to the one the app's
     // variables set. Either way a note says so when the two differ. A value that is a stand-in or sensitive (from a
-    // Secret) is neither used nor shown, and one that is not a plain name, or whose settings file is outside the app's
-    // folder, is not used; the note then names only the variable.
+    // Secret, or one that looks like a credential) is neither used nor shown, and one that is not a plain name, or whose
+    // settings file is outside the app's folder, is not used; the note then names only the variable.
     private static string PickEnvironment(AppSettingsSource app, Dictionary<string, string?> environment, HashSet<string> sensitive, string directory, List<string> notes)
     {
         var chosen = string.IsNullOrWhiteSpace(app.EnvironmentName) ? "Production" : app.EnvironmentName.Trim();
@@ -644,7 +668,9 @@ public sealed partial class TraceRunner
             return chosen;
         }
 
-        if (sensitive.Contains(variable))
+        // A value that looks like a credential is kept like one from a Secret: the secrets audit rates it so, and the
+        // environment is shown in the drop-down and named in notes and file names.
+        if (sensitive.Contains(variable) || SecretAudit.LooksLikeCredential(value))
         {
             notes.Add($"{variable} in the app's environment comes from a Secret or is sensitive, so its value is not used or shown, and {app.Name} is traced in {chosen}.");
             return chosen;

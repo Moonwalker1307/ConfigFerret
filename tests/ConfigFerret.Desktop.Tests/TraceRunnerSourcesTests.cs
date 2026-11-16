@@ -726,6 +726,22 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.All(result.Sources, s => Assert.DoesNotContain(fromSecret, s.Source.Name + s.Problem, StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_environment_that_looks_like_a_credential_is_never_used_or_shown(bool reveal)
+    {
+        const string random = "Q7rT2vX9kL4mN8pZ3wY6bH1j";
+        Write($"app/appsettings.{random}.json", """{"Db":{"Timeout":"7"}}""");
+
+        var result = await Run(ProfileOf(ThreeEnvironments(isDefault: true), ContainerSetting(Variable("DOTNET_ENVIRONMENT", random))), reveal: reveal);
+
+        Assert.Equal("60", result.Report.Find("Db:Timeout")!.Value);
+        Assert.Equal("Production", result.Environment);
+        Assert.Contains("DOTNET_ENVIRONMENT in the app's environment comes from a Secret or is sensitive, so its value is not used or shown, and app is traced in Production.", result.Notes);
+        Assert.All(result.Notes, n => Assert.DoesNotContain(random, n, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task No_note_when_every_value_is_known()
     {
@@ -763,6 +779,68 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Equal("hunter2-prod", revealed.Report.Find("Db:Password")!.Value);
         // Only the real value makes the committed Secret exposed; the hidden *** would count as a placeholder.
         Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "Db:Password").Rating);
+    }
+
+    private const string FakeAccountKey = "hunter2-fake-account-key";
+
+    private const string FakeGitHubToken = "ghp" + "_FakeTokenForTestsOnly000000000000";
+
+    // Neither key looks secret, but both values look like credentials: a connection string with an AccountKey and a
+    // GitHub token. Deploy:Header carries the token inside a longer value, which does not look like a credential.
+    private Profile CredentialShapedValues()
+    {
+        var app = App($$$"""{"AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey={{{FakeAccountKey}}};EndpointSuffix=core.windows.net", "Db": {"Host": "db.example.test"}}""");
+        var k8s = ContainerSetting(Variable("Deploy__Ref", FakeGitHubToken) + Variable("Deploy__Header", "Basic $(Deploy__Ref)"));
+        return ProfileOf(app, k8s);
+    }
+
+    private static IEnumerable<string?> ValuesOf(TraceResult result)
+    {
+        foreach (var setting in result.Report.Settings)
+        {
+            yield return setting.Value;
+            foreach (var value in setting.Steps.SelectMany(Values))
+            {
+                yield return value;
+            }
+        }
+
+        static IEnumerable<string?> Values(ProvenanceStep step) => step.Origins.SelectMany(Values).Prepend(step.Value);
+    }
+
+    [Fact]
+    public async Task A_value_that_looks_like_a_credential_is_hidden_everywhere_until_secrets_are_revealed()
+    {
+        var hidden = await Run(CredentialShapedValues());
+
+        Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "AzureWebJobsStorage").Rating);
+        Assert.Equal(SecretRating.Exposed, hidden.Secrets.Single(s => s.Key == "Deploy:Ref").Rating);
+        foreach (var key in new[] { "AzureWebJobsStorage", "Deploy:Ref", "Deploy:Header" })
+        {
+            var setting = hidden.Report.Find(key)!;
+            Assert.Equal("***", setting.Value);
+            Assert.True(setting.IsSensitive, key);
+        }
+
+        Assert.Equal("db.example.test", hidden.Report.Find("Db:Host")!.Value);
+        foreach (var text in new[] { FakeAccountKey, FakeGitHubToken })
+        {
+            Assert.DoesNotContain(ValuesOf(hidden), v => v?.Contains(text, StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(text, hidden.Report.ToJson(), StringComparison.Ordinal);
+            Assert.DoesNotContain(text, hidden.Report.ToText(), StringComparison.Ordinal);
+            Assert.DoesNotContain(hidden.Notes.Concat(hidden.Report.Warnings), n => n.Contains(text, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task A_value_that_looks_like_a_credential_is_shown_when_secrets_are_revealed()
+    {
+        var revealed = await Run(CredentialShapedValues(), reveal: true);
+
+        Assert.Contains(FakeAccountKey, revealed.Report.Find("AzureWebJobsStorage")!.Value, StringComparison.Ordinal);
+        Assert.Equal(FakeGitHubToken, revealed.Report.Find("Deploy:Ref")!.Value);
+        Assert.Equal("Basic " + FakeGitHubToken, revealed.Report.Find("Deploy:Header")!.Value);
+        Assert.False(revealed.Report.Find("AzureWebJobsStorage")!.IsSensitive);
     }
 
     // The secrets audit of a scanned repository
@@ -1203,6 +1281,20 @@ public class TraceRunnerSourcesTests : IDisposable
         var result = await Run(ProfileOf(App("{}"), github), name => Token, http: handler.Client);
 
         Assert.Contains(new UnusedVariable("GitHub Actions", "UNUSED_VAR", "repository variable (contoso/orders)") { Value = "x" }, result.UnusedVariables);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_github_variable_whose_value_looks_like_a_credential_has_no_value_unless_secrets_are_revealed(bool reveal)
+    {
+        const string storage = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=hunter2-fake-key";
+        var github = GitHubSourceFor();
+        var handler = GitHub().Respond("/repos/contoso/orders/actions/variables?per_page=30&page=1", $$"""{"total_count":1,"variables":[{"name":"STORAGE","value":"{{storage}}","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}""");
+
+        var result = await Run(ProfileOf(App("{}"), github), name => Token, reveal, handler.Client);
+
+        Assert.Equal(reveal ? storage : null, result.UnusedVariables.Single(v => v.Name == "STORAGE").Value);
     }
 
     [Theory]

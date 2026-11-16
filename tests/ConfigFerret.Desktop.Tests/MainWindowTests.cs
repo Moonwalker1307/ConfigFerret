@@ -433,6 +433,56 @@ public sealed class MainWindowTests : IDisposable
         Assert.DoesNotContain(fromSecret, File.ReadAllText(workspace), StringComparison.Ordinal);
     }
 
+    [AvaloniaFact]
+    public async Task A_value_that_looks_like_a_credential_is_hidden_in_the_table_layers_and_export_until_revealed()
+    {
+        const string accountKey = "hunter2-fake-account-key";
+        var repo = Path.Join(_temp.FullName, "jobs");
+        Directory.CreateDirectory(Path.Join(repo, "src", "Jobs"));
+        File.WriteAllText(
+            Path.Join(repo, "src", "Jobs", "appsettings.json"),
+            $$"""{"AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey={{accountKey}};EndpointSuffix=core.windows.net"}""");
+        var export = Path.Join(_temp.FullName, "report.json");
+        var workspace = Path.Join(_temp.FullName, "workspace.json");
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(workspace),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"))
+        {
+            Dialogs = new SaveTo(export),
+        };
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.SelectedRow = viewModel.Rows.Single(r => r.Key == "AzureWebJobsStorage");
+        Assert.Equal("***", viewModel.SelectedRow.Value);
+        Assert.All(Flatten(viewModel.Details), node => Assert.DoesNotContain(accountKey, node.Value, StringComparison.Ordinal));
+        await viewModel.ExportJsonCommand.ExecuteAsync(null);
+        Assert.DoesNotContain(accountKey, File.ReadAllText(export), StringComparison.Ordinal);
+        Assert.False(viewModel.LastExportHoldsSecrets);
+        Assert.All(viewModel.Problems, p => Assert.DoesNotContain(accountKey, p.Text, StringComparison.Ordinal));
+        Assert.DoesNotContain(accountKey, File.ReadAllText(workspace), StringComparison.Ordinal);
+
+        viewModel.RevealSecrets = true;
+        await WaitForTraceAsync(viewModel);
+
+        Assert.Contains(accountKey, viewModel.Rows.Single(r => r.Key == "AzureWebJobsStorage").Value, StringComparison.Ordinal);
+        await viewModel.ExportJsonCommand.ExecuteAsync(null);
+        Assert.Contains(accountKey, File.ReadAllText(export), StringComparison.Ordinal);
+        Assert.True(viewModel.LastExportHoldsSecrets);
+
+        static IEnumerable<StepNode> Flatten(IEnumerable<StepNode> nodes) => nodes.SelectMany(n => Flatten(n.Children).Prepend(n));
+    }
+
+    /// <summary>A save dialog that always picks the same file.</summary>
+    private sealed class SaveTo(string path) : IDialogService
+    {
+        public Task<string?> PickFolderAsync(string title) => Task.FromResult<string?>(null);
+
+        public Task<string?> SaveFileAsync(string title, string suggestedName) => Task.FromResult<string?>(path);
+    }
+
     [Theory]
     [InlineData("[]", "did not say who")]
     [InlineData("\"ferret-fan\"", "did not say who")]
