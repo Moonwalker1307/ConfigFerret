@@ -234,7 +234,7 @@ public sealed class GcpSecrets
 
                 return versions
                     .DistinctBy(v => v.Id, StringComparer.Ordinal)
-                    .OrderByDescending(v => long.TryParse(v.Id, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1)
+                    .OrderByDescending(v => GcpVersionOrder.Key(v.Id))
                     .ToList();
             }
             catch (HttpRequestException ex)

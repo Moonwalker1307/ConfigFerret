@@ -202,12 +202,22 @@ internal sealed class GcpSecretManagerResolver : IOriginResolver
     {
         var notes = new List<string> { how };
         var pinned = version is null || version.Equals("latest", StringComparison.OrdinalIgnoreCase) ? null : version;
+        var newest = pinned is null ? GcpVersionOrder.Newest(secret.Versions) : null;
         if (pinned is not null)
         {
             notes.Add(DescribePin(secret, pinned));
         }
+        else if (newest is { State: GcpSecretVersionState.Disabled or GcpSecretVersionState.Destroyed })
+        {
+            // The latest alias is the most recently created version, enabled or not, and reading it fails unless it is
+            // enabled. The version that was read is not what a reader of latest gets.
+            var failure = $"latest is version {newest.Id}, which is {newest.State.ToString().ToLowerInvariant()}, so reading latest fails";
+            notes.Add(failure);
+            diagnostics.Warn($"Google Cloud secret {secret.Id}: {failure}.");
+        }
 
-        var applies = secret.ValueVersion is not null && (pinned is null || pinned == secret.ValueVersion);
+        // A value counts for latest only when it is the newest version's, whatever that version's state.
+        var applies = secret.ValueVersion is not null && (pinned is null ? newest is null || newest.Id == secret.ValueVersion : pinned == secret.ValueVersion);
         string? value = null;
         if (property is not null)
         {
@@ -240,6 +250,10 @@ internal sealed class GcpSecretManagerResolver : IOriginResolver
             {
                 notes.Add("the value is not text, so it was not compared");
             }
+        }
+        else if (secret.ValueVersion is not null && pinned is null && newest is { State: not (GcpSecretVersionState.Disabled or GcpSecretVersionState.Destroyed) })
+        {
+            notes.Add($"the value was not compared, because only version {secret.ValueVersion} was read and the latest version is {newest.Id}");
         }
 
         if (layer.Value is not null && value is not null && !string.Equals(layer.Value, value, StringComparison.Ordinal))

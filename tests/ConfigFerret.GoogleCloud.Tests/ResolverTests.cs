@@ -321,6 +321,94 @@ public class ResolverTests
             Assert.Single(Resolve(secrets, External(null, "S", version: "", store: null) with { Reference = new ExternalSecretRef(null, null, "projects/p/secrets/S/versions/4", null, "") })).Note);
     }
 
+    [Theory]
+    [InlineData(GcpSecretVersionState.Disabled, "disabled")]
+    [InlineData(GcpSecretVersionState.Destroyed, "destroyed")]
+    public void Says_when_the_latest_version_cannot_be_read_and_does_not_compare_an_older_one(GcpSecretVersionState state, string text)
+    {
+        var secrets = new GcpSecrets("p", [new GcpSecret
+        {
+            Id = "S",
+            Project = "p",
+            Versions = [new("3", state), new("2", GcpSecretVersionState.Enabled)],
+            ValueVersion = "2",
+            Value = "hunter2",
+        }]);
+        var expected = $"latest is version 3, which is {text}, so reading latest fails";
+
+        foreach (var reference in new[] { External(null, "S", version: "latest", store: null), External(null, "S", store: null) })
+        {
+            var diagnostics = new TraceDiagnostics();
+            var step = Assert.Single(Resolve(secrets, reference, diagnostics: diagnostics));
+
+            Assert.Null(step.Value);
+            Assert.Equal($"read by an external secret reference; {expected}; latest enabled version 2", step.Note);
+            Assert.Equal($"Google Cloud secret S: {expected}.", Assert.Single(diagnostics.Warnings));
+        }
+
+        var named = new TraceDiagnostics();
+        var byName = Assert.Single(Resolve(secrets, EnvStep("S", "old-value"), diagnostics: named));
+        Assert.Equal($"matched by name; {expected}; latest enabled version 2", byName.Note);
+        Assert.DoesNotContain("differs", byName.Note, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", byName.Note, StringComparison.Ordinal);
+        Assert.Single(named.Warnings);
+
+        var property = new TraceDiagnostics();
+        var linked = Assert.Single(Resolve(secrets, EnvStep("DB_PW", "x"), o => o.Map("DB_PW", "S", "password"), diagnostics: property));
+        Assert.Null(linked.Value);
+        Assert.DoesNotContain("differs", linked.Note, StringComparison.Ordinal);
+        Assert.Contains(expected, linked.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Does_not_warn_about_the_latest_version_when_it_is_enabled_or_pinned_or_unknown()
+    {
+        var unknown = new GcpSecrets("p", [new GcpSecret { Id = "S", Project = "p", Versions = [new("3", GcpSecretVersionState.Unknown), new("2", GcpSecretVersionState.Enabled)], ValueVersion = "2", Value = "hunter2" }]);
+        var diagnostics = new TraceDiagnostics();
+
+        Assert.DoesNotContain("reading latest fails", Assert.Single(Resolve(WithValues, External(null, "Db__Password", store: null), diagnostics: diagnostics)).Note, StringComparison.Ordinal);
+        Assert.DoesNotContain("reading latest fails", Assert.Single(Resolve(unknown, External(null, "S", store: null), diagnostics: diagnostics)).Note, StringComparison.Ordinal);
+        Assert.DoesNotContain("reading latest fails", Assert.Single(Resolve(new GcpSecrets("p", [new GcpSecret { Id = "S", Project = "p", Versions = [new("3", GcpSecretVersionState.Disabled), new("2", GcpSecretVersionState.Enabled)] }]), External(null, "S", version: "2", store: null), diagnostics: diagnostics)).Note, StringComparison.Ordinal);
+        Assert.Empty(diagnostics.Warnings);
+    }
+
+    [Fact]
+    public void Does_not_compare_an_older_version_as_the_latest_when_the_newest_state_is_unknown()
+    {
+        var secrets = new GcpSecrets("p", [new GcpSecret { Id = "S", Project = "p", Versions = [new("3", GcpSecretVersionState.Unknown), new("2", GcpSecretVersionState.Enabled)], ValueVersion = "2", Value = """{"password":"hunter2"}""" }]);
+        var diagnostics = new TraceDiagnostics();
+
+        var step = Assert.Single(Resolve(secrets, EnvStep("S", "other"), diagnostics: diagnostics));
+        Assert.Null(step.Value);
+        Assert.Equal("matched by name; the value was not compared, because only version 2 was read and the latest version is 3; latest enabled version 2", step.Note);
+
+        var property = Assert.Single(Resolve(secrets, EnvStep("DB_PW", "other"), o => o.Map("DB_PW", "S", "password"), diagnostics: diagnostics));
+        Assert.Null(property.Value);
+        Assert.Equal("linked explicitly; property password was not checked, because only version 2 was read; latest enabled version 2", property.Note);
+        Assert.Empty(diagnostics.Warnings);
+    }
+
+    [Fact]
+    public void Takes_the_newest_version_by_its_number_whatever_the_order_of_the_list()
+    {
+        var older = new GcpSecrets("p", [new GcpSecret { Id = "S", Project = "p", Versions = [new("1", GcpSecretVersionState.Disabled), new("2", GcpSecretVersionState.Enabled)], ValueVersion = "2", Value = "hunter2" }]);
+        var diagnostics = new TraceDiagnostics();
+
+        var step = Assert.Single(Resolve(older, EnvStep("S", "other"), diagnostics: diagnostics));
+        Assert.Equal("hunter2", step.Value);
+        Assert.Contains("the Secret Manager value differs", step.Note, StringComparison.Ordinal);
+        Assert.DoesNotContain("reading latest fails", step.Note, StringComparison.Ordinal);
+        Assert.Empty(diagnostics.Warnings);
+
+        var newer = new GcpSecrets("p", [new GcpSecret { Id = "S", Project = "p", Versions = [new("abc", GcpSecretVersionState.Enabled), new("1", GcpSecretVersionState.Enabled), new("9", GcpSecretVersionState.Disabled)], ValueVersion = "1", Value = "hunter2" }]);
+        var warned = new TraceDiagnostics();
+
+        var latest = Assert.Single(Resolve(newer, EnvStep("S", "other"), diagnostics: warned));
+        Assert.Null(latest.Value);
+        Assert.Contains("latest is version 9, which is disabled, so reading latest fails", latest.Note, StringComparison.Ordinal);
+        Assert.Equal("Google Cloud secret S: latest is version 9, which is disabled, so reading latest fails.", Assert.Single(warned.Warnings));
+    }
+
     [Fact]
     public void Links_regional_resource_names_only_to_secrets_in_that_location()
     {
