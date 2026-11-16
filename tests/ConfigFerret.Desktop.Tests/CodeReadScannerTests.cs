@@ -118,6 +118,35 @@ public class CodeReadScannerTests
         Assert.True(scanner.Check("ApiUrl").IsRead);
     }
 
+    [Fact]
+    public void A_bind_chained_after_other_calls_is_listed()
+    {
+        var scanner = Scan(
+            """
+            services.AddOptions<AppSettings>().ValidateOnStart().Bind(builder.Configuration);
+            services.AddOptions<Other>().Bind(builder.Configuration);
+            services.AddOptions<Smtp>().Bind(builder.Configuration.GetSection("Smtp"));
+            builder.Configuration.GetSection("Db").Bind(db);
+            services.AddOptions<Mail>().ValidateOnStart().Bind(context.Configuration.GetSection("Mail"));
+            source.Connect().Sort(comparer).Bind(out _items).Subscribe();
+            var r = Some(x).Bind(f);
+            services.AddOptions<Jwt>().ValidateOnStart().Bind(sp.GetRequiredService<IConfiguration>());
+            services.AddOptions<Cache>().ValidateOnStart().Bind(builder
+                .Configuration);
+            source.Connect().Bind(out ReadOnlyObservableCollection<Item> items).Subscribe();
+            """,
+            """
+            class AppSettings { public int Port { get; set; } }
+            class Other { public int Size { get; set; } }
+            class Smtp { public string Host { get; set; } = ""; }
+            """);
+
+        Assert.Equal(["File0.cs (line 1)", "File0.cs (line 5)", "File0.cs (line 8)", "File0.cs (line 9)"], scanner.DynamicReads);
+        Assert.True(scanner.Check("Size").IsRead);
+        Assert.True(scanner.Check("Smtp:Host").IsRead);
+        Assert.True(scanner.Check("Db:Name").IsRead);
+    }
+
     [Theory]
     [InlineData("ASPNETCORE_FORWARDEDHEADERS_ENABLED")]
     [InlineData("ASPNETCORE_Kestrel__Certificates__Default__Path")]
@@ -1709,6 +1738,7 @@ public class CodeReadScannerHostileFileTests
     [InlineData("a Configure call with a long dotted argument")]
     [InlineData("AddOptions calls that never close")]
     [InlineData("Configure calls with type arguments that never close")]
+    [InlineData("chained Bind calls with long arguments over lines")]
 
     // Shapes for base lists over lines and with arguments, and for type declarations the scan can't take apart.
     [InlineData("a base list over many lines")]
@@ -1842,6 +1872,7 @@ public class CodeReadScannerHostileFileTests
         "many type declarations the scan can't take apart" => Repeat("class A : B(C()) ", 3_000_000),
         "Configure calls with type arguments that never close" => Repeat("Configure<A<b ", 2_000_000) + Repeat("Configure<A<" + new string('b', 10_000), 1_000_000),
         "AddOptions calls that never close" => Repeat("AddOptions<A>(" + new string('a', 1_000), 3_000_000),
+        "chained Bind calls with long arguments over lines" => Repeat(").Bind(" + new string(' ', 1_000) + Repeat("a.b<c> \n", 300), 3_000_000),
         "a Configure call with a long dotted argument" => Repeat("Configure<A>(" + Repeat("a.", 1_000) + "config ", 1_000_000),
         _ => throw new ArgumentOutOfRangeException(nameof(shape)),
     };

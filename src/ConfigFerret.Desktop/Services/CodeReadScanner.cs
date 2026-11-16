@@ -571,6 +571,16 @@ public sealed partial class CodeReadScanner
         }
 
         var covered = new HashSet<int>();
+
+        // A Bind chained after a call that a pattern took, as in AddOptions<T>().Bind(config), is not listed.
+        void TakeChainedBinds(int start, int end)
+        {
+            for (var b = ChainedBind().Match(text, start, end - start); b.Success; b = b.NextMatch())
+            {
+                Step();
+                covered.Add(b.Index);
+            }
+        }
         var lines = new HashSet<int>();
 
         // A bare constant name resolves first in the type around the read.
@@ -607,7 +617,12 @@ public sealed partial class CodeReadScanner
             // Follow the chain: .GetSection("B"), ["C"], .GetValue<T>("D"), .Get<T>(), .Bind(x). A chain that starts
             // with a key the scanner cannot work out is followed too, so its tail is not read as a key of its own.
             var exact = false;
-            string? boundType = OptionsTypeBefore(text, m.Index);
+            string? boundType = OptionsTypeBefore(text, m.Index, out var tail);
+            if (boundType is not null)
+            {
+                TakeChainedBinds(tail, m.Index);
+            }
+
             while (true)
             {
                 var next = ChainStep().Match(text, end);
@@ -751,6 +766,7 @@ public sealed partial class CodeReadScanner
         foreach (Match m in ConfigureWhole().Matches(text))
         {
             Step();
+            TakeChainedBinds(m.Index, m.Index + m.Length);
             if (m.Groups["open"].Success)
             {
                 _sections.Add(string.Empty);
@@ -786,11 +802,26 @@ public sealed partial class CodeReadScanner
         foreach (Match m in ReadStart().Matches(text))
         {
             Step();
-            if (!covered.Contains(m.Index) && !Consumed(m.Index))
+            if (!covered.Contains(m.Index) && !Consumed(m.Index) && (!m.Groups["chained"].Success || NamesConfiguration(m.Groups["chained"].Value)))
             {
                 Dynamic(m.Index);
             }
         }
+    }
+
+    // Whether a Bind's argument, such as builder.Configuration, context.Configuration.GetSection or
+    // sp.GetRequiredService<IConfiguration>, is configuration, as the patterns above name it. Its words are split at
+    // dots, angle brackets and white space, which a null separator stands for. DynamicData's Bind(out items) and a
+    // monad's Bind(f) are not configuration.
+    private static bool NamesConfiguration(string argument)
+    {
+        return argument.Split('.', '<', '>')
+            .SelectMany(piece => piece.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .Any(part => part is "cfg" or "Cfg" or "IConfiguration" or "GetSection" or "GetRequiredSection" || EndsIn(part, "onfig") || EndsIn(part, "onfiguration"));
+
+        // Config, config, appConfig, Configuration and the like.
+        static bool EndsIn(string part, string tail) =>
+            part.Length > tail.Length && part.EndsWith(tail, StringComparison.Ordinal) && part[^(tail.Length + 1)] is 'C' or 'c';
     }
 
     private void Bind(string path, string type)
@@ -811,12 +842,16 @@ public sealed partial class CodeReadScanner
         _bound[path] = type;
     }
 
-    // Configure<T>(...GetSection, AddOptions<T>().Bind(...GetSection, AddOptions<T>().BindConfiguration(...
-    private static string? OptionsTypeBefore(string text, int index)
+    // Configure<T>(...GetSection, AddOptions<T>().Bind(...GetSection, AddOptions<T>().BindConfiguration(... The tail
+    // starts where the Configure or AddOptions call does.
+    private static string? OptionsTypeBefore(string text, int index) => OptionsTypeBefore(text, index, out _);
+
+    private static string? OptionsTypeBefore(string text, int index, out int tail)
     {
         var start = Math.Max(0, index - 200);
         var before = text[start..index];
         var m = OptionsTypeTail().Match(before);
+        tail = start + m.Index;
         return m.Success ? Simple(m.Groups["type"].Value) : null;
     }
 
@@ -1566,14 +1601,22 @@ public sealed partial class CodeReadScanner
 
     // Where a read starts, as SectionCall, ValueCall, ConfigIndexer and WholeConfigurationCall start, whatever follows. The
     // ValueCall start also takes a type argument of any shape, such as GetValue<List<string>>(. ConfigurationBinder.Bind(config, x)
-    // and config.Get(typeof(T)) are only listed.
+    // and config.Get(typeof(T)) are only listed, and so is a Bind chained after a call, as in
+    // AddOptions<T>().ValidateOnStart().Bind(config), unless a pattern above took it. Its argument, at most 200 word
+    // characters, dots, angle brackets and blanks taken whole, as in GetRequiredService<IConfiguration>() or a call
+    // over two lines, tells whether it binds configuration. The pattern stays linear: each ) starts its own run of
+    // blanks, the argument always matches and gives nothing back, and it stops at the first character it can't take,
+    // such as the ) of the next call, so no character is read by two arguments.
     [GeneratedRegex(
         @"\bGet(?:Required)?Section\s*\(|\b(?:GetValue|GetConnectionString|BindConfiguration|GetEnvironmentVariable)\s*[<(]" +
         @"|\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*(?:\?\s*)?\[|\b(?:\w*[Cc]onfig(?:uration)?|[Cc]fg)\s*\.\s*(?:Get\s*<|Bind\s*\()" +
-        @"|\bConfigurationBinder\s*\.\s*\w+\s*\(|\.\s*Get\s*\(\s*typeof\b",
+        @"|\bConfigurationBinder\s*\.\s*\w+\s*\(|\.\s*Get\s*\(\s*typeof\b|\)\s*\.\s*Bind\s*\(\s*(?<chained>(?>[\w.<>\s]{0,200}))",
         RegexOptions.CultureInvariant,
         MatchTimeoutMilliseconds)]
     private static partial Regex ReadStart();
+
+    [GeneratedRegex(@"\)\s*\.\s*Bind\s*\(", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex ChainedBind();
 
     // The type argument of Configure<T> or AddOptions<T>, and the call's open bracket. A generic T, such as
     // Dictionary<string, string>, is marked with open.
