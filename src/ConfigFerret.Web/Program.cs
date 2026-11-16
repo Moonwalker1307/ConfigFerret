@@ -15,6 +15,7 @@ if (args is ["healthcheck"])
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AnswerKnownHostsOnly();
 builder.Services.Configure<WebAppOptions>(builder.Configuration.GetSection(WebAppOptions.Section));
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
@@ -62,7 +63,6 @@ if (!app.Environment.IsDevelopment())
 app.UseSecurityHeaders();
 app.UseAntiforgery();
 
-app.MapGet("/healthz", () => Results.Text("ok"));
 app.MapBrandAssets();
 app.MapStaticAssets();
 // The security headers already forbid framing (frame-ancestors 'none'), so Blazor's own, looser policy is left out.
