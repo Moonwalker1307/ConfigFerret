@@ -163,7 +163,7 @@ public class OctopusServiceCollectionTests
     [Fact]
     public void Validator_checks_its_argument_and_passes_valid_options()
     {
-        var validator = new OctopusOptionsValidator("ConfigFerret:Octopus", null);
+        var validator = new OctopusOptionsValidator("ConfigFerret:Octopus", new ConfigurationBuilder().Build());
 
         Assert.Throws<ArgumentNullException>(() => validator.Validate(null, null!));
         Assert.Same(ValidateOptionsResult.Success, validator.Validate(null, new OctopusVariablesOptions { ServerUri = new Uri("https://octopus.example.com/"), ApiKey = "k", Project = "Api" }));

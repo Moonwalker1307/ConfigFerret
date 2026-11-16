@@ -8,12 +8,9 @@ namespace ConfigFerret.Aws;
 /// Checks AWS options bound from configuration at startup: access keys fit together and are not in an appsettings file,
 /// the service URL is safe to send signed requests to, and (for Parameter Store) the path is set.
 /// </summary>
-internal sealed class AwsOptionsValidator<TOptions>(string sectionPath, IConfiguration? configuration) : IValidateOptions<TOptions>
+internal sealed class AwsOptionsValidator<TOptions>(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<TOptions>
     where TOptions : AwsConnectionOptions
 {
-    private static readonly string[] CredentialSettings =
-        [nameof(AwsConnectionOptions.AccessKeyId), nameof(AwsConnectionOptions.SecretAccessKey), nameof(AwsConnectionOptions.SessionToken)];
-
     public ValidateOptionsResult Validate(string? name, TOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -28,9 +25,13 @@ internal sealed class AwsOptionsValidator<TOptions>(string sectionPath, IConfigu
             failures.Add(keys);
         }
 
-        failures.AddRange(CredentialSettings
-            .Select(setting => CredentialGuard.Key(sectionPath, setting))
-            .Select(key => CredentialGuard.CheckSource(configuration, key))
+        failures.AddRange(new[]
+            {
+                (Name: nameof(options.AccessKeyId), Value: options.AccessKeyId),
+                (Name: nameof(options.SecretAccessKey), Value: options.SecretAccessKey),
+                (Name: nameof(options.SessionToken), Value: options.SessionToken),
+            }
+            .Select(setting => CredentialGuard.CheckSource(configuration, CredentialGuard.Key(sectionPath, setting.Name), setting.Value, registered))
             .OfType<string>());
 
         if (AwsClients.CheckServiceUrl(options.ServiceUrl, CredentialGuard.Key(sectionPath, nameof(options.ServiceUrl))) is { } url)

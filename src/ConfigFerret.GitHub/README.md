@@ -79,7 +79,15 @@ When the host starts, the options are checked, and startup fails with a message 
 - the token is in any `appsettings*.json` file, even one that another source overrides, since that file is usually
   committed. User secrets (`secrets.json`), environment variables and key vaults are fine.
 
-The messages never include the token. Without a host, the same checks run the first time the options are read.
+The messages never include the token.
+
+Without a host, the same checks run the first time the options are read, on the configuration passed in: the root, or a
+section that `GetSection` made, which is checked through the root it reads from. The root of a registered
+`IConfiguration` is checked as well when it is another one. If the check finds no root in either, as for a section type
+of your own with no root registered, a token that is set fails with a message that says to register the root
+(`services.AddSingleton<IConfiguration>(configuration)`). With or without a host, a token served through a source that
+hides where its values come from, such as a chained configuration that is neither a root nor a section `GetSection`
+made, or a provider that keeps a section, fails too, with a message that names that source.
 
 ## How layers are linked
 

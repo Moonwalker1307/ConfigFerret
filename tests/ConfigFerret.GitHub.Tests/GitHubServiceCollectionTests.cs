@@ -174,7 +174,7 @@ public class GitHubServiceCollectionTests
     [Fact]
     public void Validator_checks_its_argument_and_passes_valid_options()
     {
-        var validator = new GitHubOptionsValidator("ConfigFerret:GitHub", null);
+        var validator = new GitHubOptionsValidator("ConfigFerret:GitHub", new ConfigurationBuilder().Build());
 
         Assert.Throws<ArgumentNullException>(() => validator.Validate(null, null!));
         Assert.Same(ValidateOptionsResult.Success, validator.Validate(null, new GitHubVariablesOptions { Owner = "contoso", Repository = "api", Token = "t" }));

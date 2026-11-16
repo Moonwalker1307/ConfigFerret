@@ -8,7 +8,7 @@ namespace ConfigFerret.Octopus;
 /// Checks <see cref="OctopusVariablesOptions"/> bound from configuration at startup: the required values are set, the
 /// server address is safe to send the API key to, and the API key is not in an appsettings file.
 /// </summary>
-internal sealed class OctopusOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<OctopusVariablesOptions>
+internal sealed class OctopusOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<OctopusVariablesOptions>
 {
     public ValidateOptionsResult Validate(string? name, OctopusVariablesOptions options)
     {
@@ -34,7 +34,7 @@ internal sealed class OctopusOptionsValidator(string sectionPath, IConfiguration
         {
             failures.Add(CredentialGuard.Missing(keyKey));
         }
-        else if (CredentialGuard.CheckSource(configuration, keyKey) is { } source)
+        else if (CredentialGuard.CheckSource(configuration, keyKey, options.ApiKey, registered) is { } source)
         {
             failures.Add(source);
         }

@@ -27,24 +27,48 @@ internal static class CredentialGuard
         $"{key} is set in {source}, whose own sources cannot be seen, so there is no telling whether it comes from an appsettings file. "
         + $"Remove it from {source}, and set {key} in a source added to the configuration itself, such as user secrets, an environment variable ({EnvironmentVariable(key)}) or a key vault.";
 
+    public static string NoRoot(string key) =>
+        $"{key} is set, but neither the configuration it is bound from nor a registered IConfiguration leads to a configuration root, "
+        + "so there is no telling whether it comes from an appsettings file. "
+        + "Bind it from the root or from a section that GetSection made, or register the root before the options are read: "
+        + "services.AddSingleton<IConfiguration>(configuration).";
+
     /// <summary>
     /// Returns the startup failure for the credential under <paramref name="key"/> when an appsettings JSON file holds a
     /// non-empty value for it, or when a source that holds it hides where its value comes from; otherwise null. Every such
     /// file counts, even when another source overrides it, because the file itself is what gets committed. The check looks
     /// inside chained configurations, chained sections included, and inside providers that wrap another one, such as
-    /// those RecordReads adds.
+    /// those RecordReads adds. A section is checked through the root it reads from, with <paramref name="key"/> as the
+    /// full path in that root. The root of the <paramref name="registered"/> IConfiguration is checked as well when it is
+    /// another one, since its files are committed too. Without any root there is no telling, so a credential that is set
+    /// (<paramref name="value"/>) fails then.
     /// </summary>
-    public static string? CheckSource(IConfiguration? configuration, string key)
+    public static string? CheckSource(IConfiguration? configuration, string key, string? value, IConfiguration? registered = null)
     {
-        if (configuration is not IConfigurationRoot root)
+        var roots = new[] { RootOf(configuration), RootOf(registered) }
+            .OfType<IConfigurationRoot>()
+            .Distinct<IConfigurationRoot>(ReferenceEqualityComparer.Instance)
+            .ToList();
+        if (roots.Count == 0)
         {
-            return null;
+            return string.IsNullOrWhiteSpace(value) ? null : NoRoot(key);
         }
 
-        var (file, hidden) = Find(root.Providers, key, []);
-        return file is not null ? InAppSettings(key, file)
-            : hidden is not null ? CannotLookInto(key, hidden)
-            : null;
+        foreach (var root in roots)
+        {
+            var (file, hidden) = Find(root.Providers, key, []);
+            if (file is not null)
+            {
+                return InAppSettings(key, file);
+            }
+
+            if (hidden is not null)
+            {
+                return CannotLookInto(key, hidden);
+            }
+        }
+
+        return null;
     }
 
     // The first appsettings file that holds the key, or else the first source that holds it but hides its own sources.

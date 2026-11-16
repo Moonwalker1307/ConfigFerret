@@ -26,7 +26,7 @@ public static class AzureServiceCollectionExtensions
         services.AddOptions<AzureKeyVaultOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<AzureKeyVaultTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<AzureKeyVaultOptions>>(
-            sp => new AzureKeyVaultOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new AzureKeyVaultOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new AzureKeyVaultSource(
             sp.GetRequiredService<IOptions<AzureKeyVaultOptions>>(),
             sp.GetRequiredService<IOptions<AzureKeyVaultTraceOptions>>(),
@@ -51,7 +51,7 @@ public static class AzureServiceCollectionExtensions
         services.AddOptions<AzureAppConfigurationOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<AzureAppConfigurationTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<AzureAppConfigurationOptions>>(
-            sp => new AzureAppConfigurationOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new AzureAppConfigurationOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new AzureAppConfigurationSource(
             sp.GetRequiredService<IOptions<AzureAppConfigurationOptions>>(),
             sp.GetRequiredService<IOptions<AzureAppConfigurationTraceOptions>>(),

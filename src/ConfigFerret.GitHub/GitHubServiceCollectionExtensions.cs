@@ -24,7 +24,7 @@ public static class GitHubServiceCollectionExtensions
         services.AddOptions<GitHubVariablesOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<GitHubTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<GitHubVariablesOptions>>(
-            sp => new GitHubOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new GitHubOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton<GitHubVariablesSource>();
         return services;
     }

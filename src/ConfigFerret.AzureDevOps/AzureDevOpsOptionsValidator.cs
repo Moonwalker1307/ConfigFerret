@@ -8,7 +8,7 @@ namespace ConfigFerret.AzureDevOps;
 /// Checks <see cref="AzureDevOpsOptions"/> bound from configuration at startup: the required values are set, the address
 /// is safe to send the token to, and the token is not in an appsettings file.
 /// </summary>
-internal sealed class AzureDevOpsOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<AzureDevOpsOptions>
+internal sealed class AzureDevOpsOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<AzureDevOpsOptions>
 {
     public ValidateOptionsResult Validate(string? name, AzureDevOpsOptions options)
     {
@@ -42,8 +42,8 @@ internal sealed class AzureDevOpsOptionsValidator(string sectionPath, IConfigura
             failures.Add($"{patKey} and {bearerKey} are both set. Set only one.");
         }
 
-        failures.AddRange(new[] { patKey, bearerKey }
-            .Select(key => CredentialGuard.CheckSource(configuration, key))
+        failures.AddRange(new[] { (Key: patKey, Value: options.PersonalAccessToken), (Key: bearerKey, Value: options.AccessToken) }
+            .Select(credential => CredentialGuard.CheckSource(configuration, credential.Key, credential.Value, registered))
             .OfType<string>());
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);

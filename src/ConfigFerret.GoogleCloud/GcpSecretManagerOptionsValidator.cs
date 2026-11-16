@@ -9,7 +9,7 @@ namespace ConfigFerret.GoogleCloud;
 /// and API address are valid, the key file exists, and no access token or key content is in an appsettings file.
 /// Without a credential, Application Default Credentials are used, so a missing credential is not a failure here.
 /// </summary>
-internal sealed class GcpSecretManagerOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<GcpSecretManagerOptions>
+internal sealed class GcpSecretManagerOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<GcpSecretManagerOptions>
 {
     public ValidateOptionsResult Validate(string? name, GcpSecretManagerOptions options)
     {
@@ -30,9 +30,8 @@ internal sealed class GcpSecretManagerOptionsValidator(string sectionPath, IConf
             failures.Add(address);
         }
 
-        failures.AddRange(new[] { nameof(options.AccessToken), nameof(options.CredentialsJson) }
-            .Select(setting => CredentialGuard.Key(sectionPath, setting))
-            .Select(key => CredentialGuard.CheckSource(configuration, key))
+        failures.AddRange(new[] { (Name: nameof(options.AccessToken), Value: options.AccessToken), (Name: nameof(options.CredentialsJson), Value: options.CredentialsJson) }
+            .Select(setting => CredentialGuard.CheckSource(configuration, CredentialGuard.Key(sectionPath, setting.Name), setting.Value, registered))
             .OfType<string>());
 
         if (!string.IsNullOrWhiteSpace(options.CredentialsFile) && !File.Exists(options.CredentialsFile.Trim()))

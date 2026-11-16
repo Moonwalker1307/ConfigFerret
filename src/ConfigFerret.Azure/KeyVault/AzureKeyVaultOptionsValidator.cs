@@ -8,7 +8,7 @@ namespace ConfigFerret.Azure;
 /// Checks <see cref="AzureKeyVaultOptions"/> bound from configuration at startup: the vault address is set and uses
 /// HTTPS, and the client secret is complete and not in an appsettings file.
 /// </summary>
-internal sealed class AzureKeyVaultOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<AzureKeyVaultOptions>
+internal sealed class AzureKeyVaultOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<AzureKeyVaultOptions>
 {
     public ValidateOptionsResult Validate(string? name, AzureKeyVaultOptions options)
     {
@@ -24,7 +24,7 @@ internal sealed class AzureKeyVaultOptionsValidator(string sectionPath, IConfigu
             failures.Add($"{vaultKey} must be an absolute https URL without credentials.");
         }
 
-        AzureOptionsChecks.CheckSignIn(sectionPath, configuration, options.TenantId, options.ClientId, options.ClientSecret, failures);
+        AzureOptionsChecks.CheckSignIn(sectionPath, configuration, registered, options.TenantId, options.ClientId, options.ClientSecret, failures);
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
 }
@@ -32,7 +32,7 @@ internal sealed class AzureKeyVaultOptionsValidator(string sectionPath, IConfigu
 /// <summary>Startup checks shared by the Key Vault and App Configuration validators.</summary>
 internal static class AzureOptionsChecks
 {
-    public static void CheckSignIn(string sectionPath, IConfiguration? configuration, string? tenantId, string? clientId, string? clientSecret, List<string> failures)
+    public static void CheckSignIn(string sectionPath, IConfiguration? configuration, IConfiguration? registered, string? tenantId, string? clientId, string? clientSecret, List<string> failures)
     {
         var secretKey = CredentialGuard.Key(sectionPath, "ClientSecret");
         if (string.IsNullOrWhiteSpace(clientSecret))
@@ -40,7 +40,7 @@ internal static class AzureOptionsChecks
             return;
         }
 
-        if (CredentialGuard.CheckSource(configuration, secretKey) is { } source)
+        if (CredentialGuard.CheckSource(configuration, secretKey, clientSecret, registered) is { } source)
         {
             failures.Add(source);
         }

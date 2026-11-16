@@ -24,7 +24,7 @@ public static class AwsServiceCollectionExtensions
         services.AddOptions<AwsSecretsManagerOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<AwsSecretsTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<AwsSecretsManagerOptions>>(
-            sp => new AwsOptionsValidator<AwsSecretsManagerOptions>(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new AwsOptionsValidator<AwsSecretsManagerOptions>(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new AwsSecretsManagerSource(
             sp.GetRequiredService<IOptions<AwsSecretsManagerOptions>>().Value,
             sp.GetRequiredService<IOptions<AwsSecretsTraceOptions>>().Value));
@@ -45,7 +45,7 @@ public static class AwsServiceCollectionExtensions
         services.AddOptions<AwsParameterStoreOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<AwsParametersTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<AwsParameterStoreOptions>>(
-            sp => new AwsOptionsValidator<AwsParameterStoreOptions>(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new AwsOptionsValidator<AwsParameterStoreOptions>(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new AwsParameterStoreSource(
             sp.GetRequiredService<IOptions<AwsParameterStoreOptions>>().Value,
             sp.GetRequiredService<IOptions<AwsParametersTraceOptions>>().Value));

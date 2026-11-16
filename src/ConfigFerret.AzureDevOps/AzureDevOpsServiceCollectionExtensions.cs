@@ -25,7 +25,7 @@ public static class AzureDevOpsServiceCollectionExtensions
         services.AddOptions<AzureDevOpsOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<AzureDevOpsTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<AzureDevOpsOptions>>(
-            sp => new AzureDevOpsOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new AzureDevOpsOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton<AzureDevOpsSource>();
         return services;
     }
