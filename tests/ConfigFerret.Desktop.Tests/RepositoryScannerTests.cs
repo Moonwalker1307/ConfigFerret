@@ -203,6 +203,53 @@ public class RepositoryScannerTests : IDisposable
     }
 
     [Fact]
+    public void A_chart_is_offered_every_values_file_but_its_own_values_templates_and_subcharts()
+    {
+        Write("a/Chart.yaml", "name: a\n");
+        Write("a/values.yaml", "x: 1\n");
+        Write("a/values-prod.yaml", "x: 1\n");
+        Write("a/templates/values-t.yaml", "x: 1\n");
+        Write("a/charts/b/Chart.yaml", "name: b\n");
+        Write("a/charts/b/values.yaml", "x: 1\n");
+        Write("a/charts/b/values-b.yaml", "x: 1\n");
+        Write("env/values-qa.yaml", "x: 1\n");
+
+        var charts = RepositoryScanner.Scan(_temp.FullName).HelmCharts;
+
+        Assert.Equal(["a", "a/charts/b"], charts.Select(c => c.RelativePath));
+        Assert.Equal(["a/values-prod.yaml", "env/values-qa.yaml"], charts[0].ValuesFiles);
+        Assert.Equal(["a/charts/b/values-b.yaml", "a/templates/values-t.yaml", "a/values-prod.yaml", "a/values.yaml", "env/values-qa.yaml"], charts[1].ValuesFiles);
+        foreach (var chart in charts)
+        {
+            Assert.Equal(chart.ValuesFiles, Enumerable.Range(0, chart.ValuesFiles.Count).Select(i => chart.ValuesFiles[i]));
+            Assert.Throws<ArgumentOutOfRangeException>(() => chart.ValuesFiles[chart.ValuesFiles.Count]);
+        }
+    }
+
+    [Fact]
+    public void Scanning_many_charts_and_values_files_costs_memory_in_step_with_the_files()
+    {
+        // Each chart folder holds a chart and a values file, and as many values files lie outside every chart. Every
+        // chart is offered all of them, so a list per chart would cost charts times files.
+        const int count = 400;
+        for (var i = 0; i < count; i++)
+        {
+            Write($"charts/c{i}/Chart.yaml", string.Empty);
+            Write($"charts/c{i}/values-prod.yaml", string.Empty);
+            Write($"env/e{i}/values-qa.yaml", string.Empty);
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var scan = RepositoryScanner.Scan(_temp.FullName);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(count, scan.HelmCharts.Count);
+        Assert.Equal(2 * count, scan.HelmCharts[0].ValuesFiles.Count);
+        const long budget = 3 * count * 16 * 1024;
+        Assert.True(allocated < budget, $"The scan allocated {allocated / 1024 / 1024} MB, more than {budget / 1024 / 1024} MB for {3 * count} files.");
+    }
+
+    [Fact]
     public void Lists_charts_manifests_and_workflows_in_name_order()
     {
         Write("z/Chart.yaml", "name: z\n");
