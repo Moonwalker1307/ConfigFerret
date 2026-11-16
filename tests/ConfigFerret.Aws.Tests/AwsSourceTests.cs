@@ -4,6 +4,9 @@ using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.Aws.Tests;
 
+// Looking up an unknown profile reads the profile files, and AwsProfileTests points that lookup at its own folder while it
+// runs. Running in its collection keeps the two from reading and deleting the same files at the same time.
+[Collection(nameof(AwsProfileTests))]
 public class AwsSourceTests
 {
     private static readonly Dictionary<string, string?> Keys = new()

@@ -1,24 +1,24 @@
+using ConfigFerret.Tests.Shared;
+
 namespace ConfigFerret.Aws.Tests;
 
 /// <summary>Reads profiles from temporary shared config and credentials files.</summary>
 [Collection(nameof(AwsProfileTests))]
 public sealed class AwsProfileTests : IDisposable
 {
-    private readonly DirectoryInfo _dir = Directory.CreateTempSubdirectory("configferret-aws-");
+    private readonly TempSettingsFolder _dir = new();
 
     public AwsProfileTests()
     {
-        var credentials = Path.Join(_dir.FullName, "credentials");
-        var config = Path.Join(_dir.FullName, "config");
-        File.WriteAllText(credentials, "[cf-keys]\naws_access_key_id = AKIDPROFILE\naws_secret_access_key = profile-secret\n");
-        File.WriteAllText(config, "[profile cf-keys]\nregion = ap-southeast-2\n\n[profile cf-empty]\nregion = eu-central-1\n");
+        var credentials = _dir.Write("credentials", "[cf-keys]\naws_access_key_id = AKIDPROFILE\naws_secret_access_key = profile-secret\n");
+        _dir.Write("config", "[profile cf-keys]\nregion = ap-southeast-2\n\n[profile cf-empty]\nregion = eu-central-1\n");
         AwsClients.ProfilesLocation = credentials;
     }
 
     public void Dispose()
     {
         AwsClients.ProfilesLocation = null;
-        _dir.Delete(recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
@@ -31,6 +31,15 @@ public sealed class AwsProfileTests : IDisposable
 
         Assert.Equal("ap-southeast-2", client.Config.RegionEndpoint.SystemName);
         Assert.Contains("Credential=AKIDPROFILE/", aws.SigningHeaders[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Runs_with_the_tests_that_look_up_a_profile_that_is_not_there()
+    {
+        // The profile files come from a setting that every test sees, so a lookup that runs at the same time reads them.
+        var attribute = Assert.IsType<CollectionAttribute>(Assert.Single(typeof(AwsSourceTests).GetCustomAttributes(typeof(CollectionAttribute), inherit: false)));
+
+        Assert.Equal(nameof(AwsProfileTests), attribute.Name);
     }
 
     [Fact]
