@@ -357,6 +357,119 @@ public class ExternalSecretsTests
         Assert.Empty(resolver.Resolve(SecretLayer("synced", "OTHER"), new TraceDiagnostics()));
     }
 
+    // A pod, an ExternalSecret with its SecretStore and a SecretProviderClass, with the same names in each namespace.
+    private static string InNamespace(string ns, string provider) => $$"""
+        apiVersion: v1
+        kind: Pod
+        metadata: { name: api, namespace: {{ns}} }
+        spec:
+          containers:
+            - name: api
+              env:
+                - name: PW
+                  valueFrom: { secretKeyRef: { name: db, key: password } }
+              volumeMounts:
+                - { name: kv, mountPath: /mnt/kv }
+          volumes:
+            - name: kv
+              csi:
+                driver: secrets-store.csi.k8s.io
+                volumeAttributes: { secretProviderClass: kv-files }
+        ---
+        apiVersion: external-secrets.io/v1
+        kind: SecretStore
+        metadata: { name: kv, namespace: {{ns}} }
+        spec:
+          provider:
+            {{provider}}: {}
+        ---
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata: { name: db, namespace: {{ns}} }
+        spec:
+          secretStoreRef: { name: kv }
+          data:
+            - secretKey: password
+              remoteRef: { key: {{ns}}-db-password }
+        ---
+        apiVersion: secrets-store.csi.x-k8s.io/v1
+        kind: SecretProviderClass
+        metadata: { name: kv-files, namespace: {{ns}} }
+        spec:
+          provider: aws
+          parameters:
+            objects: |
+              - objectName: {{ns}}-api-key
+                objectAlias: api-key
+        """;
+
+    [Theory]
+    [InlineData("api", "azurekv", "prod")]
+    [InlineData("prod/api", "azurekv", "prod")]
+    [InlineData("staging/api", "vault", "staging")]
+    public void A_workload_reads_the_operator_objects_of_its_own_namespace(string workload, string provider, string ns)
+    {
+        var report = ConfigTracer.ForContainer(Manifests(InNamespace("prod", "azurekv"), InNamespace("staging", "vault")), workload).Trace();
+
+        var origins = report.Find("PW")?.EffectiveStep?.Origins ?? [];
+        Assert.Equal<SourceRef?>([new ExternalSecretRef(provider, "kv", $"{ns}-db-password")], origins.Select(o => o.Reference));
+        Assert.Equal(new ExternalSecretRef("aws", "kv-files", $"{ns}-api-key", null, null), report.Find("/mnt/kv/api-key")?.EffectiveStep?.Reference);
+    }
+
+    [Fact]
+    public void A_SecretProviderClass_named_like_another_namespace_s_does_not_take_its_place()
+    {
+        static string Spc(string name, string? ns, string remoteKey) => $$"""
+            apiVersion: secrets-store.csi.x-k8s.io/v1
+            kind: SecretProviderClass
+            metadata: { name: "{{name}}"{{(ns is null ? "" : $", namespace: {ns}")}} }
+            spec:
+              provider: aws
+              parameters:
+                objects: |
+                  - objectName: {{remoteKey}}
+                    objectAlias: api-key
+              secretObjects:
+                - secretName: synced
+                  data: [{ objectName: api-key, key: API_KEY }]
+            """;
+        var manifests = Manifests(
+            """
+            apiVersion: v1
+            kind: Pod
+            metadata: { name: api, namespace: prod }
+            spec:
+              containers:
+                - name: api
+                  env:
+                    - name: K
+                      valueFrom: { secretKeyRef: { name: synced, key: API_KEY } }
+                  volumeMounts:
+                    - { name: kv, mountPath: /mnt/kv }
+              volumes:
+                - name: kv
+                  csi:
+                    driver: secrets-store.csi.k8s.io
+                    volumeAttributes: { secretProviderClass: kv }
+            """,
+            Spc("kv", "prod", "prod-api-key"),
+            Spc("kv", "staging", "staging-api-key"),
+            Spc("prod/kv", null, "posing-api-key"));
+
+        var report = ConfigTracer.ForContainer(manifests, "prod/api").Trace();
+
+        var key = report.Find("K")?.EffectiveStep;
+        Assert.Contains("but SecretProviderClass kv creates it", key?.Note, StringComparison.Ordinal);
+        Assert.Contains<SourceRef?>(new ExternalSecretRef("aws", "kv", "prod-api-key"), key?.Origins.Select(o => o.Reference) ?? []);
+        Assert.DoesNotContain<SourceRef?>(new ExternalSecretRef("aws", "kv", "staging-api-key"), key?.Origins.Select(o => o.Reference) ?? []);
+        Assert.Equal(new ExternalSecretRef("aws", "kv", "prod-api-key"), report.Find("/mnt/kv/api-key")?.EffectiveStep?.Reference);
+
+        // A Kubernetes name cannot hold a slash, so the one named prod/kv is left out with a warning.
+        Assert.DoesNotContain<SourceRef?>(new ExternalSecretRef("aws", "prod/kv", "posing-api-key"), key?.Origins.Select(o => o.Reference) ?? []);
+        Assert.Equal(["kv"], manifests.SecretProviderClasses.Keys);
+        Assert.Single(report.Warnings, w => w == "Skipped SecretProviderClass prod/kv in m.yaml: a Kubernetes name cannot hold a slash.");
+    }
+
     [Fact]
     public void Container_trace_lists_CSI_files_and_synthesized_Secret_files_and_warns()
     {

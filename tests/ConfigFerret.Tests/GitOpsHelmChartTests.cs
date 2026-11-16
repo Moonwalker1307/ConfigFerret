@@ -585,6 +585,66 @@ public sealed class GitOpsHelmChartTests : IDisposable
     }
 
     [Fact]
+    public void Reads_values_from_the_config_map_in_the_release_namespace()
+    {
+        var release = GitOpsApplication.Parse("""
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata: {name: rel, namespace: staging}
+            spec:
+              chart:
+                spec:
+                  chart: orders
+                  version: 1.0.0
+                  sourceRef: {kind: HelmRepository, name: repo}
+              valuesFrom:
+                - {kind: ConfigMap, name: vals, valuesKey: timeout, targetPath: db.timeout}
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: vals, namespace: staging}
+            data: {timeout: "30"}
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: vals, namespace: prod}
+            data: {timeout: "60"}
+            """, "rel.yaml");
+
+        var chart = HelmChart.ForGitOps(release, new GitOpsOptions { ChartFolder = _root });
+
+        Assert.Equal("30", chart.GetValue("db.timeout"));
+    }
+
+    [Fact]
+    public void A_release_with_an_empty_namespace_reads_values_from_any_namespace()
+    {
+        var release = GitOpsApplication.Parse("""
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            metadata: {name: rel, namespace: ""}
+            spec:
+              chart:
+                spec:
+                  chart: orders
+                  version: 1.0.0
+                  sourceRef: {kind: HelmRepository, name: repo}
+              valuesFrom:
+                - {kind: ConfigMap, name: vals, valuesKey: timeout, targetPath: db.timeout}
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: vals, namespace: flux-system}
+            data: {timeout: "30"}
+            """, "rel.yaml");
+
+        var chart = HelmChart.ForGitOps(release, new GitOpsOptions { ChartFolder = _root });
+
+        Assert.Equal("30", chart.GetValue("db.timeout"));
+        Assert.Null(release.Namespace);
+    }
+
+    [Fact]
     public void Invalid_inline_values_become_a_warning()
     {
         var chart = HelmChart.ForGitOps(Argo("      values: 'a: ['"), new GitOpsOptions { ChartFolder = _root });

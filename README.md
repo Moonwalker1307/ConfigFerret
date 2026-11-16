@@ -408,6 +408,12 @@ Console.WriteLine(report.Explain("/app/appsettings.Production.json"));
 - A variable that Kubernetes sets at run time (`fieldRef`) shows `(set at run time)`. One whose ConfigMap or Secret
   is not in the manifests shows `(unknown)`, and its value is `null` in JSON. An `envFrom` source or a volume without
   `items` that is not in the manifests gives a warning, since the names it adds can't be listed.
+- A workload's ConfigMaps, Secrets, ExternalSecrets and SecretProviderClasses are looked up in its
+  `metadata.namespace`, and then among the objects without a namespace. A workload without a namespace sees every
+  namespace and gets the object of each name loaded last, with a warning when that name is in more than one. When
+  the manifests hold the same workload name in more than one namespace, pick one as `namespace/name`, for example
+  `workload: "staging/api"`, or `/api` for the one without a namespace. An object whose name holds a slash, which
+  Kubernetes refuses, is left out with a warning.
 - Helm stores only the merged values a release was installed with, so a trace built from a release shows one
   "release values" layer rather than the separate `-f` files and `--set` flags.
 - Nothing is read from the caller's own process environment, so the tool's own variables never reach the report.

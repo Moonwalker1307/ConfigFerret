@@ -21,14 +21,19 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
 
     private (Workload Workload, Container Container)? _target;
     private bool _selected;
+    private bool _warnedSkipped;
+    private List<Workload>? _candidates;
     private (Container Container, List<ProvenanceStep> Steps)? _entrySteps;
 
     public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics)
     {
+        WarnAboutSkippedObjects(diagnostics);
+
         // A Secret key that an ExternalSecret or a SecretProviderClass fills, whichever resolver found the key.
+        // The Secret is the one the workload sees, so only what fills it in the workload's namespace counts.
         if (layer is { Kind: LayerKind.KubernetesSecret, Reference: SecretKeyRef secretKey })
         {
-            return manifests.SecretOrigins(secretKey.Name, secretKey.Key).Select(OriginStep).ToList();
+            return manifests.SecretOrigins(Candidates().FirstOrDefault()?.Namespace, secretKey.Name, secretKey.Key).Select(OriginStep).ToList();
         }
 
         if (layer.Kind != LayerKind.DotNetProvider)
@@ -65,7 +70,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
         var names = new List<string>();
         foreach (var from in container.EnvFrom)
         {
-            if (!manifests.TryGetData(from.IsSecret, from.Name, out var data))
+            if (!manifests.TryGetData(from.IsSecret, workload.Namespace, from.Name, out var data))
             {
                 diagnostics.Warn($"envFrom {(from.IsSecret ? "Secret" : "ConfigMap")} {from.Name} on {workload.DisplayName}, container {container.Name} was not loaded, so the variables it adds are not listed.");
                 continue;
@@ -117,7 +122,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
 
             if (volume.SecretProviderClass is { } spcName)
             {
-                if (manifests.SecretProviderClasses.TryGetValue(spcName, out var spc))
+                if (manifests.FindSecretProviderClass(workload.Namespace, spcName) is { } spc)
                 {
                     paths.AddRange(spc.Objects.Select(o => mountPath + "/" + o.FileName.TrimStart('/')));
                 }
@@ -134,7 +139,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
                 {
                     relative = projection.Items.Select(i => i.Value);
                 }
-                else if (manifests.TryGetData(projection.IsSecret, projection.SourceName, out var data))
+                else if (manifests.TryGetData(projection.IsSecret, workload.Namespace, projection.SourceName, out var data))
                 {
                     relative = data.Data.Keys.Order(StringComparer.Ordinal);
                     if (data.HasUnknownKeys)
@@ -181,7 +186,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
                 ConfigMapKeyRef c => (false, c.Name, c.Key),
                 _ => (false, "", ""),
             };
-            if (key.Length == 0 || !manifests.TryGetData(isSecret, name, out var data))
+            if (key.Length == 0 || !manifests.TryGetData(isSecret, workload.Namespace, name, out var data))
             {
                 steps[i] = steps[i] with { Note = steps[i].Note + "; its contents were not loaded" };
             }
@@ -215,9 +220,8 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
         }
 
         _selected = true;
-        var candidates = manifests.Workloads
-            .Where(w => workloadName is null || string.Equals(w.Name, workloadName, StringComparison.Ordinal))
-            .ToList();
+        WarnAboutSkippedObjects(diagnostics);
+        var candidates = Candidates();
         if (candidates.Count == 0)
         {
             diagnostics.Warn(workloadName is null
@@ -228,7 +232,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
 
         if (candidates.Count > 1)
         {
-            diagnostics.Warn($"The manifests hold {candidates.Count} workloads; using {candidates[0].DisplayName}. Pass a workload name to pick another.");
+            diagnostics.Warn(SeveralWorkloads(candidates));
         }
 
         var workload = candidates[0];
@@ -255,7 +259,113 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
         }
 
         _target = (workload, containers[0]);
+        if (workload.Namespace is null)
+        {
+            WarnAboutSharedNames(workload, containers[0], diagnostics);
+        }
+
         return _target;
+    }
+
+    // A workload without a namespace sees every namespace and gets the object of each name loaded last. When a name it
+    // uses is in more than one namespace, that may not be the one meant, so each such name is named once with the
+    // namespace used.
+    private void WarnAboutSharedNames(Workload workload, Container container, TraceDiagnostics diagnostics)
+    {
+        var mounted = container.VolumeMounts.Select(m => m.Name).ToHashSet(StringComparer.Ordinal);
+        var volumes = workload.Volumes.Where(v => mounted.Contains(v.Name)).ToList();
+        var data = container.EnvFrom.Select(e => (e.IsSecret, e.Name))
+            .Concat(container.Env.Select(e => e.Source switch
+            {
+                EnvValueSource.FromConfigMap cm => (IsSecret: false, cm.Name),
+                EnvValueSource.FromSecret secret => (IsSecret: true, secret.Name),
+                _ => (IsSecret: false, Name: ""),
+            }))
+            .Concat(volumes.SelectMany(v => v.Projections).Select(p => (p.IsSecret, Name: p.SourceName)))
+            .Where(r => r.Name.Length > 0)
+            .Distinct();
+        foreach (var (isSecret, name) in data)
+        {
+            if (manifests.IsDataInSeveralNamespaces(isSecret, name, out var used, out var overCreated))
+            {
+                diagnostics.Warn(SharedName(workload, isSecret ? "Secret" : "ConfigMap", name, used, overCreated));
+            }
+        }
+
+        foreach (var name in volumes.Select(v => v.SecretProviderClass).OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            if (manifests.IsSecretProviderClassInSeveralNamespaces(name, out var used))
+            {
+                diagnostics.Warn(SharedName(workload, "SecretProviderClass", name, used, overCreated: false));
+            }
+        }
+
+        static string SharedName(Workload workload, string kind, string name, string? used, bool overCreated)
+        {
+            var where = used is null ? "which has no namespace" : $"in namespace {used}";
+            return $"{workload.DisplayName} has no namespace, so it sees the objects of every namespace. {kind} {name} is in more than one; "
+                + (overCreated ? $"the one in the manifests, {where}, is used, not one that an operator creates." : $"the one loaded last, {where}, is used.");
+        }
+    }
+
+    // What was left out while the manifests were loaded, once per resolver.
+    private void WarnAboutSkippedObjects(TraceDiagnostics diagnostics)
+    {
+        if (!_warnedSkipped)
+        {
+            _warnedSkipped = true;
+            foreach (var warning in manifests.Warnings)
+            {
+                diagnostics.Warn(warning);
+            }
+        }
+    }
+
+    // The workloads the workload name picks, in the order they were loaded: all of them without a name. namespace/name
+    // picks the ones of that name in that namespace, and /name the ones without a namespace. A Kubernetes name cannot
+    // hold a slash, so a workload name with one is never taken as a plain name.
+    private List<Workload> Candidates()
+    {
+        if (_candidates is not null)
+        {
+            return _candidates;
+        }
+
+        if (workloadName is null)
+        {
+            return _candidates = [.. manifests.Workloads];
+        }
+
+        // Split at the first slash: a namespace cannot hold one, so no object can pose as one in another namespace.
+        if (workloadName.IndexOf('/', StringComparison.Ordinal) is var slash and >= 0)
+        {
+            var (ns, name) = (workloadName[..slash], workloadName[(slash + 1)..]);
+            return _candidates = manifests.Workloads
+                .Where(w => string.Equals(w.Namespace ?? "", ns, StringComparison.Ordinal) && string.Equals(w.Name, name, StringComparison.Ordinal))
+                .ToList();
+        }
+
+        return _candidates = manifests.Workloads.Where(w => string.Equals(w.Name, workloadName, StringComparison.Ordinal)).ToList();
+    }
+
+    // The warning when several workloads match. When they are in different namespaces it names the namespace of the
+    // one used, and how to pick one in another.
+    private string SeveralWorkloads(List<Workload> candidates)
+    {
+        var first = candidates[0];
+        if (candidates.TrueForAll(w => w.Namespace == first.Namespace))
+        {
+            return $"The manifests hold {candidates.Count} workloads; using {first.DisplayName}. Pass a workload name to pick another.";
+        }
+
+        var picked = first.Namespace is null ? $"{first.DisplayName}, which has no namespace" : $"{first.DisplayName} in namespace {first.Namespace}";
+        if (workloadName is null)
+        {
+            return $"The manifests hold {candidates.Count} workloads; using {picked}. Pass a workload name, or namespace/name, to pick another.";
+        }
+
+        var other = candidates.First(w => w.Namespace != first.Namespace);
+        return $"The manifests hold {candidates.Count} workloads named '{workloadName}'; using {picked}. Pass namespace/name, such as {other.Namespace}/{other.Name}, to pick another.";
     }
 
     private List<ProvenanceStep> ResolveEnv(Workload workload, Container container, string name) =>
@@ -279,7 +389,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
             }
 
             var key = name[from.Prefix.Length..];
-            if (!manifests.TryGetData(from.IsSecret, from.Name, out var data))
+            if (!manifests.TryGetData(from.IsSecret, workload.Namespace, from.Name, out var data))
             {
                 unloaded.Add(from);
                 continue;
@@ -368,8 +478,8 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
             steps.Add(entry.Source switch
             {
                 EnvValueSource.Literal literal => LiteralStep(workload, container, entry, literal.Value, steps, depths, out depth, ref expandedLength),
-                EnvValueSource.FromConfigMap cm => KeyRefStep(isSecret: false, cm.Name, cm.Key, $"configMapKeyRef on {where}"),
-                EnvValueSource.FromSecret s => KeyRefStep(isSecret: true, s.Name, s.Key, $"secretKeyRef on {where}"),
+                EnvValueSource.FromConfigMap cm => KeyRefStep(workload, isSecret: false, cm.Name, cm.Key, $"configMapKeyRef on {where}"),
+                EnvValueSource.FromSecret s => KeyRefStep(workload, isSecret: true, s.Name, s.Key, $"secretKeyRef on {where}"),
                 EnvValueSource.FromField f => new ProvenanceStep
                 {
                     Kind = LayerKind.KubernetesField,
@@ -572,9 +682,9 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
         }, depth);
     }
 
-    private ProvenanceStep KeyRefStep(bool isSecret, string sourceName, string key, string note)
+    private ProvenanceStep KeyRefStep(Workload workload, bool isSecret, string sourceName, string key, string note)
     {
-        var found = manifests.TryGetData(isSecret, sourceName, out var data);
+        var found = manifests.TryGetData(isSecret, workload.Namespace, sourceName, out var data);
         if (found && data!.Data.TryGetValue(key, out var value))
         {
             return DataStep(isSecret, data, key, value, note);
@@ -650,7 +760,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
             if (volume.SecretProviderClass is { } spcName)
             {
                 var mountedAs = $"mounted at {mount.MountPath} by CSI volume {volume.Name} on {workload.DisplayName}, container {container.Name}";
-                if (!manifests.SecretProviderClasses.TryGetValue(spcName, out var spc))
+                if (manifests.FindSecretProviderClass(workload.Namespace, spcName) is not { } spc)
                 {
                     return
                     [
@@ -684,7 +794,7 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
                     continue;
                 }
 
-                if (projection.Items.Count == 0 && manifests.TryGetData(projection.IsSecret, projection.SourceName, out var known) && !known.Data.ContainsKey(key)
+                if (projection.Items.Count == 0 && manifests.TryGetData(projection.IsSecret, workload.Namespace, projection.SourceName, out var known) && !known.Data.ContainsKey(key)
                     && !known.HasUnknownKeys && volume.Projections.Count > 1)
                 {
                     continue;

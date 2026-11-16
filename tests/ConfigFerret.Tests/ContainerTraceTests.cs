@@ -239,6 +239,350 @@ public class ContainerTraceTests
         Assert.Equal("No Kubernetes workload named 'other' found in the manifests.", Assert.Single(report.Warnings));
     }
 
+    // The same app in two namespaces, as kubectl get -A -o yaml gives it: every object's name is in both.
+    private const string TwoNamespaces = """
+        apiVersion: v1
+        kind: ConfigMap
+        metadata: { name: api-config, namespace: prod }
+        data:
+          Db__Host: prod-db.internal
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata: { name: api-secret, namespace: prod }
+        stringData:
+          Db__Password: fake-prod-password
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: api, namespace: prod }
+        spec:
+          template:
+            spec:
+              containers:
+                - name: api
+                  envFrom:
+                    - configMapRef: { name: api-config }
+                  env:
+                    - name: Db__Password
+                      valueFrom: { secretKeyRef: { name: api-secret, key: Db__Password } }
+                  volumeMounts:
+                    - { name: config, mountPath: /app/config }
+              volumes:
+                - name: config
+                  configMap: { name: api-config }
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata: { name: api-config, namespace: staging }
+        data:
+          Db__Host: staging-db.internal
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata: { name: api-secret, namespace: staging }
+        stringData:
+          Db__Password: fake-staging-password
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: api, namespace: staging }
+        spec:
+          template:
+            spec:
+              containers:
+                - name: api
+                  envFrom:
+                    - configMapRef: { name: api-config }
+                  env:
+                    - name: Db__Password
+                      valueFrom: { secretKeyRef: { name: api-secret, key: Db__Password } }
+                  volumeMounts:
+                    - { name: config, mountPath: /app/config }
+              volumes:
+                - name: config
+                  configMap: { name: api-config }
+        """;
+
+    [Theory]
+    [InlineData("prod/api", "prod-db.internal", 5, 11)]
+    [InlineData("staging/api", "staging-db.internal", 36, 42)]
+    public void A_workload_reads_the_configmaps_and_secrets_of_its_own_namespace(string workload, string host, int hostLine, int passwordLine)
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(TwoNamespaces, "all.yaml"), workload).Trace();
+
+        Assert.Equal(host, report.Find("Db__Host")?.Value);
+        Assert.Equal($"key Db__Host, all.yaml:{hostLine}", report.Find("Db__Host")?.EffectiveStep?.Location);
+        Assert.Equal($"key Db__Password, all.yaml:{passwordLine}", report.Find("Db__Password")?.EffectiveStep?.Location);
+        Assert.Equal(host, report.Find("/app/config/Db__Host")?.Value);
+        Assert.Empty(report.Warnings);
+    }
+
+    [Fact]
+    public void A_workload_name_in_two_namespaces_picks_the_first_and_says_how_to_pick_the_other()
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(TwoNamespaces, "all.yaml"), workload: "api").Trace();
+
+        Assert.Equal("prod-db.internal", report.Find("Db__Host")?.Value);
+        Assert.Equal(
+            "The manifests hold 2 workloads named 'api'; using Deployment/api in namespace prod. Pass namespace/name, such as staging/api, to pick another.",
+            Assert.Single(report.Warnings));
+        Assert.Equal(
+            "The manifests hold 2 workloads; using Deployment/api in namespace prod. Pass a workload name, or namespace/name, to pick another.",
+            Assert.Single(ConfigTracer.ForContainer(KubernetesManifests.Parse(TwoNamespaces, "all.yaml")).Trace().Warnings));
+    }
+
+    [Fact]
+    public void A_workload_without_a_namespace_takes_the_object_loaded_last()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: ConfigMap
+            metadata: { name: cfg }
+            data: { A: base }
+            ---
+            kind: ConfigMap
+            metadata: { name: cfg, namespace: prod }
+            data: { A: prod }
+            ---
+            kind: Pod
+            metadata: { name: api }
+            spec:
+              containers:
+                - name: api
+                  envFrom: [{ configMapRef: { name: cfg } }]
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        Assert.Equal("prod", report.Find("A")?.Value);
+        Assert.Equal(["cfg"], manifests.ConfigMaps.Keys);
+    }
+
+    [Fact]
+    public void A_workload_without_a_namespace_says_which_namespace_a_shared_name_comes_from()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: ConfigMap
+            metadata: { name: cfg, namespace: prod }
+            data: { A: fake-prod }
+            ---
+            kind: ConfigMap
+            metadata: { name: cfg, namespace: staging }
+            data: { A: fake-staging }
+            ---
+            kind: Secret
+            metadata: { name: s, namespace: staging }
+            stringData: { B: fake-staging-secret }
+            ---
+            kind: Secret
+            metadata: { name: s, namespace: prod }
+            stringData: { B: fake-prod-secret }
+            ---
+            kind: ConfigMap
+            metadata: { name: single, namespace: prod }
+            data: { C: fake-single }
+            ---
+            kind: Pod
+            metadata: { name: api }
+            spec:
+              containers:
+                - name: api
+                  envFrom:
+                    - configMapRef: { name: cfg }
+                    - secretRef: { name: s }
+                    - configMapRef: { name: single }
+                  env:
+                    - name: D
+                      valueFrom: { secretKeyRef: { name: s, key: B } }
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        Assert.Equal("fake-staging", report.Find("A")?.Value);
+        Assert.Equal(
+            [
+                "Pod/api has no namespace, so it sees the objects of every namespace. ConfigMap cfg is in more than one; the one loaded last, in namespace staging, is used.",
+                "Pod/api has no namespace, so it sees the objects of every namespace. Secret s is in more than one; the one loaded last, in namespace prod, is used.",
+            ],
+            report.Warnings);
+    }
+
+    [Fact]
+    public void A_slash_before_the_name_picks_the_workload_without_a_namespace()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: api, namespace: prod }
+            spec:
+              containers: [{ name: api, env: [{ name: A, value: in-prod }] }]
+            ---
+            kind: Pod
+            metadata: { name: api }
+            spec:
+              containers: [{ name: api, env: [{ name: A, value: in-none }] }]
+            """);
+
+        var none = ConfigTracer.ForContainer(manifests, "/api").Trace();
+        var named = ConfigTracer.ForContainer(manifests, "api").Trace();
+
+        Assert.Equal("in-none", none.Find("A")?.Value);
+        Assert.Empty(none.Warnings);
+        Assert.Equal(
+            "The manifests hold 2 workloads named 'api'; using Pod/api in namespace prod. Pass namespace/name, such as /api, to pick another.",
+            Assert.Single(named.Warnings));
+    }
+
+    [Fact]
+    public void Namespace_and_name_pick_only_a_workload_in_that_namespace()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: prod/api }
+            spec:
+              containers: [{ name: api, env: [{ name: A, value: posing }] }]
+            ---
+            kind: Pod
+            metadata: { name: api, namespace: prod }
+            spec:
+              containers: [{ name: api, env: [{ name: A, value: in-prod }] }]
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests, "prod/api").Trace();
+
+        Assert.Equal("in-prod", report.Find("A")?.Value);
+        Assert.Equal(["Skipped Pod prod/api in manifests: a Kubernetes name cannot hold a slash."], report.Warnings);
+    }
+
+    [Fact]
+    public void Namespace_and_name_pick_no_workload_when_that_namespace_has_none()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Pod
+            metadata: { name: staging/api }
+            spec:
+              containers: [{ name: api, env: [{ name: A, value: posing }] }]
+            ---
+            kind: Pod
+            metadata: { name: api, namespace: prod }
+            spec:
+              containers: [{ name: api, env: [{ name: A, value: in-prod }] }]
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests, "staging/api").Trace();
+
+        Assert.Null(report.Find("A")?.Value);
+        Assert.Contains("No Kubernetes workload named 'staging/api' found in the manifests.", report.Warnings);
+    }
+
+    // ExternalSecrets that write Secret db: in prod, in staging, and again in prod.
+    private const string CreatedInTwoNamespaces = """
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata: { name: db, namespace: prod }
+        spec:
+          data: [{ secretKey: PASSWORD, remoteRef: { key: prod-db } }]
+        ---
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata: { name: db, namespace: staging }
+        spec:
+          data: [{ secretKey: PASSWORD, remoteRef: { key: staging-db } }]
+        ---
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata: { name: db-extra, namespace: prod }
+        spec:
+          target: { name: db }
+          data: [{ secretKey: EXTRA, remoteRef: { key: prod-extra } }]
+        ---
+        kind: Pod
+        metadata: { name: api }
+        spec:
+          containers:
+            - name: api
+              envFrom: [{ secretRef: { name: db } }]
+        """;
+
+    [Fact]
+    public void A_workload_without_a_namespace_takes_the_created_secret_whose_creator_was_loaded_last()
+    {
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(CreatedInTwoNamespaces)).Trace();
+
+        Assert.Equal(["EXTRA", "PASSWORD"], report.Settings.Select(s => s.Key));
+        Assert.Equal(
+            "Pod/api has no namespace, so it sees the objects of every namespace. Secret db is in more than one; the one loaded last, in namespace prod, is used.",
+            Assert.Single(report.Warnings));
+    }
+
+    [Fact]
+    public void A_workload_without_a_namespace_warns_when_a_secret_in_the_manifests_wins_over_a_created_one()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: Secret
+            metadata: { name: db, namespace: staging }
+            stringData: { PASSWORD: fake-staging-password }
+            ---
+            apiVersion: external-secrets.io/v1
+            kind: ExternalSecret
+            metadata: { name: db, namespace: prod }
+            spec:
+              data: [{ secretKey: PASSWORD, remoteRef: { key: prod-db } }]
+            ---
+            kind: Pod
+            metadata: { name: api }
+            spec:
+              containers:
+                - name: api
+                  envFrom: [{ secretRef: { name: db } }]
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        Assert.Equal(
+            "Pod/api has no namespace, so it sees the objects of every namespace. Secret db is in more than one; the one in the manifests, in namespace staging, is used, not one that an operator creates.",
+            Assert.Single(report.Warnings));
+    }
+
+    [Fact]
+    public void An_object_without_a_namespace_serves_every_namespace_and_a_namespace_does_not_see_another()
+    {
+        var manifests = KubernetesManifests.Parse("""
+            kind: ConfigMap
+            metadata: { name: shared }
+            data: { Shared: everywhere }
+            ---
+            kind: ConfigMap
+            metadata: { name: staging-only, namespace: staging }
+            data: { Other: staging }
+            ---
+            kind: Pod
+            metadata: { name: api, namespace: prod }
+            spec:
+              containers:
+                - name: api
+                  envFrom:
+                    - configMapRef: { name: shared }
+                    - configMapRef: { name: staging-only }
+            ---
+            kind: Pod
+            metadata: { name: tool }
+            spec:
+              containers:
+                - name: tool
+                  envFrom:
+                    - configMapRef: { name: shared }
+                    - configMapRef: { name: staging-only }
+            """);
+
+        var prod = ConfigTracer.ForContainer(manifests, "prod/api").Trace();
+        var tool = ConfigTracer.ForContainer(manifests, "tool").Trace();
+
+        Assert.Equal(["Shared"], prod.Settings.Select(s => s.Key));
+        Assert.Equal("envFrom ConfigMap staging-only on Pod/api, container api was not loaded, so the variables it adds are not listed.", Assert.Single(prod.Warnings));
+        Assert.Equal(["Other", "Shared"], tool.Settings.Select(s => s.Key));
+        Assert.Empty(tool.Warnings);
+    }
+
     // ConfigMap and Secret volumes: a whole ConfigMap, a Secret with items, a projected volume and a subPath mount.
     private const string PodWithVolumes = """
         apiVersion: v1

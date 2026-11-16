@@ -16,21 +16,33 @@ public sealed class KubernetesManifests
         new(StringComparer.Ordinal) { "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "ReplicationController" };
 
     private readonly List<Workload> _workloads = [];
-    private readonly Dictionary<string, KubernetesData> _configMaps = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, KubernetesData> _secrets = new(StringComparer.Ordinal);
+    private readonly Namespaced<KubernetesData, string> _configMaps = new(d => d.Namespace, d => d.Name);
+    private readonly Namespaced<KubernetesData, string> _secrets = new(d => d.Namespace, d => d.Name);
     private readonly List<ExternalSecret> _externalSecrets = [];
-    private readonly List<SecretStore> _secretStores = [];
-    private readonly Dictionary<string, SecretProviderClass> _secretProviderClasses = new(StringComparer.Ordinal);
-    private Dictionary<string, KubernetesData>? _createdSecrets;
+    private readonly Namespaced<SecretStore, (string Kind, string Name)> _secretStores = new(s => s.Namespace, s => (s.Kind, s.Name));
+    private readonly Namespaced<SecretProviderClass, string> _secretProviderClasses = new(s => s.Namespace, s => s.Name);
+    private Namespaced<KubernetesData, string>? _createdSecrets;
+    private List<SecretStore>? _secretStoreList;
+
+    // When each ExternalSecret, and the SecretProviderClass of each namespace and name, was loaded, counted over both.
+    private readonly List<long> _externalSecretLoads = [];
+    private readonly Dictionary<(string? Namespace, string Name), long> _secretProviderClassLoads = [];
+    private long _creatorsLoaded;
+    private readonly List<string> _warnings = [];
 
     /// <summary>The workloads found, with their pod specs.</summary>
     public IReadOnlyList<Workload> Workloads => _workloads;
 
-    /// <summary>The ConfigMaps found, by name.</summary>
-    public IReadOnlyDictionary<string, KubernetesData> ConfigMaps => _configMaps;
+    /// <summary>
+    /// The ConfigMaps found, by name. For a name that is in more than one namespace, the one loaded last; a workload
+    /// still gets the one in its own namespace.
+    /// </summary>
+    public IReadOnlyDictionary<string, KubernetesData> ConfigMaps => _configMaps.Last;
 
-    /// <summary>The Secrets found, by name. Values are decoded but always treated as sensitive.</summary>
-    public IReadOnlyDictionary<string, KubernetesData> Secrets => _secrets;
+    /// <summary>
+    /// The Secrets found, by name like <see cref="ConfigMaps"/>. Values are decoded but always treated as sensitive.
+    /// </summary>
+    public IReadOnlyDictionary<string, KubernetesData> Secrets => _secrets.Last;
 
     /// <summary>
     /// The External Secrets Operator <c>ExternalSecret</c>s found. The Secret each one writes is treated as existing,
@@ -38,14 +50,17 @@ public sealed class KubernetesManifests
     /// </summary>
     public IReadOnlyList<ExternalSecret> ExternalSecrets => _externalSecrets;
 
-    /// <summary>The External Secrets Operator <c>SecretStore</c>s and <c>ClusterSecretStore</c>s found.</summary>
-    public IReadOnlyList<SecretStore> SecretStores => _secretStores;
+    /// <summary>
+    /// The External Secrets Operator <c>SecretStore</c>s and <c>ClusterSecretStore</c>s found, one per kind, namespace
+    /// and name. The list is a snapshot taken when it is read, so it does not show stores added later.
+    /// </summary>
+    public IReadOnlyList<SecretStore> SecretStores => _secretStoreList ??= [.. _secretStores.All];
 
     /// <summary>
-    /// The Secrets Store CSI driver <c>SecretProviderClass</c>es found, by name. The Secrets they sync
-    /// (<c>spec.secretObjects</c>) are treated as existing like an ExternalSecret's target.
+    /// The Secrets Store CSI driver <c>SecretProviderClass</c>es found, by name like <see cref="ConfigMaps"/>. The
+    /// Secrets they sync (<c>spec.secretObjects</c>) are treated as existing like an ExternalSecret's target.
     /// </summary>
-    public IReadOnlyDictionary<string, SecretProviderClass> SecretProviderClasses => _secretProviderClasses;
+    public IReadOnlyDictionary<string, SecretProviderClass> SecretProviderClasses => _secretProviderClasses.Last;
 
     /// <summary>Parses manifests from YAML or JSON text. Multi-document YAML and <c>List</c> kinds are supported.</summary>
     /// <param name="text">The manifest text.</param>
@@ -90,7 +105,10 @@ public sealed class KubernetesManifests
     /// variables and mounted files to the workload, ConfigMaps and Secrets in these manifests, and Secret keys to the
     /// ExternalSecrets and SecretProviderClasses that fill them.
     /// </summary>
-    /// <param name="workload">The workload name. Needed only when the manifests hold more than one.</param>
+    /// <param name="workload">
+    /// The workload name, or <c>namespace/name</c> when the name is in more than one namespace (<c>/name</c> for the
+    /// one without a namespace). Needed only when the manifests hold more than one workload.
+    /// </param>
     /// <param name="container">The container name. Needed only when the workload has more than one.</param>
     public IOriginResolver CreateResolver(string? workload = null, string? container = null) => new KubernetesResolver(this, workload, container);
 
@@ -117,22 +135,31 @@ public sealed class KubernetesManifests
         }
     }
 
+    /// <summary>The objects that were left out while loading, such as one whose name holds a slash. They never hold a value.</summary>
+    internal IReadOnlyList<string> Warnings => _warnings;
+
     internal void AddObject(YamlNode obj, string sourceName)
     {
         var kind = obj.Str("kind");
         var name = obj.Get("metadata").Str("name") ?? "(unnamed)";
+        var ns = obj.Get("metadata").Str("namespace") is { Length: > 0 } value ? value : null;
         _createdSecrets = null;
         var apiVersion = obj.Str("apiVersion");
         if (ExternalSecretsReader.IsExternalSecrets(apiVersion))
         {
             switch (kind)
             {
+                case "ExternalSecret" or "SecretStore" or "ClusterSecretStore" when IsSkipped(kind, name, sourceName):
+                    return;
                 case "ExternalSecret":
-                    _externalSecrets.Add(ExternalSecretsReader.ReadExternalSecret(obj, name, sourceName));
+                    _externalSecrets.Add(ExternalSecretsReader.ReadExternalSecret(obj, name, sourceName) with { Namespace = ns });
+                    _externalSecretLoads.Add(_creatorsLoaded++);
                     return;
                 case "SecretStore" or "ClusterSecretStore":
-                    _secretStores.RemoveAll(s => s.Kind == kind && s.Name == name);
-                    _secretStores.Add(ExternalSecretsReader.ReadSecretStore(obj, kind, name, sourceName));
+                    // A ClusterSecretStore is not in a namespace, whatever its metadata says.
+                    ns = kind == "SecretStore" ? ns : null;
+                    _secretStores.Add(ExternalSecretsReader.ReadSecretStore(obj, kind, name, sourceName) with { Namespace = ns });
+                    _secretStoreList = null;
                     return;
                 case "ExternalSecretList" or "SecretStoreList" or "ClusterSecretStoreList":
                     break;
@@ -144,7 +171,12 @@ public sealed class KubernetesManifests
         {
             if (kind == "SecretProviderClass")
             {
-                _secretProviderClasses[name] = ExternalSecretsReader.ReadSecretProviderClass(obj, name, sourceName);
+                if (!IsSkipped(kind, name, sourceName))
+                {
+                    _secretProviderClasses.Add(ExternalSecretsReader.ReadSecretProviderClass(obj, name, sourceName) with { Namespace = ns });
+                    _secretProviderClassLoads[(ns, name)] = _creatorsLoaded++;
+                }
+
                 return;
             }
 
@@ -166,31 +198,33 @@ public sealed class KubernetesManifests
                 }
 
                 return;
+            case "ConfigMap" or "Secret" when IsSkipped(kind, name, sourceName):
+                return;
             case "ConfigMap":
-                _configMaps[name] = new KubernetesData(name, ReadData(obj, decode: false), sourceName);
+                _configMaps.Add(new KubernetesData(name, ReadData(obj, decode: false), sourceName) { Namespace = ns });
                 return;
             case "Secret":
-                _secrets[name] = new KubernetesData(name, ReadSecretData(obj), sourceName);
+                _secrets.Add(new KubernetesData(name, ReadSecretData(obj), sourceName) { Namespace = ns });
                 return;
             case "Pod":
-                AddWorkload(kind, name, obj.Get("spec"), sourceName);
+                AddWorkload(kind, name, ns, obj.Get("spec"), sourceName);
                 return;
             case "CronJob":
-                AddWorkload(kind, name, obj.Get("spec").Get("jobTemplate").Get("spec").Get("template").Get("spec"), sourceName);
+                AddWorkload(kind, name, ns, obj.Get("spec").Get("jobTemplate").Get("spec").Get("template").Get("spec"), sourceName);
                 return;
             default:
                 if (PodTemplateKinds.Contains(kind))
                 {
-                    AddWorkload(kind, name, obj.Get("spec").Get("template").Get("spec"), sourceName);
+                    AddWorkload(kind, name, ns, obj.Get("spec").Get("template").Get("spec"), sourceName);
                 }
 
                 return;
         }
     }
 
-    private void AddWorkload(string kind, string name, YamlNode? podSpec, string sourceName)
+    private void AddWorkload(string kind, string name, string? ns, YamlNode? podSpec, string sourceName)
     {
-        if (podSpec is null)
+        if (podSpec is null || IsSkipped(kind, name, sourceName))
         {
             return;
         }
@@ -199,7 +233,20 @@ public sealed class KubernetesManifests
             .Concat(podSpec.Get("initContainers").Items().Select(c => ReadContainer(c, isInit: true)))
             .ToList();
         var volumes = podSpec.Get("volumes").Items().Select(ReadVolume).ToList();
-        _workloads.Add(new Workload(kind, name, containers, volumes, sourceName));
+        _workloads.Add(new Workload(kind, name, containers, volumes, sourceName) { Namespace = ns });
+    }
+
+    // Kubernetes refuses a name with a slash. Such a name reads like namespace/name, so the object could pass for one of
+    // another namespace; it is left out with a warning instead.
+    private bool IsSkipped(string kind, string name, string sourceName)
+    {
+        if (!name.Contains('/', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _warnings.Add($"Skipped {kind} {name} in {sourceName}: a Kubernetes name cannot hold a slash.");
+        return true;
     }
 
     private static Container ReadContainer(YamlNode c, bool isInit)
@@ -304,35 +351,78 @@ public sealed class KubernetesManifests
     }
 
     /// <summary>
-    /// The Secret named <paramref name="name"/>: the one in the manifests, or else the one an ExternalSecret or a
-    /// SecretProviderClass creates, with its keys and unknown values.
+    /// The Secret named <paramref name="name"/> that a workload in namespace <paramref name="ns"/> sees: the one in the
+    /// manifests, or else the one an ExternalSecret or a SecretProviderClass creates, with its keys and unknown values.
     /// </summary>
-    internal bool TryGetSecret(string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out KubernetesData? data)
+    internal bool TryGetSecret(string? ns, string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out KubernetesData? data)
     {
-        if (_secrets.TryGetValue(name, out data))
-        {
-            return true;
-        }
-
-        return CreatedSecrets().TryGetValue(name, out data);
+        data = _secrets.Find(ns, name) ?? CreatedSecrets().Find(ns, name);
+        return data is not null;
     }
 
-    /// <summary>The ConfigMap or Secret named <paramref name="name"/>, counting Secrets that operators create.</summary>
-    internal bool TryGetData(bool isSecret, string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out KubernetesData? data)
+    /// <summary>
+    /// The ConfigMap or Secret named <paramref name="name"/> that a workload in namespace <paramref name="ns"/> sees,
+    /// counting Secrets that operators create.
+    /// </summary>
+    internal bool TryGetData(bool isSecret, string? ns, string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out KubernetesData? data)
     {
         if (isSecret)
         {
-            return TryGetSecret(name, out data);
+            return TryGetSecret(ns, name, out data);
         }
 
-        return _configMaps.TryGetValue(name, out data);
+        data = _configMaps.Find(ns, name);
+        return data is not null;
     }
 
-    /// <summary>The ExternalSecrets and SecretProviderClasses that fill key <paramref name="key"/> of Secret <paramref name="secretName"/>.</summary>
-    internal List<SecretOrigin> SecretOrigins(string secretName, string key)
+    /// <summary>The ConfigMap or Secret named <paramref name="name"/> in the manifests that an object in namespace <paramref name="ns"/> sees.</summary>
+    internal KubernetesData? FindLoaded(bool isSecret, string? ns, string name) => (isSecret ? _secrets : _configMaps).Find(ns, name);
+
+    /// <summary>The SecretProviderClass named <paramref name="name"/> that a workload in namespace <paramref name="ns"/> sees.</summary>
+    internal SecretProviderClass? FindSecretProviderClass(string? ns, string name) => _secretProviderClasses.Find(ns, name);
+
+    /// <summary>
+    /// True when the ConfigMap or Secret named <paramref name="name"/> is in more than one namespace, counting none as
+    /// one and counting the Secrets that operators create, so that a workload without a namespace gets one of them. It
+    /// gets the one loaded last, whose namespace is <paramref name="used"/>; for a Secret, the one in the manifests
+    /// comes before created ones, and <paramref name="overCreated"/> says that a created one in another namespace lost.
+    /// </summary>
+    internal bool IsDataInSeveralNamespaces(bool isSecret, string name, out string? used, out bool overCreated)
+    {
+        overCreated = false;
+        if (!isSecret)
+        {
+            used = _configMaps.Find(null, name)?.Namespace;
+            return _configMaps.IsInSeveralNamespaces(name);
+        }
+
+        var created = CreatedSecrets();
+        if (!_secrets.Last.TryGetValue(name, out var loaded))
+        {
+            used = created.Find(null, name)?.Namespace;
+            return created.IsInSeveralNamespaces(name);
+        }
+
+        used = loaded.Namespace;
+        overCreated = created.Last.TryGetValue(name, out var other) && (created.IsInSeveralNamespaces(name) || other.Namespace != used);
+        return overCreated || _secrets.IsInSeveralNamespaces(name);
+    }
+
+    /// <summary>Like <see cref="IsDataInSeveralNamespaces"/>, for the SecretProviderClass named <paramref name="name"/>.</summary>
+    internal bool IsSecretProviderClassInSeveralNamespaces(string name, out string? used)
+    {
+        used = _secretProviderClasses.Find(null, name)?.Namespace;
+        return _secretProviderClasses.IsInSeveralNamespaces(name);
+    }
+
+    /// <summary>
+    /// The ExternalSecrets and SecretProviderClasses that fill key <paramref name="key"/> of Secret <paramref name="secretName"/>
+    /// for a workload in namespace <paramref name="ns"/>.
+    /// </summary>
+    internal List<SecretOrigin> SecretOrigins(string? ns, string secretName, string key)
     {
         var origins = new List<SecretOrigin>();
-        foreach (var es in _externalSecrets.Where(e => string.Equals(e.TargetSecret, secretName, StringComparison.Ordinal)))
+        foreach (var es in _externalSecrets.Where(e => Sees(ns, e.Namespace) && string.Equals(e.TargetSecret, secretName, StringComparison.Ordinal)))
         {
             var template = es.HasTemplate ? "; its target template may change the key or the value" : "";
             var matched = false;
@@ -345,7 +435,7 @@ public sealed class KubernetesManifests
                 }
 
                 var store = item.Store ?? es.Store;
-                var reference = new ExternalSecretRef(ProviderOf(store), store?.Name, item.RemoteKey, item.Property, item.Version);
+                var reference = new ExternalSecretRef(ProviderOf(es.Namespace, store), store?.Name, item.RemoteKey, item.Property, item.Version);
                 origins.Add(new SecretOrigin(
                     reference,
                     $"ExternalSecret {es.Name}",
@@ -362,7 +452,7 @@ public sealed class KubernetesManifests
             foreach (var item in es.DataFrom.Where(d => d.RemoteKey is not null))
             {
                 var store = item.Store ?? es.Store;
-                var reference = new ExternalSecretRef(ProviderOf(store), store?.Name, item.RemoteKey!, Version: item.Version);
+                var reference = new ExternalSecretRef(ProviderOf(es.Namespace, store), store?.Name, item.RemoteKey!, Version: item.Version);
                 origins.Add(new SecretOrigin(
                     reference,
                     $"ExternalSecret {es.Name}",
@@ -372,7 +462,7 @@ public sealed class KubernetesManifests
             }
         }
 
-        foreach (var spc in _secretProviderClasses.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
+        foreach (var spc in _secretProviderClasses.All.Where(s => Sees(ns, s.Namespace)).OrderBy(s => s.Name, StringComparer.Ordinal))
         {
             foreach (var synced in spc.SecretObjects.Where(s => string.Equals(s.SecretName, secretName, StringComparison.Ordinal)))
             {
@@ -410,8 +500,10 @@ public sealed class KubernetesManifests
             IsInferred: false);
     }
 
-    private string? ProviderOf(SecretStoreReference? store) =>
-        store is null ? null : _secretStores.FirstOrDefault(s => s.Kind == store.Kind && s.Name == store.Name)?.Provider;
+    // An ExternalSecret in namespace ns uses the SecretStore of that name in its namespace, or a ClusterSecretStore,
+    // which has no namespace.
+    private string? ProviderOf(string? ns, SecretStoreReference? store) =>
+        store is null ? null : _secretStores.Find(ns, (store.Kind, store.Name))?.Provider;
 
     private static string StoreNote(SecretStoreReference? store, string? provider) =>
         store is null
@@ -423,18 +515,19 @@ public sealed class KubernetesManifests
         + (reference.Property is null ? "" : $", property {reference.Property}")
         + (reference.Version is null ? "" : $", version {reference.Version}");
 
-    // The Secrets that ExternalSecrets and SecretProviderClasses create, for names that are not in the manifests.
-    private Dictionary<string, KubernetesData> CreatedSecrets()
+    // The Secrets that ExternalSecrets and SecretProviderClasses create, each in the namespace of what creates it. A
+    // workload sees one only when no Secret of that name in the manifests is seen first.
+    private Namespaced<KubernetesData, string> CreatedSecrets()
     {
         if (_createdSecrets is not null)
         {
             return _createdSecrets;
         }
 
-        var created = new Dictionary<string, (Dictionary<string, KubernetesValue> Data, string SourceName, string CreatedBy, bool Unknown)>(StringComparer.Ordinal);
-        void Add(string secretName, string sourceName, string createdBy, bool unknownKeys, IEnumerable<(string Key, int Line)> keys)
+        var created = new Dictionary<(string? Namespace, string Name), (Dictionary<string, KubernetesValue> Data, string SourceName, string CreatedBy, bool Unknown)>();
+        void Add(string? ns, string secretName, string sourceName, string createdBy, bool unknownKeys, IEnumerable<(string Key, int Line)> keys)
         {
-            if (!created.TryGetValue(secretName, out var entry))
+            if (!created.TryGetValue((ns, secretName), out var entry))
             {
                 entry = (new Dictionary<string, KubernetesValue>(StringComparer.Ordinal), sourceName, createdBy, false);
             }
@@ -444,29 +537,86 @@ public sealed class KubernetesManifests
                 entry.Data.TryAdd(key, new KubernetesValue(null, line));
             }
 
-            created[secretName] = entry with { Unknown = entry.Unknown || unknownKeys };
+            created[(ns, secretName)] = entry with { Unknown = entry.Unknown || unknownKeys };
         }
 
-        foreach (var es in _externalSecrets)
+        // When the last object that creates each Secret was loaded, so that the one loaded last is also the last one added.
+        var lastLoaded = new Dictionary<(string? Namespace, string Name), long>();
+        void Loaded(string? ns, string secretName, long load) =>
+            lastLoaded[(ns, secretName)] = Math.Max(load, lastLoaded.GetValueOrDefault((ns, secretName), -1));
+
+        for (var i = 0; i < _externalSecrets.Count; i++)
         {
-            Add(es.TargetSecret, es.SourceName, $"ExternalSecret {es.Name}", es.DataFrom.Count > 0 || es.HasTemplate, es.Data.Select(d => (d.SecretKey, d.Line)));
+            var es = _externalSecrets[i];
+            Add(es.Namespace, es.TargetSecret, es.SourceName, $"ExternalSecret {es.Name}", es.DataFrom.Count > 0 || es.HasTemplate, es.Data.Select(d => (d.SecretKey, d.Line)));
+            Loaded(es.Namespace, es.TargetSecret, _externalSecretLoads[i]);
         }
 
-        foreach (var spc in _secretProviderClasses.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
+        foreach (var spc in _secretProviderClasses.All.OrderBy(s => s.Name, StringComparer.Ordinal))
         {
             foreach (var synced in spc.SecretObjects)
             {
-                Add(synced.SecretName, spc.SourceName, $"SecretProviderClass {spc.Name}", unknownKeys: false, synced.Keys.Select(k => (k.Key, synced.Line)));
+                Add(spc.Namespace, synced.SecretName, spc.SourceName, $"SecretProviderClass {spc.Name}", unknownKeys: false, synced.Keys.Select(k => (k.Key, synced.Line)));
+                Loaded(spc.Namespace, synced.SecretName, _secretProviderClassLoads[(spc.Namespace, spc.Name)]);
             }
         }
 
-        _createdSecrets = created
-            .Where(c => !_secrets.ContainsKey(c.Key))
-            .ToDictionary(
-                c => c.Key,
-                c => new KubernetesData(c.Key, c.Value.Data, c.Value.SourceName) { CreatedBy = c.Value.CreatedBy, HasUnknownKeys = c.Value.Unknown },
-                StringComparer.Ordinal);
+        _createdSecrets = new Namespaced<KubernetesData, string>(d => d.Namespace, d => d.Name);
+        foreach (var ((ns, secretName), entry) in created.OrderBy(c => lastLoaded[c.Key]))
+        {
+            _createdSecrets.Add(new KubernetesData(secretName, entry.Data, entry.SourceName) { Namespace = ns, CreatedBy = entry.CreatedBy, HasUnknownKeys = entry.Unknown });
+        }
+
         return _createdSecrets;
+    }
+
+    // Whether something in namespace ns can use an object in namespace objectNamespace. Null is no namespace: an
+    // object without one goes to whatever namespace it is applied to, and a workload without one may be in any.
+    private static bool Sees(string? ns, string? objectNamespace) => ns is null || objectNamespace is null || ns == objectNamespace;
+
+    // ConfigMaps, Secrets, SecretProviderClasses or SecretStores: one per namespace and name, a later one replacing an
+    // earlier one. Every lookup is by key, so neither adding an object nor finding one walks the others of its name.
+    internal sealed class Namespaced<T, TName>(Func<T, string?> namespaceOf, Func<T, TName> nameOf)
+        where T : class
+        where TName : notnull
+    {
+        private readonly Dictionary<(string? Namespace, TName Name), LinkedListNode<T>> _exact = [];
+        private readonly Dictionary<TName, T> _last = [];
+        private readonly HashSet<TName> _inSeveral = [];
+        private readonly LinkedList<T> _all = new();
+
+        /// <summary>The object of each name loaded last, whatever its namespace, in the order the names were first loaded.</summary>
+        public IReadOnlyDictionary<TName, T> Last => _last;
+
+        /// <summary>Every object, in the order loaded; one that replaces another of its namespace and name goes last.</summary>
+        public IEnumerable<T> All => _all;
+
+        public void Add(T item)
+        {
+            var key = (namespaceOf(item), nameOf(item));
+            if (_exact.Remove(key, out var replaced))
+            {
+                _all.Remove(replaced);
+            }
+            else if (_last.ContainsKey(key.Item2))
+            {
+                _inSeveral.Add(key.Item2);
+            }
+
+            _exact[key] = _all.AddLast(item);
+            _last[key.Item2] = item;
+        }
+
+        /// <summary>
+        /// The object a reference from namespace <paramref name="ns"/> gets: the one in that namespace, else the one
+        /// without a namespace. A reference without a namespace sees every namespace and gets the one loaded last.
+        /// </summary>
+        public T? Find(string? ns, TName name) => ns is null ? _last.GetValueOrDefault(name) : Exact(ns, name) ?? Exact(null, name);
+
+        /// <summary>True when objects of the name are in more than one namespace, counting none as one.</summary>
+        public bool IsInSeveralNamespaces(TName name) => _inSeveral.Contains(name);
+
+        private T? Exact(string? ns, TName name) => _exact.TryGetValue((ns, name), out var node) ? node.Value : null;
     }
 
     private static Dictionary<string, KubernetesValue> ReadData(YamlNode obj, bool decode)
@@ -521,6 +671,13 @@ public sealed class KubernetesManifests
 /// <summary>A workload with a pod spec.</summary>
 public sealed record Workload(string Kind, string Name, IReadOnlyList<Container> Containers, IReadOnlyList<Volume> Volumes, string SourceName)
 {
+    /// <summary>
+    /// The workload's <c>metadata.namespace</c>, or null when it has none. Its ConfigMaps, Secrets and
+    /// SecretProviderClasses are looked up in this namespace, and then among the objects without a namespace. A
+    /// workload without a namespace sees every namespace, and gets the object of each name loaded last.
+    /// </summary>
+    public string? Namespace { get; init; }
+
     /// <summary>The workload as <c>Kind/name</c>.</summary>
     public string DisplayName => $"{Kind}/{Name}";
 }
@@ -583,6 +740,12 @@ public sealed record VolumeProjection(string SourceName, bool IsSecret, IReadOnl
 /// <summary>The data of a ConfigMap or Secret.</summary>
 public sealed record KubernetesData(string Name, IReadOnlyDictionary<string, KubernetesValue> Data, string SourceName)
 {
+    /// <summary>
+    /// The object's <c>metadata.namespace</c>, or null when it has none. For a Secret that an operator creates, the
+    /// namespace of what creates it.
+    /// </summary>
+    public string? Namespace { get; init; }
+
     /// <summary>
     /// For a Secret that is not in the manifests but that an operator creates, what creates it, for example
     /// <c>ExternalSecret db</c>. Its values are then unknown. Null for a ConfigMap or Secret that was loaded.

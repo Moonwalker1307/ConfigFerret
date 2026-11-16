@@ -289,8 +289,9 @@ public sealed partial class HelmChart
     {
         var isSecret = layer.Kind == GitOpsValuesKind.Secret;
         var what = $"{(isSecret ? "Secret" : "ConfigMap")} {layer.ObjectName}";
+        // Flux reads valuesFrom from the HelmRelease's own namespace.
         var found = data
-            .Select(d => (isSecret ? d.Secrets : d.ConfigMaps).GetValueOrDefault(layer.ObjectName!))
+            .Select(d => d.FindLoaded(isSecret, application.Namespace, layer.ObjectName!))
             .FirstOrDefault(d => d is not null);
         if (found is null)
         {

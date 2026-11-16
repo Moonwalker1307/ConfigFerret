@@ -144,7 +144,10 @@ public sealed partial class KubernetesSource : SourceSettings
     /// <summary>Manifest files or folders.</summary>
     public List<string> Paths { get; set; } = [];
 
-    /// <summary>The workload name. Needed only when the manifests hold more than one.</summary>
+    /// <summary>
+    /// The workload name, or namespace/name when the name is in more than one namespace (/name for the one without a
+    /// namespace). Needed only when the manifests hold more than one.
+    /// </summary>
     [ObservableProperty]
     public partial string Workload { get; set; } = string.Empty;
 

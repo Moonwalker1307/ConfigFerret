@@ -708,6 +708,34 @@ public class RepositoryAnalyzerProfileTests : IDisposable
     }
 
     [Fact]
+    public void A_workload_whose_name_is_in_two_namespaces_is_traced_by_namespace_and_name()
+    {
+        static string In(string ns) => Deployment("orders-api", Container("orders-api")).Replace("  name: orders-api\n", $"  name: orders-api\n  namespace: {ns}\n", StringComparison.Ordinal);
+        Write("src/Orders/appsettings.json", "{}");
+        Write("k8s/all.yaml", In("prod") + "---\n" + In("staging"));
+
+        var (profile, notes) = Build(NoTools(), new AnalysisChoices { App = "src/Orders" });
+
+        Assert.Equal("prod/orders-api", profile.Sources.OfType<KubernetesSource>().Single().Workload);
+        Assert.Equal("The manifests hold 2 workloads; traced Deployment/orders-api in namespace prod.", Assert.Single(notes));
+    }
+
+    [Fact]
+    public void A_workload_without_a_namespace_whose_name_is_in_another_is_traced_by_a_slash_and_its_name()
+    {
+        Write("src/Orders/appsettings.json", "{}");
+        Write(
+            "k8s/all.yaml",
+            Deployment("orders-api", Container("orders-api")).Replace("  name: orders-api\n", "  name: orders-api\n  namespace: prod\n", StringComparison.Ordinal)
+                + "---\n" + Deployment("orders-api", Container("orders-api", env: 2)));
+
+        var (profile, notes) = Build(NoTools(), new AnalysisChoices { App = "src/Orders" });
+
+        Assert.Equal("/orders-api", profile.Sources.OfType<KubernetesSource>().Single().Workload);
+        Assert.Equal("The manifests hold 2 workloads; traced Deployment/orders-api, which has no namespace.", Assert.Single(notes));
+    }
+
+    [Fact]
     public void Workloads_that_match_equally_are_ordered_by_how_much_environment_they_set()
     {
         Write("k8s/all.yaml", Deployment("wkra", Container("wkra", env: 1)) + "---\n" + Deployment("wkrb", Container("wkrb", env: 3)) + "---\n" + Deployment("wkrc", Container("wkrc", env: 2)));
