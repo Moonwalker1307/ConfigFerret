@@ -223,6 +223,43 @@ public class TraceCommandTests
         Assert.Contains("appsettings.Development.json", development.Output, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("--env")]
+    [InlineData("--manifests")]
+    [InlineData("--environment")]
+    public async Task Refuses_an_environment_name_that_leaves_the_app_folder(string how)
+    {
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            var app = Directory.CreateDirectory(Path.Join(root.FullName, "repo", "app")).FullName;
+            await File.WriteAllTextAsync(Path.Join(app, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", ct);
+            Directory.CreateDirectory(Path.Join(root.FullName, "outside"));
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "outside", "secret.json"), """{ "Outside": { "Region": "fake-outside-value" } }""", ct);
+            const string Name = "x/../../../outside/secret";
+            var manifest = Path.Join(root.FullName, "repo", "pod.yaml");
+            await File.WriteAllTextAsync(manifest, $"apiVersion: v1\nkind: Pod\nmetadata:\n  name: api\nspec:\n  containers:\n    - name: api\n      env:\n        - name: ASPNETCORE_ENVIRONMENT\n          value: \"{Name}\"\n", ct);
+            string[] input = how switch
+            {
+                "--env" => ["--env", "ASPNETCORE_ENVIRONMENT=" + Name],
+                "--manifests" => ["--manifests", manifest],
+                _ => ["--environment", Name],
+            };
+
+            var result = await new ToolRunner().RunAsync(["trace", "-a", app, "--no-user-secrets", .. input]);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("is not a valid environment name", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("Outside", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake-outside-value", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Reads_user_secrets_in_Development_and_redacts_them()
     {
