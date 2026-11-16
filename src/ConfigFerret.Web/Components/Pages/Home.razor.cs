@@ -121,6 +121,7 @@ public sealed partial class Home
     {
         _exportOpen = false;
         await export.ExecuteAsync(null).ConfigureAwait(true);
+        var holdsSecrets = Vm.LastExportHoldsSecrets;
         if (Dialogs.TakeDownload() is not { } download)
         {
             return;
@@ -135,7 +136,7 @@ public sealed partial class Home
                 await Js.InvokeVoidAsync("configFerret.download", download.Name, reference).ConfigureAwait(true);
             }
 
-            Vm.StatusText = $"Downloaded {download.Name}." + (Vm.RevealSecrets ? " It holds secret values: don't share it." : string.Empty);
+            Vm.StatusText = $"Downloaded {download.Name}." + (holdsSecrets ? " It holds secret values: don't share it." : string.Empty);
         }
         catch (Exception ex) when (ex is IOException or JSException or JSDisconnectedException or TaskCanceledException)
         {

@@ -645,6 +645,163 @@ public sealed class RepositorySwitchTests : IDisposable
         });
     }
 
+    private const string FakePassword = "fake-password-for-tests";
+
+    [Fact]
+    public void Turning_reveal_off_hides_the_secret_values_when_the_next_trace_fails()
+    {
+        WriteOrdersWithPassword();
+        var fail = 0;
+        string? Render(string tool, IReadOnlyList<string> arguments) =>
+            Interlocked.Exchange(ref fail, 0) == 1 ? throw new IOException("fake render failure") : null;
+
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                new InMemoryCredentialStore(),
+                analyzer: new RepositoryAnalyzer(render: Render),
+                downloadRoot: Path.Join(_temp.FullName, "downloads"));
+            var opened = viewModel.AnalyzeFolderAsync(Path.Join(_temp.FullName, "orders"));
+            Assert.True(context.RunUntil(() => opened.IsCompleted));
+            viewModel.RevealSecrets = true;
+            Assert.True(context.RunUntil(() => !viewModel.IsBusy && viewModel.Rows.Any(r => r.Setting.Value == FakePassword)));
+
+            // The trace after the switch goes off fails.
+            Volatile.Write(ref fail, 1);
+            viewModel.RevealSecrets = false;
+            Assert.True(context.RunUntil(() => Volatile.Read(ref fail) == 0 && !viewModel.IsBusy));
+            context.RunQueued();
+
+            Assert.Contains("fake render failure", viewModel.StatusText, StringComparison.Ordinal);
+            Assert.DoesNotContain(viewModel.Rows, r => r.Setting.Value == FakePassword);
+            Assert.Empty(viewModel.SecretRows);
+            Assert.DoesNotContain(viewModel.ValueFilter.AllChoices, c => c.Text == FakePassword);
+            Assert.False(viewModel.ExportJsonCommand.CanExecute(null));
+            Assert.False(viewModel.ExportTextCommand.CanExecute(null));
+        });
+    }
+
+    [Fact]
+    public void The_export_warns_about_secret_values_when_the_report_holds_them()
+    {
+        WriteOrdersWithPassword();
+        var fail = 0;
+        string? Render(string tool, IReadOnlyList<string> arguments) =>
+            Interlocked.Exchange(ref fail, 0) == 1 ? throw new IOException("fake render failure") : null;
+
+        var report = Path.Join(_temp.FullName, "report.txt");
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                new InMemoryCredentialStore(),
+                analyzer: new RepositoryAnalyzer(render: Render),
+                downloadRoot: Path.Join(_temp.FullName, "downloads"))
+            {
+                Dialogs = new SaveTo(report),
+            };
+            var opened = viewModel.AnalyzeFolderAsync(Path.Join(_temp.FullName, "orders"));
+            Assert.True(context.RunUntil(() => opened.IsCompleted));
+
+            // The trace after the switch goes on fails, so the masked result stays on show.
+            Volatile.Write(ref fail, 1);
+            viewModel.RevealSecrets = true;
+            Assert.True(context.RunUntil(() => Volatile.Read(ref fail) == 0 && !viewModel.IsBusy));
+            context.RunQueued();
+            Assert.True(viewModel.HasResult);
+            var masked = viewModel.ExportTextCommand.ExecuteAsync(null);
+            Assert.True(context.RunUntil(() => masked.IsCompleted));
+
+            Assert.StartsWith("Saved ", viewModel.StatusText, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret values", viewModel.StatusText, StringComparison.Ordinal);
+            Assert.DoesNotContain(FakePassword, File.ReadAllText(report), StringComparison.Ordinal);
+
+            var retrace = viewModel.RetraceAsync();
+            Assert.True(context.RunUntil(() => retrace.IsCompleted));
+            var revealed = viewModel.ExportTextCommand.ExecuteAsync(null);
+            Assert.True(context.RunUntil(() => revealed.IsCompleted));
+
+            Assert.Contains("It holds secret values", viewModel.StatusText, StringComparison.Ordinal);
+            Assert.Contains(FakePassword, File.ReadAllText(report), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Turning_reveal_off_keeps_the_selected_setting()
+    {
+        WriteOrdersWithPassword();
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                new InMemoryCredentialStore(),
+                analyzer: new RepositoryAnalyzer(render: (_, _) => null),
+                downloadRoot: Path.Join(_temp.FullName, "downloads"));
+            var opened = viewModel.AnalyzeFolderAsync(Path.Join(_temp.FullName, "orders"));
+            Assert.True(context.RunUntil(() => opened.IsCompleted));
+            viewModel.RevealSecrets = true;
+            Assert.True(context.RunUntil(() => !viewModel.IsBusy && viewModel.Rows.Any(r => r.Setting.Value == FakePassword)));
+            Assert.NotEqual("Db:Password", viewModel.Rows[0].Key);
+            viewModel.SelectedRow = viewModel.Rows.Single(r => r.Key == "Db:Password");
+
+            viewModel.RevealSecrets = false;
+            Assert.True(context.RunUntil(() => !viewModel.IsBusy && viewModel.HasResult));
+
+            Assert.Equal("Db:Password", viewModel.SelectedRow?.Key);
+            Assert.NotEqual(FakePassword, viewModel.SelectedRow?.Setting.Value);
+        });
+    }
+
+    [Fact]
+    public void The_last_export_says_it_held_secret_values_after_reveal_is_turned_off()
+    {
+        WriteOrdersWithPassword();
+        var report = Path.Join(_temp.FullName, "report.txt");
+        InContext(context =>
+        {
+            using var viewModel = new MainWindowViewModel(
+                new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+                new InMemoryCredentialStore(),
+                analyzer: new RepositoryAnalyzer(render: (_, _) => null),
+                downloadRoot: Path.Join(_temp.FullName, "downloads"))
+            {
+                Dialogs = new SaveTo(report),
+            };
+            var opened = viewModel.AnalyzeFolderAsync(Path.Join(_temp.FullName, "orders"));
+            Assert.True(context.RunUntil(() => opened.IsCompleted));
+            viewModel.RevealSecrets = true;
+            Assert.True(context.RunUntil(() => !viewModel.IsBusy && viewModel.Rows.Any(r => r.Setting.Value == FakePassword)));
+            var revealed = viewModel.ExportTextCommand.ExecuteAsync(null);
+            Assert.True(context.RunUntil(() => revealed.IsCompleted));
+            Assert.Contains(FakePassword, File.ReadAllText(report), StringComparison.Ordinal);
+
+            // The web page warns from this once the file is on its way, which can be after the switch went off.
+            viewModel.RevealSecrets = false;
+            Assert.True(viewModel.LastExportHoldsSecrets);
+
+            Assert.True(context.RunUntil(() => !viewModel.IsBusy && viewModel.HasResult));
+            var masked = viewModel.ExportTextCommand.ExecuteAsync(null);
+            Assert.True(context.RunUntil(() => masked.IsCompleted));
+            Assert.False(viewModel.LastExportHoldsSecrets);
+        });
+    }
+
+    private void WriteOrdersWithPassword()
+    {
+        Write("orders/src/Orders/appsettings.json", $$"""{ "Db": { "Host": "db.example.test", "Password": "{{FakePassword}}" } }""");
+        Write("orders/deploy/chart/Chart.yaml", "apiVersion: v2\nname: orders\nversion: 1.0.0\n");
+        Write("orders/deploy/chart/values.yaml", "replicas: 1\n");
+    }
+
+    /// <summary>A save dialog that always picks the same file.</summary>
+    private sealed class SaveTo(string path) : IDialogService
+    {
+        public Task<string?> PickFolderAsync(string title) => Task.FromResult<string?>(null);
+
+        public Task<string?> SaveFileAsync(string title, string suggestedName) => Task.FromResult<string?>(path);
+    }
+
     /// <summary>An Octopus server whose first project list waits until the test lets it go.</summary>
     private sealed class SlowOctopus : HttpMessageHandler
     {
