@@ -48,10 +48,7 @@ public class HelmChartTests
     [Fact]
     public void Does_not_follow_links_in_the_templates_folder()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
 
         var chart = Directory.CreateTempSubdirectory("cf-chart-").FullName;
         var outside = Directory.CreateTempSubdirectory("cf-chart-outside-").FullName;

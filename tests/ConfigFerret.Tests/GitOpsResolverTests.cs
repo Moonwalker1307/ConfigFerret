@@ -899,10 +899,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void Does_not_read_a_kustomization_path_that_links_outside_the_repository()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
 
         Write("outside/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: o}\ndata: {K: '${V}'}\n");
         var repo = Directory.CreateDirectory(Path.Join(_root, "repo")).FullName;
@@ -917,10 +914,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void A_chart_yaml_that_links_outside_never_makes_a_chart_whether_or_not_its_target_exists()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
 
         Write("outside/Chart.yaml", "name: c\n");
         var repo = Directory.CreateDirectory(Path.Join(_root, "repo")).FullName;
@@ -958,10 +952,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void A_kustomization_path_that_links_to_the_repository_root_is_read()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
 
         Write("cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
         Directory.CreateSymbolicLink(Path.Join(_root, "linked"), ".");
