@@ -148,7 +148,9 @@ secret is never read through App Configuration.
 
 - Listing secrets does not return their version, so the version is known only with `IncludeValues`.
 - A custom `KeyVaultSecretManager` that renames secrets, or an App Configuration key filter in the app that differs from
-  `KeyFilter`, is not seen; use `Links` for those.
+  `KeyFilter`, is not seen, so the values those providers set are not linked to their secrets or key-values. `Links`
+  cannot fix this: it is read for environment variables, env entries and ConfigMap/Secret keys, never for values set by
+  a configuration provider. A value from the Key Vault provider is still hidden.
 - Feature flags with filters are linked by name only; their filter settings are not traced.
 - App Configuration snapshots are not read.
 - Listing stops after 400 pages per vault or selector, with a warning.
