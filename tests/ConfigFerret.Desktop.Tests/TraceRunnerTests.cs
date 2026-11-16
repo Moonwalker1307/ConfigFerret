@@ -526,6 +526,24 @@ public class TraceRunnerTests
         Assert.Null(result.Unused.NotRead);
     }
 
+    [Fact]
+    public async Task A_file_key_that_only_starts_with_the_prefix_is_dead_when_the_name_without_it_is_read()
+    {
+        using var temp = new TempFolder();
+        temp.Write("app/appsettings.json", """{"ORDERS_Db": {"Timeout": 5}, "Db": {"Timeout": 5}}""");
+        temp.Write("app/Program.cs", """
+            builder.Configuration.AddEnvironmentVariables("ORDERS_");
+            var timeout = builder.Configuration["Db:Timeout"];
+            """);
+        var profile = new Profile { Name = "leftover" };
+        profile.Sources.Add(new AppSettingsSource { Name = "app", Folder = temp.Full("app"), UseUserSecrets = false, EnvironmentPrefixes = ["ORDERS_"] });
+
+        var result = await new TraceRunner(new InMemoryCredentialStore()).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, result.CodeFilesScanned);
+        Assert.Equal(["ORDERS_Db:Timeout"], result.DeadSettings.Select(d => d.Key));
+    }
+
     private static Profile OrdersProfile()
     {
         var profile = new Profile { Name = "orders" };

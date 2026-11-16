@@ -249,22 +249,26 @@ public sealed partial class RepositoryAnalyzer
         }
 
         var manifestPaths = rendered is not null ? [] : scan.Manifests.Select(scan.Full).ToList();
-        var prefixes = new List<string>();
         var hasManifests = rendered is not null || manifestPaths.Count > 0;
+        var envFromPrefixes = new List<string>();
         if (hasManifests)
         {
             var kubernetes = new KubernetesSource { Name = rendered is null ? "Kubernetes manifests" : "Rendered manifests", Paths = manifestPaths, Rendered = rendered };
-            PickContainer(kubernetes, scan, app, prefixes, notes);
+            PickContainer(kubernetes, scan, app, envFromPrefixes, notes);
             profile.Sources.Insert(0, kubernetes);
-        }
-
-        if (app is not null && prefixes.Count == 0)
-        {
-            prefixes.AddRange(FindPrefixesInCode(app.Folder));
         }
 
         if (app is not null)
         {
+            // Only the app's code says that it strips a prefix. An envFrom prefix is part of the variable names the
+            // container gets, and the host's own unprefixed provider reads them with it.
+            var prefixes = FindPrefixesInCode(app.Folder).ToList();
+            foreach (var prefix in envFromPrefixes.Where(p => !prefixes.Contains(p, StringComparer.OrdinalIgnoreCase)))
+            {
+                notes.Add($"The container's envFrom adds the prefix {prefix} to the names of the variables it adds, and no AddEnvironmentVariables(\"{prefix}\") call was found in the app's code, so they are traced under their whole names. "
+                    + $"If the app strips {prefix} another way, such as with a constant or the options overload, its keys are the names without it.");
+            }
+
             profile.Mode = TraceMode.App;
             profile.Sources.Insert(0, new AppSettingsSource
             {
@@ -311,8 +315,8 @@ public sealed partial class RepositoryAnalyzer
     }
 
     // The manifests usually hold one app workload, maybe with sidecars. Pick the workload and container named most
-    // like the app, and the env prefixes its envFrom entries use, which the app strips with AddEnvironmentVariables(prefix).
-    private static void PickContainer(KubernetesSource source, RepositoryScan scan, AppFolder? app, List<string> prefixes, List<string> notes)
+    // like the app, and list the prefixes its envFrom entries add to variable names.
+    private static void PickContainer(KubernetesSource source, RepositoryScan scan, AppFolder? app, List<string> envFromPrefixes, List<string> notes)
     {
         KubernetesManifests manifests;
         try
@@ -357,7 +361,7 @@ public sealed partial class RepositoryAnalyzer
             source.Container = container.Name;
         }
 
-        prefixes.AddRange(container.EnvFrom.Select(e => e.Prefix).Where(p => !string.IsNullOrEmpty(p)).Distinct(StringComparer.Ordinal));
+        envFromPrefixes.AddRange(container.EnvFrom.Select(e => e.Prefix).Where(p => !string.IsNullOrEmpty(p)).Distinct(StringComparer.Ordinal));
     }
 
     // AddEnvironmentVariables("ORDERS_") in the app's code.
