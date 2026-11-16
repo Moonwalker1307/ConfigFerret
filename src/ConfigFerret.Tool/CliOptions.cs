@@ -73,8 +73,13 @@ internal sealed class AppOptions
 
     public Option<string[]> EnvPrefix { get; } = new("--env-prefix")
     {
-        Description = "The prefix the app passes to AddEnvironmentVariables. Repeat for each call, in order. Defaults to one call without a prefix.",
+        Description = "The prefix of an AddEnvironmentVariables call the app makes itself, after the call without a prefix the host makes. Repeat for each call, in order. Loaded below the app's command line, where an app that makes the call itself reads it above.",
         HelpName = "prefix",
+    };
+
+    public Option<bool> NoDefaultEnv { get; } = new("--no-default-env")
+    {
+        Description = "Leave out the AddEnvironmentVariables call without a prefix, for an app that builds its configuration without the host defaults.",
     };
 
     public Option<string?> UserSecretsId { get; } = new("--user-secrets-id")
@@ -96,6 +101,7 @@ internal sealed class AppOptions
         command.Options.Add(Env);
         command.Options.Add(EnvFile);
         command.Options.Add(EnvPrefix);
+        command.Options.Add(NoDefaultEnv);
         command.Options.Add(UserSecretsId);
         command.Options.Add(NoUserSecrets);
     }
