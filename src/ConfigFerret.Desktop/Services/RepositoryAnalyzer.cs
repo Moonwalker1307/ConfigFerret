@@ -54,7 +54,8 @@ public sealed record AnalysisConnections(
 /// <summary>
 /// Turns a scanned repository and the user's choices into a <see cref="Profile"/> for <see cref="TraceRunner"/>. When
 /// <c>helm</c> or <c>kubectl</c> is installed it renders the chart or overlay first, so values link all the way to the
-/// app's settings; the tools run without a shell and without network access (see <see cref="RunTool"/>).
+/// app's settings; the tools run without a shell, without network access and without this process's other environment
+/// variables (see <see cref="RunTool"/>).
 /// </summary>
 public sealed partial class RepositoryAnalyzer
 {
@@ -317,6 +318,18 @@ public sealed partial class RepositoryAnalyzer
             ?? candidates.FirstOrDefault(c => name(c).Contains(shortName, StringComparison.OrdinalIgnoreCase));
     }
 
+    // What helm and kubectl need to start and find their own folders on Windows, Linux and macOS. Nothing else of this
+    // process's environment reaches them: kustomize fills an env file line without '=' from its environment, and the
+    // web app's environment holds the server's own tokens, such as GITHUB_TOKEN and OCTOPUS_API_KEY.
+    private static readonly string[] ToolEnvironment =
+    [
+        "PATH", "PATHEXT", "SystemRoot", "windir", "SystemDrive",
+        "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+        "TMPDIR", "TEMP", "TMP",
+        "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+        "HELM_CACHE_HOME", "HELM_CONFIG_HOME", "HELM_DATA_HOME",
+    ];
+
     // Sends HTTP(S) through a proxy that does not exist, and lets git use local repositories only.
     private static readonly (string Name, string Value)[] OfflineEnvironment =
     [
@@ -344,27 +357,12 @@ public sealed partial class RepositoryAnalyzer
     /// <summary>
     /// Runs <paramref name="tool"/> with no shell and returns its output, or null when it is missing, fails or takes over
     /// a minute. The repository decides what the tool reads, so the tool gets no network: a kustomization may name remote
-    /// bases (git or http URLs), which would otherwise be fetched, with the user's git credentials, from any host.
+    /// bases (git or http URLs), which would otherwise be fetched, with the user's git credentials, from any host. For the
+    /// same reason it gets only the environment variables it needs to run (see <see cref="StartInfo"/>).
     /// </summary>
     internal static string? RunTool(string tool, IReadOnlyList<string> arguments)
     {
-        var start = new ProcessStartInfo(tool)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var argument in arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-
-        foreach (var (name, value) in OfflineEnvironment)
-        {
-            start.Environment[name] = value;
-        }
-
+        var start = StartInfo(tool, arguments, Environment.GetEnvironmentVariable);
         try
         {
             using var process = Process.Start(start);
@@ -387,5 +385,37 @@ public sealed partial class RepositoryAnalyzer
         {
             return null;
         }
+    }
+
+    /// <summary>How <see cref="RunTool"/> starts <paramref name="tool"/>: the variables in <see cref="ToolEnvironment"/> that are set, and the offline settings.</summary>
+    internal static ProcessStartInfo StartInfo(string tool, IReadOnlyList<string> arguments, Func<string, string?> getEnvironmentVariable)
+    {
+        var start = new ProcessStartInfo(tool)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        start.Environment.Clear();
+        foreach (var name in ToolEnvironment)
+        {
+            if (getEnvironmentVariable(name) is { } value)
+            {
+                start.Environment[name] = value;
+            }
+        }
+
+        foreach (var (name, value) in OfflineEnvironment)
+        {
+            start.Environment[name] = value;
+        }
+
+        return start;
     }
 }

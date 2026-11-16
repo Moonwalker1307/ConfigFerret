@@ -222,6 +222,39 @@ public class RepositoryAnalyzerTests : IDisposable
     }
 
     [Fact]
+    public void Gives_tools_only_the_environment_variables_they_need_to_run()
+    {
+        // A kustomize env file line without '=' reads the variable from the tool's environment, so the server's tokens must not be in it.
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PATH"] = "/opt/tools/bin",
+            ["HOME"] = "/home/fake",
+            ["TMPDIR"] = "/tmp/fake",
+            ["HELM_CACHE_HOME"] = "/tmp/fake/helm",
+            ["GITHUB_TOKEN"] = "ghp_fake_server_token",
+            ["OCTOPUS_API_KEY"] = "API-FAKESERVERKEY",
+            ["AWS_SECRET_ACCESS_KEY"] = "fake-aws-secret",
+            ["HELM_KUBETOKEN"] = "fake-kube-token",
+            ["KUBECONFIG"] = "/home/fake/.kube/config",
+            ["HTTPS_PROXY"] = "http://user:fake-password@proxy.example.test:3128",
+        };
+
+        var start = RepositoryAnalyzer.StartInfo("helm", ["template"], name => environment.GetValueOrDefault(name));
+
+        var expected = new[]
+        {
+            "PATH", "HOME", "TMPDIR", "HELM_CACHE_HOME",
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy", "GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT",
+        };
+        // Windows names are case-insensitive, so http_proxy and HTTP_PROXY are one variable there.
+        static IEnumerable<string> Names(IEnumerable<string> names) => names.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(Names(expected), Names(start.Environment.Keys), StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("/opt/tools/bin", start.Environment["PATH"]);
+        Assert.Equal("/home/fake", start.Environment["HOME"]);
+        Assert.Equal("http://127.0.0.1:9", start.Environment["HTTPS_PROXY"]);
+    }
+
+    [Fact]
     public void Returns_null_for_a_tool_that_is_not_installed() =>
         Assert.Null(RepositoryAnalyzer.RunTool("configferret-no-such-tool", ["template"]));
 
