@@ -360,7 +360,7 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
         _warnings.Add($"{_app.DisplayName}: {what} and no variable is listed as unused.");
     }
 
-    private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
+    private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
 
     /// <summary>Finds the ConfigMap, Secret and env values in source manifests that hold <c>${VAR}</c> placeholders.</summary>
     internal void AddTemplates(KubernetesManifests manifests)

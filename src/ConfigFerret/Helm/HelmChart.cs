@@ -63,7 +63,7 @@ public sealed partial class HelmChart
             var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
             foreach (var file in Directory.EnumerateFiles(templates, "*", options).Order(StringComparer.Ordinal))
             {
-                var relative = Path.GetRelativePath(chartDirectory, file).Replace('\\', '/');
+                var relative = Path.GetRelativePath(chartDirectory, file).Replace(Path.DirectorySeparatorChar, '/');
                 AddTemplate(relative, File.ReadAllText(file));
             }
         }

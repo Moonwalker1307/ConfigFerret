@@ -983,6 +983,19 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    public void A_backslash_in_a_file_name_under_the_folder_stays_a_backslash()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A backslash is the separator on Windows.");
+        Write("apps/a\\b.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: slash}\ndata: {K: '${V}'}\n");
+        Write("apps/a/b.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: nested}\ndata: {K: '${V}'}\n");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal("apps/a\\b.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("slash", "K"), new TraceDiagnostics())).Source);
+        Assert.Equal("apps/a/b.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("nested", "K"), new TraceDiagnostics())).Source);
+    }
+
+    [Fact]
     public void Lists_unused_variables_when_every_file_in_the_folder_was_read()
     {
         Write("apps/b/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\ndata: {K: '${V}'}\n");
