@@ -89,22 +89,25 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
 
     // A feature flag that is on and has client filters sets FeatureManagement:<name>:EnabledFor:<i>:Name,
     // :EnabledFor:<i>:Parameters:... and :RequirementType, without FeatureManagement: when a prefix trims it. Only those
-    // keys lead to such a flag: the shortest key above key that one sets and that is followed by one of them. The search
-    // starts after the first character, so a flag key that starts with ':' is found. A key that ends in ':' names no flag,
-    // and no key longer than every flag's key is looked up.
+    // keys lead to such a flag: the shortest key above key that one sets and that is followed by one of them. Only the
+    // lengths of such flags' keys are tried, shortest first and from 1, so a flag key that starts with ':' is found, and
+    // the key is never copied, so the walk takes time in line with the key's length and the number of flag key lengths.
+    // A key that ends in ':' names no flag.
     private List<AzureAppConfigurationSetting> FlagAbove(string key)
     {
-        var longest = settings.LongestFlagKey;
-        for (var colon = key.Length > 1 ? key.IndexOf(':', 1) : -1; colon > 0 && colon <= longest; colon = key.IndexOf(':', colon + 1))
+        foreach (var length in settings.FlagKeyLengths)
         {
-            if (key[colon - 1] == ':' || !IsFlagSubkey(key.AsSpan(colon + 1)))
+            if (length >= key.Length)
+            {
+                break;
+            }
+
+            if (length == 0 || key[length] != ':' || key[length - 1] == ':' || !IsFlagSubkey(key.AsSpan(length + 1)))
             {
                 continue;
             }
 
-            var flags = settings.FindByConfigurationKey(key[..colon])
-                .Where(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag && s.Enabled == true && s.Filters.Count > 0)
-                .ToList();
+            var flags = settings.FindFlagsWithFilters(key.AsSpan(0, length));
             if (flags.Count > 0)
             {
                 return flags;

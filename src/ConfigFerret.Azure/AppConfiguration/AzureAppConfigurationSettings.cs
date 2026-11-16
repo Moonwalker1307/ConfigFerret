@@ -41,6 +41,7 @@ public sealed class AzureAppConfigurationSettings
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byStoredKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byKeyOrOwnKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> _flattened;
+    private readonly Dictionary<string, List<AzureAppConfigurationSetting>>.AlternateLookup<ReadOnlySpan<char>> _byKeySpan;
 
     /// <summary>Creates a snapshot from settings you already have. Each setting sets its own configuration key.</summary>
     /// <param name="store">The store name, for example <c>contoso</c>.</param>
@@ -63,6 +64,7 @@ public sealed class AzureAppConfigurationSettings
         Store = store;
         Settings = [.. settings];
         _flattened = flattened;
+        var flagKeyLengths = new SortedSet<int>();
         foreach (var setting in Settings)
         {
             ArgumentNullException.ThrowIfNull(setting, nameof(settings));
@@ -80,14 +82,26 @@ public sealed class AzureAppConfigurationSettings
                 Add(_byKeyOrOwnKey, setting.ConfigurationKey, setting);
             }
 
-            if (setting.Kind == AzureAppConfigurationSettingKind.FeatureFlag)
+            if (IsFlagWithFilters(setting))
             {
-                LongestFlagKey = Math.Max(LongestFlagKey, setting.ConfigurationKey.Length);
+                flagKeyLengths.Add(setting.ConfigurationKey.Length);
             }
         }
 
+        FlagKeyLengths = [.. flagKeyLengths];
+        _byKeySpan = _byKey.GetAlternateLookup<ReadOnlySpan<char>>();
         Warnings = [.. warnings ?? []];
     }
+
+    /// <summary>The lengths of the configuration keys of the flags that are on and have client filters, shortest first.</summary>
+    internal IReadOnlyList<int> FlagKeyLengths { get; }
+
+    /// <summary>The flags that are on, have client filters and set the configuration key <paramref name="key"/>, without copying it.</summary>
+    internal List<AzureAppConfigurationSetting> FindFlagsWithFilters(ReadOnlySpan<char> key) =>
+        _byKeySpan.TryGetValue(key, out var list) ? list.Where(IsFlagWithFilters).ToList() : [];
+
+    private static bool IsFlagWithFilters(AzureAppConfigurationSetting setting) =>
+        setting.Kind == AzureAppConfigurationSettingKind.FeatureFlag && setting.Enabled == true && setting.Filters.Count > 0;
 
     /// <summary>
     /// <see cref="FindByConfigurationKey"/>, plus each stored JSON key-value whose own configuration key (its key with the
@@ -96,9 +110,6 @@ public sealed class AzureAppConfigurationSettings
     /// </summary>
     internal IReadOnlyList<AzureAppConfigurationSetting> FindByConfigurationKeyOrOwnKey(string key) =>
         _byKeyOrOwnKey.TryGetValue(key, out var list) ? list : [];
-
-    /// <summary>The length of the longest configuration key a feature flag sets, or 0 when there is no flag.</summary>
-    internal int LongestFlagKey { get; }
 
     /// <summary>The store name, for example <c>contoso</c>.</summary>
     public string Store { get; }
