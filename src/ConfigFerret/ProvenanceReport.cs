@@ -41,7 +41,7 @@ public sealed class ProvenanceReport
     {
         var setting = Find(key);
         return setting is null
-            ? $"{key} is not set by any configuration provider."
+            ? $"{TextRenderer.Escape(key)} is not set by any configuration provider."
             : TextRenderer.Render(setting);
     }
 

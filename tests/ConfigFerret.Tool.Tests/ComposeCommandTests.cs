@@ -96,6 +96,15 @@ public class ComposeCommandTests
     }
 
     [Fact]
+    public async Task Escapes_control_characters_in_the_message_about_a_missing_file()
+    {
+        var result = await new ToolRunner().RunAsync("container", "--compose-file", "no\nsuch\u001b[2K.yaml");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("configferret: File not found: no\\nsuch\\u001B[2K.yaml", result.Error.TrimEnd());
+    }
+
+    [Fact]
     public async Task Reports_an_invalid_compose_file()
     {
         var file = Path.Join(Path.GetTempPath(), $"configferret-{Guid.NewGuid():N}.yaml");

@@ -52,7 +52,7 @@ internal static class Cli
             or InvalidOperationException or ArgumentException or HttpRequestException or JsonException)
         {
             // One line, no stack trace: these are problems with the input, not bugs.
-            host.Error.WriteLine("configferret: " + ex.Message);
+            host.Error.WriteLine("configferret: " + TextRenderer.Escape(ex.Message));
             return ExitCodes.Usage;
         }
     }
@@ -243,7 +243,7 @@ internal static class Cli
             if (unknown.Count > 0)
             {
                 host.Error.WriteLine(
-                    "configferret: the manifests don't hold the value of " + string.Join(", ", unknown)
+                    "configferret: the manifests don't hold the value of " + string.Join(", ", unknown.Select(TextRenderer.Escape))
                     + " (set at run time, or from a ConfigMap or Secret that wasn't passed). Pass --env NAME=VALUE to include them.");
                 foreach (var name in unknown)
                 {
@@ -311,7 +311,7 @@ internal static class Cli
                     }
                     else
                     {
-                        host.Error.WriteLine($"{key} is not set by any configuration provider.");
+                        host.Error.WriteLine($"{TextRenderer.Escape(key)} is not set by any configuration provider.");
                         exitCode = ExitCodes.Findings;
                     }
                 }

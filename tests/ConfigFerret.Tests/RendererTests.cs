@@ -110,6 +110,101 @@ public class RendererTests
         Assert.Equal($"\"{new string('x', 117)}...\"", TextRenderer.Show(new string('x', 121)));
     }
 
+    // A line break followed by a forged line, an ANSI sequence that erases the line above, and a right-to-left override.
+    private const string Hostile = "x\n  [effective]  forged (key K)\r\n\u001b[2K\u001b[1A\u202Egnirts";
+
+    private static ProvenanceReport HostileReport(string text)
+    {
+        var step = new ProvenanceStep
+        {
+            Kind = LayerKind.DotNetProvider,
+            Source = "source " + text,
+            Location = "line " + text,
+            Value = "value " + text,
+            IsEffective = true,
+            Note = "note " + text,
+        };
+        return new ProvenanceReport([new TracedSetting("key " + text, "value " + text, [step], false)], ["warning " + text]);
+    }
+
+    private static string[] Lines(string text) => text.Split(Environment.NewLine);
+
+    private static bool IsUnsafe(char c) =>
+        char.IsControl(c) || c is '\u2028' or '\u2029' or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069');
+
+    // Only the renderer's own line endings may be left.
+    private static void AssertNoRawControlCharacters(string text) =>
+        Assert.DoesNotContain(text.Replace(Environment.NewLine, "", StringComparison.Ordinal), IsUnsafe);
+
+    [Fact]
+    public void Text_escapes_control_characters_and_line_breaks_from_the_input()
+    {
+        var text = TextRenderer.Render(HostileReport(Hostile));
+
+        // Key, story, step, note, blank line, header, warning and the empty rest after the last line ending.
+        Assert.Equal(Lines(TextRenderer.Render(HostileReport("x"))).Length, Lines(text).Length);
+        AssertNoRawControlCharacters(text);
+        var escaped = "x\\n  [effective]  forged (key K)\\r\\n\\u001B[2K\\u001B[1A\\u202Egnirts";
+        // A value is shown on one line and treats a Windows line ending as one line break.
+        var shown = "x\\n  [effective]  forged (key K)\\n\\u001B[2K\\u001B[1A\\u202Egnirts";
+        Assert.Equal(
+            [
+                $"key {escaped} = \"value {shown}\"",
+                $"  set in source {escaped}",
+                $"  [effective]  source {escaped} (line {escaped}) = \"value {shown}\"",
+                $"               note {escaped}",
+                "",
+                "Warnings:",
+                $"  - warning {escaped}",
+                "",
+            ],
+            Lines(text));
+    }
+
+    [Fact]
+    public void Explain_escapes_a_key_that_is_not_set()
+    {
+        var message = new ProvenanceReport([], []).Explain("a\nb\u001b");
+
+        Assert.Equal("a\\nb\\u001B is not set by any configuration provider.", message);
+    }
+
+    [Fact]
+    public void Json_escapes_control_characters_and_line_breaks_from_the_input()
+    {
+        const string hostile = Hostile + "\u2028\u2029\t\u0000";
+        var json = JsonRenderer.Render(HostileReport(hostile));
+
+        Assert.Equal(JsonRenderer.Render(HostileReport("x")).Split('\n').Length, json.Split('\n').Length);
+        Assert.Equal([], json.Replace("\n", "", StringComparison.Ordinal).Where(c => char.IsControl(c) || c is '\u2028' or '\u2029').Select(c => $"U+{(int)c:X4}"));
+        using var doc = JsonDocument.Parse(json);
+        var setting = doc.RootElement.GetProperty("settings")[0];
+        Assert.Equal("key " + hostile, setting.GetProperty("key").GetString());
+        Assert.Equal("value " + hostile, setting.GetProperty("value").GetString());
+        Assert.Equal("warning " + hostile, doc.RootElement.GetProperty("warnings")[0].GetString());
+        var layer = setting.GetProperty("layers")[0];
+        Assert.Equal("source " + hostile, layer.GetProperty("source").GetString());
+        Assert.Equal("note " + hostile, layer.GetProperty("note").GetString());
+    }
+
+    [Theory]
+    [InlineData("C:\\Users\\me\\app.json", "C:\\Users\\me\\app.json")]
+    [InlineData("Server=db;Password=\"x\";Note='y'", "Server=db;Password=\"x\";Note='y'")]
+    [InlineData("Größe \u00e9 \u4e2d\u6587 \U0001F600 \u200B", "Größe \u00e9 \u4e2d\u6587 \U0001F600 \u200B")]
+    [InlineData("a\nb\rc\td", "a\\nb\\rc\\td")]
+    [InlineData("\0\u0007\u001b\u007f\u009b", "\\u0000\\u0007\\u001B\\u007F\\u009B")]
+    [InlineData("\u2028\u2029", "\\u2028\\u2029")]
+    [InlineData("\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069", "\\u202A\\u202B\\u202C\\u202D\\u202E\\u2066\\u2067\\u2068\\u2069")]
+    [InlineData("\u2029\u202F\u2065\u206A", "\\u2029\u202F\u2065\u206A")]
+    public void Escape_changes_only_control_line_separator_and_bidirectional_characters(string text, string expected) =>
+        Assert.Equal(expected, TextRenderer.Escape(text));
+
+    [Fact]
+    public void Show_escapes_a_carriage_return_that_is_not_part_of_a_line_ending()
+    {
+        Assert.Equal("\"a\\nb\\rc\\u001B[2K\"", TextRenderer.Show("a\r\nb\rc\u001b[2K"));
+    }
+
     [Fact]
     public void Renderers_reject_null()
     {

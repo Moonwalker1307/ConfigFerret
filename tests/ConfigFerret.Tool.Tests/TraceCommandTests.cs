@@ -93,6 +93,16 @@ public class TraceCommandTests
     }
 
     [Fact]
+    public async Task Escapes_control_characters_in_a_key_that_is_not_set()
+    {
+        var result = await new ToolRunner().RunAsync(HelmRelease("Orders:Missing\n\u001b[2Kforged"));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Orders:Missing\\n\\u001B[2Kforged is not set by any configuration provider.", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(result.Error.ReplaceLineEndings(""), c => char.IsControl(c));
+    }
+
+    [Fact]
     public async Task Passes_arguments_after_double_dash_to_the_app_as_its_command_line()
     {
         var result = await new ToolRunner().RunAsync([.. HelmRelease("Features:Search"), "--", "--Features:Search=false"]);

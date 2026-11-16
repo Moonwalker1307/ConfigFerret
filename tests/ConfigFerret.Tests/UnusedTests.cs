@@ -130,6 +130,26 @@ public class UnusedTests
     }
 
     [Fact]
+    public void Text_escapes_control_characters_and_line_breaks_from_the_input()
+    {
+        static string Text(string text)
+        {
+            var config = Layers(new() { ["K" + text] = "1" }, new() { ["K" + text] = "value " + text });
+            return ConfigTracer.For(config)
+                .WithResolver(new Fixed(Step("low " + text, "1"), Step("high " + text, "value " + text)))
+                .Trace().FindUnused([]).ToText();
+        }
+
+        const string hostile = "x\n  [effective]  forged (key K)\r\n\u001b[2K\u001b[1A\u202Egnirts";
+        var text = Text(hostile);
+
+        Assert.Equal(Text("x").Split(Environment.NewLine).Length, text.Split(Environment.NewLine).Length);
+        Assert.DoesNotContain(text.Replace(Environment.NewLine, "", StringComparison.Ordinal), c => char.IsControl(c) || c is '\u2028' or '\u2029' or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069'));
+        Assert.Contains("  Kx\\n  [effective]  forged (key K)\\r\\n\\u001B[2K\\u001B[1A\\u202Egnirts", text, StringComparison.Ordinal);
+        Assert.Contains("low x\\n  [effective]  forged (key K)\\r\\n\\u001B[2K", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Lists_configured_keys_that_were_not_read()
     {
         var config = Layer(new() { ["Db:Timeout"] = "30", ["Legacy:Mode"] = "on", ["Db:Host"] = "h" });
