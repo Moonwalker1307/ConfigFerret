@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -38,7 +39,22 @@ public sealed partial class CodeReadScanner
     ];
 
     private const int MaxFiles = 5000;
+    private const int MaxFolders = 50;
     private const long MaxFileBytes = 1024 * 1024;
+
+    // A project file is only searched for its references, so one this big is not a real one. The project files of one
+    // scan are read up to MaxTotalBytes in all.
+    private const int MaxProjectBytes = 1024 * 1024;
+
+    // The code a scan holds in memory at once, as file sizes. A large solution has a few MB of C#, so this leaves room for
+    // ten times that while the stripped text, two bytes a character, stays near 128 MB.
+    private const long MaxTotalBytes = 64L * 1024 * 1024;
+
+    // How many files SkippedFiles lists. The rest are only counted, so a repository of many files can't fill memory.
+    private const int MaxSkippedFiles = 1000;
+
+    // How many places DynamicReads lists. The rest are only counted, so a file of many such reads can't fill memory.
+    private const int MaxDynamicReads = 1000;
 
     // The patterns are linear, so this only stops a file that a pattern somehow still can't finish: the file is skipped.
     private const int MatchTimeoutMilliseconds = 10_000;
@@ -58,7 +74,12 @@ public sealed partial class CodeReadScanner
     private readonly HashSet<string> _typesInSkippedFiles = new(StringComparer.Ordinal);
     private readonly SectionNode _tree = new();
     private readonly List<(string File, int Line)> _dynamic = [];
+    private int _dynamicCount;
     private readonly List<string> _skipped = [];
+    private readonly List<string> _skippedReferences = [];
+    private readonly HashSet<string> _skippedReferenceSet = new(StringComparer.Ordinal);
+    private char[]? _typeNameBuffer;
+    private long _projectBytes;
     private CancellationToken _cancellationToken;
     private int _steps;
 
@@ -70,13 +91,35 @@ public sealed partial class CodeReadScanner
     public int FilesScanned { get; private set; }
 
     /// <summary>
-    /// C# files the scan skipped because they are over 1 MB or reading them took too long, so a key only they read counts
-    /// as not read.
+    /// C# files the scan skipped because they are over 1 MB, don't fit in the 64 MB of code the scan holds, come past the
+    /// first 5000 files, or reading them took too long, so a key only they read counts as not read: the first 1000 of
+    /// them. <see cref="SkippedFileCount"/> counts them all.
     /// </summary>
     public IReadOnlyList<string> SkippedFiles => _skipped;
 
-    /// <summary>Where code reads a key the scanner cannot work out, such as <c>config[name]</c>, as file and line.</summary>
-    public IReadOnlyList<string> DynamicReads => _dynamic.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.Line).Select(d => $"{d.File} (line {d.Line})").Distinct().ToList();
+    /// <summary>How many C# files the scan skipped, listed in <see cref="SkippedFiles"/> or not.</summary>
+    public int SkippedFileCount { get; private set; }
+
+    /// <summary>
+    /// True when the scan skipped a file without searching it for the types it declares, so any class may have more parts
+    /// there. Every class then counts as having any property.
+    /// </summary>
+    public bool AllClassesOpen { get; private set; }
+
+    /// <summary>
+    /// Project references the scan did not follow, and project files it could not read, each with why, such as
+    /// <c>"../P50/P50.csproj" (past the first 50 projects)</c>, so a key only that project reads counts as not read.
+    /// </summary>
+    public IReadOnlyList<string> SkippedReferences => _skippedReferences;
+
+    /// <summary>
+    /// Where code reads a key the scanner cannot work out, such as <c>config[name]</c>, as file and line: the first 1000
+    /// places found. <see cref="DynamicReadCount"/> counts them all.
+    /// </summary>
+    public IReadOnlyList<string> DynamicReads => _dynamic.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.Line).Select(d => $"{d.File} (line {d.Line})").ToList();
+
+    /// <summary>How many places in the code read a key the scanner cannot work out, listed in <see cref="DynamicReads"/> or not.</summary>
+    public int DynamicReadCount => _dynamicCount;
 
     /// <summary>The exact keys read, such as <c>Cache:Ttl</c>.</summary>
     public IReadOnlyCollection<string> Keys => _keys;
@@ -92,37 +135,84 @@ public sealed partial class CodeReadScanner
     /// <c>bin</c>, <c>obj</c> and test projects.
     /// </summary>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
-    public static CodeReadScanner Scan(string folder, CancellationToken cancellationToken = default)
+    public static CodeReadScanner Scan(string folder, CancellationToken cancellationToken = default) => Scan(folder, MaxTotalBytes, cancellationToken);
+
+    // For tests: maxTotalBytes is the code the scan holds in memory at once.
+    internal static CodeReadScanner Scan(string folder, long maxTotalBytes, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         var scanner = new CodeReadScanner();
-        var sources = new List<(string Path, string Text)>();
-        foreach (var file in SourceFiles(folder))
+        scanner.Read(scanner.ReadFiles(folder, maxTotalBytes, cancellationToken), null, cancellationToken);
+        return scanner;
+    }
+
+    // Reads each file as Read asks for it, so the text is held only once comments are stripped from it. A file over
+    // MaxFileBytes is searched for the names of the types it declares, while all such searches stay within
+    // maxTotalBytes. A file past MaxFiles, one that doesn't fit in maxTotalBytes, and one over MaxFileBytes past the
+    // search budget, are listed without being opened, so every class is left open.
+    private IEnumerable<(string Name, string Text)> ReadFiles(string folder, long maxTotalBytes, CancellationToken cancellationToken)
+    {
+        var total = 0L;
+        var searched = 0L;
+        foreach (var (file, read) in SourceFiles(folder))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var name = Path.GetRelativePath(folder, file);
+            if (!read)
+            {
+                SkipFile(name);
+                AllClassesOpen = true;
+                continue;
+            }
+
+            string? text = null;
+            var listed = false;
             try
             {
-                if (new FileInfo(file).Length <= MaxFileBytes)
+                var length = new FileInfo(file).Length;
+                if (length <= MaxFileBytes && total + length <= maxTotalBytes)
                 {
-                    sources.Add((file, File.ReadAllText(file)));
+                    text = File.ReadAllText(file);
+                    total += length;
                 }
                 else
                 {
                     // Listed first, so a file that fails to read partway is still listed.
-                    scanner._skipped.Add(Path.GetRelativePath(folder, file));
-                    scanner.ReadTypeNames(file, cancellationToken);
+                    SkipFile(name);
+                    listed = true;
+                    if (length > MaxFileBytes && searched + length <= maxTotalBytes)
+                    {
+                        searched += length;
+                        ReadTypeNames(file, length, cancellationToken);
+                    }
+                    else
+                    {
+                        AllClassesOpen = true;
+                    }
                 }
             }
             catch (IOException)
             {
+                AllClassesOpen |= listed;
             }
             catch (UnauthorizedAccessException)
             {
+                AllClassesOpen |= listed;
+            }
+
+            if (text is not null)
+            {
+                yield return (name, text);
             }
         }
+    }
 
-        scanner.Read(sources.Select(s => (Path.GetRelativePath(folder, s.Path), s.Text)), null, cancellationToken);
-        return scanner;
+    private void SkipFile(string name)
+    {
+        if (++SkippedFileCount <= MaxSkippedFiles)
+        {
+            _skipped.Add(name);
+        }
     }
 
     /// <summary>Reads C# sources given as text, for tests and callers that already have the files.</summary>
@@ -132,33 +222,39 @@ public sealed partial class CodeReadScanner
 
     // A file too big to read is still searched for the names of the types it declares, a block at a time. Each of them may
     // have properties the scan can't see, such as a part of a partial class, so it is left open.
-    private void ReadTypeNames(string file, CancellationToken cancellationToken)
+    // At most length characters are read, so a file that grows while it is read can't make the search longer. One buffer
+    // serves the whole scan.
+    private void ReadTypeNames(string file, long length, CancellationToken cancellationToken)
     {
         const int Overlap = 1024;
         using var reader = new StreamReader(file);
-        var buffer = new char[MaxFileBytes];
+        var buffer = _typeNameBuffer ??= new char[MaxFileBytes];
         var carried = 0;
+        var left = length;
         while (true)
         {
-            var wanted = buffer.Length - carried;
+            var wanted = (int)Math.Min(buffer.Length - carried, left);
             var read = reader.ReadBlock(buffer, carried, wanted);
+            left -= read;
             cancellationToken.ThrowIfCancellationRequested();
-            var length = carried + read;
+            var filled = carried + read;
             try
             {
-                foreach (Match m in TypeStart().Matches(new string(buffer, 0, length)))
+                foreach (Match m in TypeStart().Matches(new string(buffer, 0, filled)))
                 {
                     (m.Groups["interface"].Success ? _interfaces : _typesInSkippedFiles).Add(m.Groups["name"].Value);
                 }
             }
             catch (RegexMatchTimeoutException)
             {
+                // The types after the timeout are unknown.
+                AllClassesOpen = true;
             }
 
             // The last characters are read again with the next block, so a declaration split between blocks is found.
-            carried = Math.Min(Overlap, length);
-            Array.Copy(buffer, length - carried, buffer, 0, carried);
-            if (read < wanted)
+            carried = Math.Min(Overlap, filled);
+            Array.Copy(buffer, filled - carried, buffer, 0, carried);
+            if (read < wanted || left <= 0)
             {
                 break;
             }
@@ -284,9 +380,10 @@ public sealed partial class CodeReadScanner
     // properties of its bases. Open is true when the class or a base it reached may have properties the scan can't see:
     // a class it could not read whole, a base class not in the code, such as a library's options class, or a base past
     // the last one followed. A base named like an interface, such as IValidatableObject, gives the binder no property.
+    // Every class is open when a file was skipped without being searched for the types it declares.
     private bool TryGetProperty(OptionsShape shape, string name, out string? type, out bool open)
     {
-        open = false;
+        open = AllClassesOpen;
         var seen = new HashSet<OptionsShape> { shape };
         var current = shape;
         while (true)
@@ -385,7 +482,10 @@ public sealed partial class CodeReadScanner
         }
 
         FilesScanned = skipped.Count(s => !s);
-        _skipped.AddRange(files.Where((_, i) => skipped[i]).Select(f => f.Name));
+        foreach (var (name, _) in files.Where((_, i) => skipped[i]))
+        {
+            SkipFile(name);
+        }
 
         // The sections read or bound, by segment, so Check walks a key once. The whole configuration, the empty path, is
         // checked on its own.
@@ -459,6 +559,7 @@ public sealed partial class CodeReadScanner
         }
 
         var covered = new HashSet<int>();
+        var lines = new HashSet<int>();
 
         // A bare constant name resolves first in the type around the read.
         var types = new TypeSweep(bodies);
@@ -467,7 +568,11 @@ public sealed partial class CodeReadScanner
         void Dynamic(int index)
         {
             var before = newlines.BinarySearch(index);
-            _dynamic.Add((file, (before >= 0 ? before : ~before) + 1));
+            var line = (before >= 0 ? before : ~before) + 1;
+            if (lines.Add(line) && ++_dynamicCount <= MaxDynamicReads)
+            {
+                _dynamic.Add((file, line));
+            }
         }
 
         foreach (Match m in SectionCall().Matches(text))
@@ -1054,55 +1159,117 @@ public sealed partial class CodeReadScanner
         return i;
     }
 
-    private static IEnumerable<string> SourceFiles(string folder)
+    // Each C# file of the folder and of the project folders it references, and whether the scan may read it. The
+    // project files of the first MaxFolders folders are read, and each folder is walked once: one is left out only when
+    // a walk already went through it. A reference left past MaxFolders is listed; when a walk went through its folder,
+    // its files are read, but its own references aren't followed. The files past the first MaxFiles are only listed.
+    // Paths are taken in ordinal order, so the same repository gives the same result on every file system.
+    private IEnumerable<(string File, bool Read)> SourceFiles(string folder)
     {
+        // Paths compare as IsInFolder compares them, so ..\Shared and ..\shared are one folder where case is ignored.
+        var comparer = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var folders = new List<string>();
-        var queue = new Queue<string>();
-        queue.Enqueue(Path.GetFullPath(folder));
-        while (queue.Count > 0 && folders.Count < 50)
+        var known = new HashSet<string>(comparer);
+        var queue = new Queue<(string Folder, string? Include)>();
+        queue.Enqueue((Path.GetFullPath(folder), null));
+        while (queue.Count > 0 && folders.Count < MaxFolders)
         {
-            var current = queue.Dequeue();
-            if (!Directory.Exists(current) || folders.Contains(current, StringComparer.Ordinal))
+            var (current, _) = queue.Dequeue();
+            if (!known.Add(Path.TrimEndingDirectorySeparator(current)) || !Directory.Exists(current))
             {
                 continue;
             }
 
-            folders.Add(current);
-            foreach (var reference in ProjectReferences(current))
+            folders.Add(Path.TrimEndingDirectorySeparator(current));
+            foreach (var reference in ProjectReferences(folder, current))
             {
                 queue.Enqueue(reference);
             }
         }
 
+        // A folder is skipped only when a walk went through it. One below another as text may still need a walk of its
+        // own, when it lies behind a link or below bin, obj, node_modules or .git.
+        var walked = new HashSet<string>(comparer);
         var count = 0;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var root in folders)
+        foreach (var root in folders.Where(f => !walked.Contains(f)))
         {
-            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-            foreach (var file in Directory.EnumerateFiles(root, "*.cs", options))
+            foreach (var file in CodeFiles(root, walked))
             {
-                var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                if (relative.Split('/').Any(p => p is "bin" or "obj" or "node_modules" or ".git") || !seen.Add(file))
-                {
-                    continue;
-                }
+                yield return (file, ++count <= MaxFiles);
+            }
+        }
 
-                if (++count > MaxFiles)
-                {
-                    yield break;
-                }
-
-                yield return file;
+        // A reference left past the first MaxFolders is listed. When a walk went through its folder, its files were
+        // read, but its project file never was.
+        foreach (var (current, include) in queue)
+        {
+            var trimmed = Path.TrimEndingDirectorySeparator(current);
+            if (include is not null && known.Add(trimmed))
+            {
+                SkipReference(include, walked.Contains(trimmed)
+                    ? $"past the first {MaxFolders} projects, so its references aren't followed"
+                    : $"past the first {MaxFolders} projects");
             }
         }
     }
 
-    private static IEnumerable<string> ProjectReferences(string folder)
+    // The C# files below a folder, in ordinal order within each folder, then the folders below it in ordinal order.
+    // bin, obj, node_modules, .git, links and folders already walked are not entered. Each folder walked goes into walked.
+    private static IEnumerable<string> CodeFiles(string root, HashSet<string> walked)
+    {
+        var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!walked.Add(Path.TrimEndingDirectorySeparator(current)))
+            {
+                continue;
+            }
+
+            string[] files;
+            string[] folders;
+            try
+            {
+                files = Directory.GetFiles(current, "*.cs", options);
+                folders = Directory.GetDirectories(current, "*", options);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            Array.Sort(files, StringComparer.Ordinal);
+            foreach (var file in files)
+            {
+                yield return file;
+            }
+
+            Array.Sort(folders, StringComparer.Ordinal);
+            for (var i = folders.Length - 1; i >= 0; i--)
+            {
+                if (Path.GetFileName(folders[i]) is not ("bin" or "obj" or "node_modules" or ".git"))
+                {
+                    stack.Push(folders[i]);
+                }
+            }
+        }
+    }
+
+    // The project references of the project files in a folder. A project file that is too big or isn't XML is listed by
+    // its path below the scanned folder, and its references are not followed.
+    private IEnumerable<(string Folder, string Include)> ProjectReferences(string scanned, string folder)
     {
         string[] projects;
         try
         {
             projects = Directory.GetFiles(folder, "*.csproj");
+            Array.Sort(projects, StringComparer.Ordinal);
         }
         catch (IOException)
         {
@@ -1115,15 +1282,26 @@ public sealed partial class CodeReadScanner
 
         foreach (var project in projects)
         {
-            XDocument document;
+            var name = Path.GetRelativePath(scanned, project).Replace('\\', '/');
+            XDocument? document = null;
             try
             {
                 using var stream = File.OpenRead(project);
-                using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
-                document = XDocument.Load(reader);
+                if (stream.Length <= MaxProjectBytes && _projectBytes + stream.Length <= MaxTotalBytes)
+                {
+                    _projectBytes += stream.Length;
+                    var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxProjectBytes };
+                    using var reader = XmlReader.Create(stream, settings);
+                    document = XDocument.Load(reader);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException)
             {
+            }
+
+            if (document is null)
+            {
+                SkipReference(name, "a project file the scan can't read, so its references aren't followed");
                 continue;
             }
 
@@ -1138,10 +1316,28 @@ public sealed partial class CodeReadScanner
                 var directory = Path.GetDirectoryName(path);
                 if (directory is not null && !Path.GetFileName(directory).Contains("Test", StringComparison.OrdinalIgnoreCase))
                 {
-                    yield return directory;
+                    yield return (directory, include);
                 }
             }
         }
+    }
+
+    // Lists a reference once, as written, at most 200 characters of it, with characters that could disguise it replaced,
+    // and why.
+    private void SkipReference(string include, string reason)
+    {
+        var cut = include.Length > 200 ? (char.IsHighSurrogate(include[199]) ? 199 : 200) : include.Length;
+        var text = new string(include[..cut].Select(c => IsHidden(c) ? '?' : c).ToArray());
+        var entry = $"\"{text}{(cut < include.Length ? "…" : string.Empty)}\" ({reason})";
+        if (_skippedReferenceSet.Add(entry))
+        {
+            _skippedReferences.Add(entry);
+        }
+
+        // Control and format characters, such as U+202E, which turns the text after it around, and the separators that
+        // break a line.
+        static bool IsHidden(char c) => char.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.Format
+            or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
     }
 
     private sealed record TypeBody(string Name, OptionsShape Shape, int Open, int Close);

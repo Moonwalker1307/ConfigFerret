@@ -43,6 +43,22 @@ public sealed class VariableRowsTests : IDisposable
     }
 
     [Fact]
+    public void Reads_built_at_run_time_are_counted_past_the_places_listed()
+    {
+        var result = Result() with
+        {
+            CodeFilesScanned = 2,
+            DynamicReads = Enumerable.Range(1, 1000).Select(i => $"Program.cs (line {i})").ToList(),
+            DynamicReadCount = 3000,
+        };
+
+        using var viewModel = Show(result);
+
+        Assert.Equal("Read 2 C# files for the keys the app reads. 3000 reads build their key at run time, so check before deleting.", viewModel.DeadScanText);
+        Assert.Contains(viewModel.Problems, p => p.Text.Contains("Program.cs (line 5) and 2995 more.", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Github_variables_only_a_workflow_uses_are_workflow_rows_not_dead()
     {
         using var viewModel = Show(Result());

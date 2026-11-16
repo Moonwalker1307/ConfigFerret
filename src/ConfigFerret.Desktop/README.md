@@ -74,9 +74,12 @@ commented-out code doesn't.
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are
 listed under the scan, and a dead setting may still be read there. So is a file the scan skipped because it is over
-1 MB or reading it took too long; the classes such a file declares count as having any property. A class whose
-declaration or one of whose properties the scan can't take apart, or whose bases go more than 16 levels up, counts as
-having any property too. Check other environments and apps before deleting.
+1 MB, doesn't fit in the 64 MB of code the scan holds, comes past the first 5000 files, or reading it took too long. A
+file over 1 MB is still searched for the classes it declares, and those count as having any property; when a skipped
+file isn't searched, every class does. The scan follows at most 50 projects, and a reference past them, or a project
+file it can't read, is named in the notes. A class whose declaration or one of whose properties the scan can't take
+apart, or whose bases go more than 16 levels up, counts as having any property too. Check other environments and
+apps before deleting.
 
 ## Download
 
