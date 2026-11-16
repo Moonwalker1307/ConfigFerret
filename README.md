@@ -76,9 +76,10 @@ Then open http://localhost:8080. See [its readme](src/ConfigFerret.Web/README.md
 ### From the command line
 
 `configferret` builds the app's configuration from its folder the way the .NET host does (`ASPNETCORE_` and `DOTNET_`
-variables, `appsettings.json`, `appsettings.{Environment}.json`, user secrets in Development, environment variables,
-the command line) and traces it through the manifests, chart or overlay it is deployed with. Nothing is read from
-your shell's environment, and secret values are shown as `***` unless you pass `--reveal-secrets`.
+variables, `appsettings.json`, `appsettings.{Environment}.json`, `{ApplicationName}.settings.json` and its
+environment file, user secrets in Development, environment variables, the command line) and traces it through the
+manifests, chart or overlay it is deployed with. Nothing is read from your shell's environment, and secret values are
+shown as `***` unless you pass `--reveal-secrets`.
 
 ```
 helm template orders charts/orders -f values-prod.yaml > rendered.yaml

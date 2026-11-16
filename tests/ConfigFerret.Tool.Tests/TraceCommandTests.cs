@@ -214,6 +214,144 @@ public class TraceCommandTests
         }
     }
 
+    [Theory]
+    [InlineData("""<Project Sdk="Microsoft.NET.Sdk.Web" />""", "Orders.Api")]
+    [InlineData("""<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><AssemblyName>Orders</AssemblyName></PropertyGroup></Project>""", "Orders")]
+    public async Task Reads_the_application_settings_files_after_the_appsettings_files(string project, string applicationName)
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "Orders.Api.csproj"), project, ct);
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Timeout": 30, "Host": "localhost" } }""", ct);
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.Staging.json"), """{ "Db": { "Timeout": 35 } }""", ct);
+            await File.WriteAllTextAsync(Path.Join(app.FullName, applicationName + ".settings.json"), """{ "Db": { "Timeout": 40, "Host": "db.app" } }""", ct);
+            await File.WriteAllTextAsync(Path.Join(app.FullName, applicationName + ".settings.Staging.json"), """{ "Db": { "Host": "db.staging" } }""", ct);
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--no-user-secrets", "-e", "Staging", "--env", "Db__Host=db.env", "Db:Timeout", "Db:Host");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Db:Timeout = "40""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] appsettings.Staging.json (line 1) = "35""", result.Output, StringComparison.Ordinal);
+            Assert.Contains($"""[effective]  {applicationName}.settings.json (line 1) = "40""", result.Output, StringComparison.Ordinal);
+            Assert.Contains($"""[overridden] {applicationName}.settings.Staging.json (line 1) = "db.staging""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[effective]  environment variable Db__Host = "db.env""", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("link", "links to a file outside the app folder")]
+    [InlineData("dtd", "holds a DTD or is not valid XML")]
+    [InlineData("xml", "holds a DTD or is not valid XML")]
+    [InlineData("size", "is bigger than 64 MB")]
+    public async Task Takes_the_application_name_from_the_file_name_of_a_project_it_does_not_read(string how, string reason)
+    {
+        if (how == "link" && OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            var app = Directory.CreateDirectory(Path.Join(root.FullName, "app")).FullName;
+            var project = Path.Join(app, "Orders.csproj");
+            await File.WriteAllTextAsync(Path.Join(app, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", ct);
+            await File.WriteAllTextAsync(Path.Join(app, "Orders.settings.json"), """{ "Db": { "Host": "from-the-file-name" } }""", ct);
+            await File.WriteAllTextAsync(Path.Join(app, "Unread.settings.json"), """{ "Db": { "Host": "from-the-project" } }""", ct);
+            const string Unread = """<Project><PropertyGroup><AssemblyName>Unread</AssemblyName></PropertyGroup></Project>""";
+            switch (how)
+            {
+                case "link":
+                    var outside = Path.Join(root.FullName, "Outside.csproj");
+                    await File.WriteAllTextAsync(outside, Unread, ct);
+                    File.CreateSymbolicLink(project, outside);
+                    break;
+                case "dtd":
+                    await File.WriteAllTextAsync(
+                        project,
+                        """<!DOCTYPE Project [ <!ENTITY name "Unread"> ]><Project><PropertyGroup><AssemblyName>&name;</AssemblyName></PropertyGroup></Project>""",
+                        ct);
+                    break;
+                case "xml":
+                    await File.WriteAllTextAsync(project, """<Project><PropertyGroup><AssemblyName>Unread</AssemblyName>""", ct);
+                    break;
+                default:
+                    // A valid project file, padded with white space after its root to just over the limit.
+                    await using (var stream = File.Create(project))
+                    {
+                        var start = System.Text.Encoding.UTF8.GetBytes(Unread);
+                        await stream.WriteAsync(start, ct);
+                        var padding = new byte[1024 * 1024];
+                        Array.Fill(padding, (byte)' ');
+                        while (stream.Length <= InputReader.MaxFoundFileBytes)
+                        {
+                            await stream.WriteAsync(padding, ct);
+                        }
+                    }
+
+                    break;
+            }
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app, "--no-user-secrets", "Db:Host");
+            var json = await new ToolRunner().RunAsync("trace", "-a", app, "--no-user-secrets", "--format", "json", "Db:Host");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Db:Host = "from-the-file-name""", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Unread.settings.json", result.Output, StringComparison.Ordinal);
+
+            // One warning that names the file and the reason, and holds nothing from the file.
+            var warning = $"configferret: {project} {reason}, so its UserSecretsId and AssemblyName are not used.";
+            Assert.Equal([warning], result.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')));
+            Assert.DoesNotContain("Unread", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("<", result.Error, StringComparison.Ordinal);
+
+            Assert.Equal(0, json.ExitCode);
+            using var document = System.Text.Json.JsonDocument.Parse(json.Output);
+            Assert.Contains(warning, json.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Traces_with_user_secrets_id_when_the_project_file_links_to_nothing()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", TestContext.Current.CancellationToken);
+            File.CreateSymbolicLink(Path.Join(app.FullName, "Orders.csproj"), Path.Join(app.FullName, "missing", "Orders.csproj"));
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--user-secrets-id", "orders-fake-id", "Db:Host");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""Db:Host = "localhost""", result.Output, StringComparison.Ordinal);
+            Assert.Contains(
+                $"configferret: {Path.Join(app.FullName, "Orders.csproj")} could not be read, so its UserSecretsId and AssemblyName are not used.",
+                result.Error,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("missing", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Maps_ASPNETCORE_and_DOTNET_variables_to_keys_below_the_settings_files()
     {
