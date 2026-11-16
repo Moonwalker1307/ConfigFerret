@@ -54,6 +54,83 @@ public class CodeReadScannerTests
         Assert.True(scanner.Check("E:F").IsRead);
     }
 
+    [Theory]
+    [InlineData("""var s = builder.Configuration.Get<AppSettings>();""", "ApiUrl")]
+    [InlineData("""services.Configure<AppSettings>(builder.Configuration);""", "Retries")]
+    [InlineData("""services.Configure<AppSettings>("named", context.Configuration);""", "ApiUrl")]
+    [InlineData("""services.Configure<AppSettings>(builder.Configuration, o => o.BindNonPublicProperties = true);""", "ApiUrl")]
+    [InlineData("""services.AddOptions<AppSettings>().Bind(builder.Configuration);""", "Retries")]
+    [InlineData("""services.AddOptions<AppSettings>("named").Bind(builder.Configuration, o => o.ErrorOnUnknownConfiguration = true).ValidateOnStart();""", "ApiUrl")]
+    [InlineData("""var all = configuration.Get<Dictionary<string, string>>();""", "Anything:Else")]
+    [InlineData("""services.Configure<Dictionary<string, string>>(builder.Configuration);""", "Anything:Else")]
+    [InlineData("""services.Configure<Dictionary<string, List<string>>>(builder.Configuration);""", "Anything:Else")]
+    [InlineData("""var s = new AppSettings(); Configuration.Bind(s);""", "Anything:Else")]
+    [InlineData("""Configuration.Bind(s, o => o.BindNonPublicProperties = true);""", "Anything:Else")]
+    [InlineData("""services.AddAuthentication().AddJwtBearer(o => Configuration.Bind("JwtSettings", o));""", "JwtSettings:Authority")]
+    [InlineData("""var smtp = new SmtpOptions(); builder.Configuration.Bind("Smtp", smtp);""", "Smtp:Host")]
+    [InlineData("""var url = Environment.GetEnvironmentVariable("DATABASE_URL");""", "DATABASE_URL")]
+    [InlineData("""var host = Environment.GetEnvironmentVariable("Db__Host");""", "Db:Host")]
+    public void Finds_reads_of_the_whole_configuration_and_of_environment_variables(string code, string key)
+    {
+        var scanner = Scan(code, "public sealed class AppSettings { public string ApiUrl { get; set; } = \"\"; public int Retries { get; set; } }");
+
+        Assert.True(scanner.Check(key).IsRead, key);
+        Assert.Empty(scanner.DynamicReads);
+    }
+
+    [Fact]
+    public void The_whole_configuration_bound_to_a_class_reads_only_its_properties()
+    {
+        var scanner = Scan(
+            """
+            var s = builder.Configuration.Get<AppSettings>();
+            var t = builder.Configuration.GetSection("Other")["Key"];
+            """,
+            """
+            public sealed class AppSettings { public string ApiUrl { get; set; } = ""; public Smtp Smtp { get; set; } = new(); }
+            public sealed class Smtp { public string Host { get; set; } = ""; }
+            """);
+
+        Assert.True(scanner.Check("ApiUrl").IsRead);
+        Assert.True(scanner.Check("Smtp:Host").IsRead);
+        Assert.True(scanner.Check("Other:Key").IsRead);
+        Assert.True(scanner.Check("Logging:LogLevel:Default").IsRead);
+        Assert.Equal(new ReadVerdict(false, "The whole configuration is bound to AppSettings, which has no property Timeout"), scanner.Check("Timeout"));
+        Assert.Equal(new ReadVerdict(false, "The whole configuration is bound to AppSettings; Smtp has no property Port"), scanner.Check("Smtp:Port"));
+    }
+
+    [Fact]
+    public void Reads_of_the_whole_configuration_the_patterns_cannot_take_apart_are_listed()
+    {
+        var scanner = Scan(
+            """
+            var host = Environment.GetEnvironmentVariable(string.Join("_", parts.Select(p => p.ToUpper())));
+            builder.Configuration.Bind(new AppSettings
+            {
+                Retries = 3,
+            });
+            var s = builder.Configuration.Get <AppSettings>();
+            ConfigurationBinder.Bind(builder.Configuration, settings);
+            var t = builder.Configuration.Get(typeof(AppSettings));
+            """);
+
+        Assert.Equal(["File0.cs (line 1)", "File0.cs (line 2)", "File0.cs (line 7)", "File0.cs (line 8)"], scanner.DynamicReads);
+        Assert.True(scanner.Check("ApiUrl").IsRead);
+    }
+
+    [Theory]
+    [InlineData("ASPNETCORE_FORWARDEDHEADERS_ENABLED")]
+    [InlineData("ASPNETCORE_Kestrel__Certificates__Default__Path")]
+    [InlineData("DOTNET_gcServer")]
+    [InlineData("dotnet_SYSTEM_GLOBALIZATION_INVARIANT")]
+    public void Host_variables_count_as_read(string key)
+    {
+        var scanner = Scan("var x = 1;");
+
+        Assert.Equal(new ReadVerdict(true, string.Empty), scanner.Check(key));
+        Assert.False(scanner.Check("App:" + key).IsRead);
+    }
+
     [Fact]
     public void Host_and_library_sections_count_as_read()
     {
@@ -1053,6 +1130,12 @@ public class CodeReadScannerHostileFileTests
     [InlineData("configuration key names that never close")]
     [InlineData("many GetSection calls")]
     [InlineData("many classes deriving from a class with many properties")]
+
+    // Shapes for the patterns that find binds of the whole configuration, held to the same limit.
+    [InlineData("a long word that ends in config again and again")]
+    [InlineData("a Configure call with a long dotted argument")]
+    [InlineData("AddOptions calls that never close")]
+    [InlineData("Configure calls with type arguments that never close")]
     public async Task A_hostile_file_is_scanned_in_linear_time(string shape)
     {
         var source = HostileSource(shape);
@@ -1090,6 +1173,10 @@ public class CodeReadScannerHostileFileTests
         "many classes deriving from a class with many properties" =>
             "class B {\n" + string.Concat(Enumerable.Range(0, 12_000).Select(i => $"public int P{i} {{ get; }}\n")) + "}\n"
             + string.Concat(Enumerable.Range(0, 12_000).Select(i => $"class D{i} : B {{ }}\n")),
+        "a long word that ends in config again and again" => Repeat("config", 1_000_000) + " .Bind",
+        "Configure calls with type arguments that never close" => Repeat("Configure<A<b ", 2_000_000) + Repeat("Configure<A<" + new string('b', 10_000), 1_000_000),
+        "AddOptions calls that never close" => Repeat("AddOptions<A>(" + new string('a', 1_000), 3_000_000),
+        "a Configure call with a long dotted argument" => Repeat("Configure<A>(" + Repeat("a.", 1_000) + "config ", 1_000_000),
         _ => throw new ArgumentOutOfRangeException(nameof(shape)),
     };
 

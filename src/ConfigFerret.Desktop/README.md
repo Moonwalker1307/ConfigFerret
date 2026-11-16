@@ -55,10 +55,12 @@ or Ctrl+B (Cmd+B on macOS), to give the results the whole window.
 
 The app reads the C# code in the app's folder and in the projects it references (test projects, `bin` and `obj` are
 skipped) and collects the keys it reads: `config["A:B"]`, `GetValue<T>("A:B")`, `GetSection("A")`,
-`GetConnectionString("Db")`, and sections bound to an options class with `Configure<T>`, `Bind`, `Get<T>` or
-`BindConfiguration`. For a bound section only keys that match a property of the class count as read, so `Db:Timeout`
-is dead when `DbOptions` has no `Timeout`. Keys the host reads itself, such as `Logging` and `AllowedHosts`, always
-count as read, and commented-out code doesn't.
+`GetConnectionString("Db")`, `Environment.GetEnvironmentVariable("A__B")`, and sections, or the whole configuration,
+bound to an options class with `Configure<T>`, `Bind`, `Get<T>` or `BindConfiguration`. For a bound section only keys
+that match a property of the class count as read, so `Db:Timeout` is dead when `DbOptions` has no `Timeout`. A `Bind`
+that names no class, such as `config.Bind("Smtp", smtp)` or `config.Bind(settings)`, reads its section or the whole
+configuration. Keys the host reads itself, such as `Logging`, `AllowedHosts` and variables that start with
+`ASPNETCORE_` or `DOTNET_`, always count as read, and commented-out code doesn't.
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are
 listed under the scan, and a dead setting may still be read there. So is a file the scan gave up on because reading it
