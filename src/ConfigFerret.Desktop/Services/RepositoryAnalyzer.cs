@@ -447,6 +447,10 @@ public sealed partial class RepositoryAnalyzer
 
         const string CouldNotCheck = "its files could not be checked for symbolic links that lead out of the repository";
 
+        // Folders resolve with the roots IsInFolder allows: the one a path is written on and the one the repository
+        // really lies on, such as a checkout behind a junction to another drive.
+        var repositoryRoot = Kustomization.RealPath(root, anyRoot: true) is { } realRoot ? Path.GetPathRoot(realRoot) : null;
+
         // Dot files too, which helm reads like any other. Each real folder once, so that a link loop ends.
         var options = new EnumerationOptions { AttributesToSkip = 0 };
         var walked = new HashSet<string>(OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -456,7 +460,13 @@ public sealed partial class RepositoryAnalyzer
         {
             while (folders.TryPop(out var folder))
             {
-                if (Kustomization.RealPath(folder) is not { } real || !walked.Add(real))
+                // A folder that can't be resolved is not checked, so the chart is not rendered.
+                if (Kustomization.RealPath(folder, alsoRoot: repositoryRoot) is not { } real)
+                {
+                    return CouldNotCheck;
+                }
+
+                if (!walked.Add(real))
                 {
                     continue;
                 }

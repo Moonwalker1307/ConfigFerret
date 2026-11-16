@@ -633,7 +633,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   directly or through other `${VAR}` references, is rejected, since paths and names are never redacted.
 - Docker Compose: a file that a compose file names (a config's or secret's `file`, an `env_file`, an `extends` file,
   an `include` and its env files) and the project's `.env` are read only from in or below the project directory,
-  after following symbolic links; an include's `project_directory` does not widen this. Others are not read and are
+  after following symbolic links (a link to another drive, share or device counts as outside, unless the project
+  directory really lies there); an include's `project_directory` does not widen this. Others are not read and are
   listed in the warnings. Set `ComposeOptions.AllowFilesOutsideProject` (`--compose-allow-files-outside-project`) to
   read them from anywhere, as docker compose does. Either way a folder is not read, and a file of size 0, as a FIFO
   or a device reports, is taken as empty without opening it. The compose files, env files and project directory you

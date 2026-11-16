@@ -1091,6 +1091,36 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void Passes_over_a_missing_dotenv_in_an_include_project_directory_outside_the_project()
+    {
+        using var folder = new TempFolder();
+        folder.Write("project/sub/compose.yaml", "services:\n  sub:\n    environment:\n      A: ${A:-default}\n");
+        var compose = folder.Write("project/compose.yaml", """
+            include:
+              - path: sub/compose.yaml
+                project_directory: ..
+            """);
+
+        var project = ComposeProject.Load(compose);
+
+        Assert.DoesNotContain(project.Warnings, w => w.StartsWith("The env file", StringComparison.Ordinal));
+        Assert.Equal("default", Service(project, "sub").Environment["A"]);
+    }
+
+    [Fact]
+    public void Warns_about_a_dotenv_that_is_a_folder()
+    {
+        using var folder = new TempFolder();
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    environment:\n      A: ${A:-default}\n");
+        Directory.CreateDirectory(Path.Join(folder.Path, ".env"));
+
+        var project = ComposeProject.Load(compose);
+
+        Assert.Equal("The env file .env is not a regular file, so it is not read.", Assert.Single(project.Warnings));
+        Assert.Equal("default", Service(project).Environment["A"]);
+    }
+
+    [Fact]
     public void Reads_only_regular_files()
     {
         using var folder = new TempFolder();
@@ -1150,6 +1180,72 @@ public class ComposeProjectTests
         Assert.Equal("compose.yaml:5: env_file app.env does not exist (or is larger than 1 MiB); docker compose stops with an error when a required env_file is missing.", Assert.Single(service.Warnings));
         Assert.Null(service.MountLayers("/c")[0].Value);
         Assert.EndsWith("; the file could not be read", service.MountLayers("/c")[0].Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Reads_a_project_behind_a_junction_to_another_drive()
+    {
+        if (KustomizationGeneratorTests.FolderOnSecondDrive() is not { } other)
+        {
+            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
+        }
+
+        using var folder = new TempFolder();
+        try
+        {
+            var src = Path.Join(other, "src");
+            Directory.CreateDirectory(Path.Join(src, "app"));
+            File.WriteAllText(Path.Join(src, "app", ".env"), "A=from-dotenv\n");
+            File.WriteAllText(Path.Join(src, "app", "app.envfile"), "B=from-env-file\n");
+            File.WriteAllText(Path.Join(src, "app", "compose.yaml"), "services:\n  app:\n    env_file: app.envfile\n    environment:\n      A: $A\n");
+            var junction = Path.Join(folder.Path, "src");
+            if (!KustomizationGeneratorTests.TryCreateJunction(junction, src))
+            {
+                return; // The junction could not be made here.
+            }
+
+            var project = ComposeProject.Load(Path.Join(junction, "app", "compose.yaml"));
+
+            var service = Service(project);
+            Assert.Equal("from-dotenv", service.Environment["A"]);
+            Assert.Equal("from-env-file", service.Environment["B"]);
+            Assert.Empty(project.Warnings);
+            Assert.Empty(service.Warnings);
+            Directory.Delete(junction);
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Warns_about_a_dotenv_that_is_a_junction_to_another_drive()
+    {
+        if (KustomizationGeneratorTests.FolderOnSecondDrive() is not { } other)
+        {
+            return; // Needs Windows and a second drive, such as D: on GitHub's runners.
+        }
+
+        using var folder = new TempFolder();
+        try
+        {
+            var compose = folder.Write("compose.yaml", "services:\n  app:\n    environment:\n      A: ${A:-default}\n");
+            if (!KustomizationGeneratorTests.TryCreateJunction(Path.Join(folder.Path, ".env"), other))
+            {
+                return; // The junction could not be made here.
+            }
+
+            var project = ComposeProject.Load(compose);
+
+            Assert.Equal("The env file .env is outside the project directory, so it is not read; set AllowFilesOutsideProject (--compose-allow-files-outside-project) to read it.", Assert.Single(project.Warnings));
+            Assert.Equal("default", Service(project).Environment["A"]);
+            Directory.Delete(Path.Join(folder.Path, ".env"));
+        }
+        finally
+        {
+            Directory.Delete(other, recursive: true);
+        }
     }
 
     [Fact]

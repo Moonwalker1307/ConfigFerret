@@ -340,12 +340,14 @@ public sealed class Kustomization
 
     /// <summary>
     /// True when <paramref name="path"/> is in or below <paramref name="folder"/>, after following symbolic links. The
-    /// folder itself counts only with <paramref name="orFolder"/>.
+    /// folder itself counts only with <paramref name="orFolder"/>. A link in the path to another root (drive, share or
+    /// device) counts as outside without being followed, unless it is the root the folder really lies on; the folder's
+    /// own links are followed to any root, so a checkout behind a junction to another drive still works.
     /// </summary>
     internal static bool IsInFolder(string path, string folder, bool orFolder = false)
     {
         var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (RealPath(folder) is not { } realFolder || RealPath(path) is not { } realPath)
+        if (RealPath(folder, anyRoot: true) is not { } realFolder || RealPath(path, alsoRoot: Path.GetPathRoot(realFolder)) is not { } realPath)
         {
             return false;
         }
@@ -362,17 +364,27 @@ public sealed class Kustomization
 
     /// <summary>
     /// The full path with every symbolic link along it followed, the way the file system does: a link's target is
-    /// resolved again, links in its folders too. Null after <see cref="MaxLinks"/> links, or at a link whose target
-    /// is rooted but not fully qualified or holds U+FFFD.
+    /// resolved again, links in its folders too. Null after <see cref="MaxLinks"/> links, at a link whose target is
+    /// rooted but not fully qualified or holds U+FFFD, or, unless <paramref name="anyRoot"/> is set, at a link to a
+    /// root (drive, share or device) other than the one the path is written on and <paramref name="alsoRoot"/>:
+    /// looking at that target could already reach another host, such as the server of a UNC path, with the user's
+    /// credentials.
     /// </summary>
-    internal static string? RealPath(string path)
+    internal static string? RealPath(string path, bool anyRoot = false, string? alsoRoot = null)
     {
         // .NET removes ".." from the path it is given as text before it opens it, so that is the path to check.
         var links = 0;
-        return RealPath(Path.GetFullPath(path), ref links);
+        var full = Path.GetFullPath(path);
+        var written = Path.GetPathRoot(full) ?? "";
+        string[]? roots = anyRoot ? null : alsoRoot is null ? [written] : [written, alsoRoot];
+        return RealPath(full, roots, ref links);
     }
 
-    private static string? RealPath(string full, ref int links)
+    /// <summary>True when a full path starts from <paramref name="root"/>, ignoring case on Windows.</summary>
+    internal static bool IsOnRoot(string fullPath, string root) =>
+        string.Equals(Path.GetPathRoot(fullPath), root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string? RealPath(string full, string[]? roots, ref int links)
     {
         var root = Path.GetPathRoot(full) ?? "";
         var current = root;
@@ -396,14 +408,15 @@ public sealed class Kustomization
                 // On Windows a target such as \secrets\file or C:file is rooted but not fully qualified: it starts from
                 // the root or the current folder of a drive, not from the link's folder. Such a link is refused, and so
                 // is one whose target held bytes that are not UTF-8, which .NET reads as U+FFFD: that is another path.
-                if (++links > MaxLinks || (Path.IsPathRooted(target) && !Path.IsPathFullyQualified(target)) || target.Contains('\uFFFD', StringComparison.Ordinal))
+                if (++links > MaxLinks || (Path.IsPathRooted(target) && !Path.IsPathFullyQualified(target)) || target.Contains('\uFFFD', StringComparison.Ordinal)
+                    || (roots is not null && Path.IsPathFullyQualified(target) && !Array.Exists(roots, r => IsOnRoot(target, r))))
                 {
                     return null;
                 }
 
                 // The file system resolves a link's target itself: a relative one starts from the link's folder,
                 // which is already resolved, and ".." steps up from wherever a link in it led.
-                var resolved = RealPath(Path.IsPathFullyQualified(target) ? target : Path.Join(Path.GetDirectoryName(current), target), ref links);
+                var resolved = RealPath(Path.IsPathFullyQualified(target) ? target : Path.Join(Path.GetDirectoryName(current), target), roots, ref links);
                 if (resolved is null)
                 {
                     return null;

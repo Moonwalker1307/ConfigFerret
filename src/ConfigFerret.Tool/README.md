@@ -62,7 +62,8 @@ configferret container --compose-file compose.yaml --compose-file compose.overri
 ```
 
 Files that the compose files name (`env_file`, `extends`, `include`, config and secret files) are read only from the
-project directory, after following symbolic links; the others are listed as warnings. Pass
+project directory, after following symbolic links (a link to another drive or share counts as outside, unless the
+project directory really lies there); the others are listed as warnings. Pass
 `--compose-allow-files-outside-project` to read them from anywhere, as docker compose does.
 
 `-m -` reads manifests from standard input, for example `kubectl get pod,configmap -o yaml | configferret container -m - -w api-7d9f8c-x2kqp`.
