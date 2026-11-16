@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ConfigFerret.Helm;
@@ -13,6 +14,8 @@ namespace ConfigFerret.GitOps;
 /// </summary>
 internal sealed partial class GitOpsResolver : IOriginResolver
 {
+    private static readonly SearchValues<char> KustomizeHashAlphabet = SearchValues.Create("2456789bcdfghkmt"); // the characters of the hash kustomize appends to a generated name
+
     private readonly GitOpsApplication _app;
     private readonly HelmChart? _chart;
     private readonly HelmResolver? _helm;
@@ -178,12 +181,16 @@ internal sealed partial class GitOpsResolver : IOriginResolver
             .ToList();
     }
 
-    /// <summary>True when <paramref name="rendered"/> is <paramref name="name"/>, with the source's prefix and suffix, and with or without kustomize's hash.</summary>
+    /// <summary>
+    /// True when <paramref name="rendered"/> is <paramref name="name"/>, with the source's prefix and suffix, and with or without kustomize's hash.
+    /// The hash is ten characters from kustomize's alphabet, so a last word such as production is not one.
+    /// </summary>
     private static bool NameMatches(string name, string rendered, GitOpsKustomize kustomize)
     {
         var full = (kustomize.NamePrefix ?? "") + name + (kustomize.NameSuffix ?? "");
         var dash = rendered.LastIndexOf('-');
-        var unhashed = dash > 0 && rendered.Length - dash - 1 == 10 ? rendered[..dash] : rendered;
+        var hashed = dash > 0 && rendered.Length - dash - 1 == 10 && rendered.AsSpan(dash + 1).IndexOfAnyExcept(KustomizeHashAlphabet) < 0;
+        var unhashed = hashed ? rendered[..dash] : rendered;
         return rendered == name || rendered == full || unhashed == name || unhashed == full;
     }
 
