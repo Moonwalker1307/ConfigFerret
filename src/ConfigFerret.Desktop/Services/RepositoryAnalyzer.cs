@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using ConfigFerret.Desktop.Model;
 using ConfigFerret.Kubernetes;
+using ConfigFerret.Kustomize;
 
 namespace ConfigFerret.Desktop.Services;
 
@@ -196,10 +197,15 @@ public sealed partial class RepositoryAnalyzer
                 arguments.AddRange(["-f", scan.Full(choices.HelmValues)]);
             }
 
-            var helm = _render("helm", arguments, cancellationToken);
+            var refusal = ChartLinkProblem(scan.Root, chart.Folder);
+            var helm = refusal is null ? _render("helm", arguments, cancellationToken) : ToolRun.Missing;
             if (helm.Output is not null)
             {
                 rendered = ("helm-template.yaml", helm.Output);
+            }
+            else if (refusal is not null)
+            {
+                notes.Add($"helm was not run for the chart {chart.RelativePath}: {refusal}. Without the rendered chart its values are listed only where a ConfigMap or env entry in the repository uses them.");
             }
             else if (helm.Problem is null)
             {
@@ -414,6 +420,76 @@ public sealed partial class RepositoryAnalyzer
                     return match;
                 }
             }
+        }
+
+        return null;
+    }
+
+    // As many files and folders as are checked for links in one chart. A chart with more is not rendered.
+    private const int MaxChartEntries = 10_000;
+
+    /// <summary>
+    /// Why helm must not render the chart in <paramref name="chartFolder"/>, or null. helm follows symbolic links in the
+    /// chart folder and reads what they lead to, so a link to ~/.kube/config, or in the web image to /proc/1/environ,
+    /// would put that file into the rendered chart the app shows. A link that stays inside <paramref name="root"/> is
+    /// allowed, and a folder it leads to is checked too. The reason names a link by its path in the repository, never
+    /// by where it leads.
+    /// </summary>
+    internal static string? ChartLinkProblem(string root, string chartFolder, int maxEntries = MaxChartEntries)
+    {
+        string Leaves(string path) =>
+            $"{Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/')} is a symbolic link that leads out of the repository, and helm would read what it leads to";
+
+        if (!Kustomization.IsInFolder(chartFolder, root, orFolder: true))
+        {
+            return Leaves(chartFolder);
+        }
+
+        const string CouldNotCheck = "its files could not be checked for symbolic links that lead out of the repository";
+
+        // Dot files too, which helm reads like any other. Each real folder once, so that a link loop ends.
+        var options = new EnumerationOptions { AttributesToSkip = 0 };
+        var walked = new HashSet<string>(OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var folders = new Stack<string>([chartFolder]);
+        var entries = 0;
+        try
+        {
+            while (folders.TryPop(out var folder))
+            {
+                if (Kustomization.RealPath(folder) is not { } real || !walked.Add(real))
+                {
+                    continue;
+                }
+
+                foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos("*", options))
+                {
+                    if (++entries > maxEntries)
+                    {
+                        return $"it has more than {maxEntries} files and folders to check for symbolic links that lead out of the repository";
+                    }
+
+                    // On Linux .NET reads a name that is not valid UTF-8 with U+FFFD for the bad bytes, so the path it
+                    // checks is not the file helm reads, and may be another file that reads the same.
+                    if (entry.Name.Contains('\uFFFD', StringComparison.Ordinal))
+                    {
+                        return CouldNotCheck;
+                    }
+
+                    if (entry.LinkTarget is not null && !Kustomization.IsInFolder(entry.FullName, root, orFolder: true))
+                    {
+                        return Leaves(entry.FullName);
+                    }
+
+                    if (Directory.Exists(entry.FullName))
+                    {
+                        folders.Push(entry.FullName);
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return CouldNotCheck;
         }
 
         return null;

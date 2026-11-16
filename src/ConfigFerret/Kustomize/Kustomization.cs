@@ -363,7 +363,7 @@ public sealed class Kustomization
     /// <summary>
     /// The full path with every symbolic link along it followed, the way the file system does: a link's target is
     /// resolved again, links in its folders too. Null after <see cref="MaxLinks"/> links, or at a link whose target
-    /// is rooted but not fully qualified.
+    /// is rooted but not fully qualified or holds U+FFFD.
     /// </summary>
     internal static string? RealPath(string path)
     {
@@ -394,8 +394,9 @@ public sealed class Kustomization
             if (info.LinkTarget is { } target)
             {
                 // On Windows a target such as \secrets\file or C:file is rooted but not fully qualified: it starts from
-                // the root or the current folder of a drive, not from the link's folder. Such a link is refused.
-                if (++links > MaxLinks || (Path.IsPathRooted(target) && !Path.IsPathFullyQualified(target)))
+                // the root or the current folder of a drive, not from the link's folder. Such a link is refused, and so
+                // is one whose target held bytes that are not UTF-8, which .NET reads as U+FFFD: that is another path.
+                if (++links > MaxLinks || (Path.IsPathRooted(target) && !Path.IsPathFullyQualified(target)) || target.Contains('\uFFFD', StringComparison.Ordinal))
                 {
                     return null;
                 }

@@ -103,6 +103,9 @@ fails, the notes name the tool and its exit code, and the reason for a few commo
 that are not committed. Its own error output is not shown, because it can quote values; run the tool on the folder to
 see it.
 
+helm reads what a symbolic link in the chart folder leads to, so the app does not run helm for a chart with a link
+that leads out of the repository, and the notes name the link. Links that stay inside the repository are fine.
+
 ## Release
 
 Push a tag named `desktop-vX.Y.Z` (or `desktop-vX.Y.Z-pre` for a prerelease). The
