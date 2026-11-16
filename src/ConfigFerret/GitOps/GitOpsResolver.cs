@@ -25,6 +25,7 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     private readonly Dictionary<string, bool> _fromSecret = new(StringComparer.Ordinal); // whether the value that wins for a variable is from a Secret
     private readonly HashSet<string> _usedVariables = new(StringComparer.Ordinal); // every ${VAR} written in a manifest under the path
     private readonly List<KubernetesManifests> _data;
+    private HashSet<string>? _namedValues; // the values paths the object sets that a chart template names
     private bool _warned;
 
     /// <summary>Creates a resolver for one GitOps object.</summary>
@@ -88,11 +89,20 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     }
 
     /// <summary>
-    /// True for a variable that a manifest under the Kustomization path names: Flux substitutes it anywhere, in an
-    /// Ingress host or an image tag too, where no trace step can show the use.
+    /// True for a values path that a chart template names, itself, a parent or a value below it, and for a variable that
+    /// a manifest under the Kustomization path names: a template reads a value for replicas or an image too, and Flux
+    /// substitutes a variable anywhere, in an Ingress host or an image tag too, where no trace step can show the use.
     /// </summary>
-    public bool IsUsed(SourceRef reference) =>
-        reference is GitOpsVariableRef v && v.Kustomization == _app.Name && _usedVariables.Contains(v.Name);
+    public bool IsUsed(SourceRef reference) => reference switch
+    {
+        GitOpsVariableRef v => v.Kustomization == _app.Name && _usedVariables.Contains(v.Name),
+        HelmValueRef h when _chart is not null => (_namedValues ??= _chart.NamedByTemplates(GitOpsValues().Select(v => v.Key))).Contains(h.Path),
+        _ => false,
+    };
+
+    // The values paths the object itself sets, not the chart's defaults.
+    private IEnumerable<KeyValuePair<string, List<HelmValueStep>>> GitOpsValues() =>
+        _chart!.History.Where(h => h.Value.Any(s => _chart.IsGitOpsSource(s.Source)));
 
     /// <summary>Everything the object sets, so unused entries can be listed.</summary>
     public List<SourceEntry> Entries()
@@ -100,8 +110,7 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
         var entries = new List<SourceEntry>();
         if (_chart is not null)
         {
-            entries.AddRange(_chart.History
-                .Where(h => h.Value.Any(s => _chart.IsGitOpsSource(s.Source)))
+            entries.AddRange(GitOpsValues()
                 .OrderBy(h => h.Key, StringComparer.Ordinal)
                 .Select(h => new SourceEntry(h.Key, new HelmValueRef(h.Key), _chart.IsSensitivePath(h.Key), h.Value[^1].Source, _app.DisplayName)));
         }

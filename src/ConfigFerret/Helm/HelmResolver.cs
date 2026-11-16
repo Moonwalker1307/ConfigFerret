@@ -46,7 +46,7 @@ internal sealed class HelmResolver(HelmChart chart) : IOriginResolver
         // The value may be built from every values path on its line, and without a match from any line, so it is
         // secret when any of those, or a value below one of them, comes from a Secret.
         var sensitive = (matched is null ? uses : uses.Where(u => u.Template == use.Template && u.Line == use.Line))
-            .Any(u => HelmChart.HoldsSensitive(_sensitivePaths, u.ValuesPath));
+            .Any(u => HelmChart.HoldsPathOrBelow(_sensitivePaths, u.ValuesPath));
         if (renderedValue is not null && helmValue is not null && !string.Equals(helmValue, renderedValue, StringComparison.Ordinal))
         {
             // Notes are not redacted, and whether the key is secret by its name is only decided after the resolvers ran,
