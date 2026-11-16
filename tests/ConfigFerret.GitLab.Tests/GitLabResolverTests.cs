@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.GitLab.Tests;
@@ -234,6 +235,51 @@ public class GitLabResolverTests
 
         Assert.Empty(resolver.Resolve(new ProvenanceStep { Kind = LayerKind.GitLabCi, Source = "g", Reference = new GitLabCiVariableRef(".gitlab-ci.yml", 2, "DB_TIMEOUT") }, new TraceDiagnostics()));
     }
+
+    [Fact]
+    public void Follows_a_variable_that_refers_to_itself_to_the_other_levels_once()
+    {
+        const string prefix = "CFGLSELF_";
+        var yaml = new StringBuilder($"variables:\n  {prefix}VERSION: \"1.0\"\n");
+        for (var i = 0; i < 5; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"trigger-service-{i}:\n  variables:\n    {prefix}VERSION: ${prefix}VERSION\n  trigger:\n    include: service-{i}/.gitlab-ci.yml\n");
+        }
+
+        var variables = new GitLabVariables([new(prefix + "VERSION", "1.2.3", GitLabVariableLevel.Project, "contoso/api")]);
+
+        var setting = TraceOne(prefix, "VERSION", "1.2.3", variables, yaml.ToString()).Find("VERSION")!;
+
+        var chain = Assert.Single(setting.Steps).Origins;
+        Assert.Equal(["1.0", .. Enumerable.Repeat($"${prefix}VERSION", 5), "1.2.3"], chain.Select(s => s.Value));
+        Assert.All(chain.Skip(1).SkipLast(1), job =>
+        {
+            Assert.Equal(["1.0", "1.2.3"], job.Origins.Select(s => s.Value));
+            Assert.Equal([true, false], job.Origins.Select(s => s.IsInferred));
+            Assert.True(job.Origins[^1].IsEffective);
+        });
+        Assert.Equal(18, Count(setting.Steps));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Keeps_the_trace_small_when_many_jobs_refer_to_the_variable_itself()
+    {
+        // Without leaving the self references out, each of the 40 jobs leads to the 39 others, for each level followed.
+        const string prefix = "CFGLLOOP_";
+        var yaml = new StringBuilder($"variables:\n  {prefix}PATH: /usr/bin\n");
+        for (var i = 0; i < 40; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"job-{i}:\n  variables:\n    {prefix}PATH: ${prefix}PATH\n  script: [make]\n");
+        }
+
+        var report = await Task.Run(() => TraceOne(prefix, "PATH", "/usr/bin", new GitLabVariables([]), yaml.ToString()), TestContext.Current.CancellationToken);
+
+        var steps = report.Find("PATH")!.Steps;
+        Assert.Equal(41, Assert.Single(steps).Origins.Count);
+        Assert.Equal(82, Count(steps));
+    }
+
+    private static int Count(IEnumerable<ProvenanceStep> steps) => steps.Sum(s => 1 + Count(s.Origins));
 
     [Fact]
     public void Reads_job_names_with_colons_and_quotes_and_a_variables_block_with_an_anchor()

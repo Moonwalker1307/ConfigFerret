@@ -8,6 +8,8 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
 {
     private readonly List<string> _fileWarnings = options.ReadConfiguredCiFiles();
     private readonly HashSet<string> _scopeWarnings = new(StringComparer.Ordinal);
+    private ILookup<string, GitLabCiVariable>? _byName;
+    private int _indexed = -1;
     private bool _warned;
 
     /// <summary>One entry per variable and environment scope, matching the steps' references.</summary>
@@ -91,12 +93,17 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
 
     // Lowest priority first, as GitLab documents it: CI file variables (global, then job), then instance, then each
     // group from the outermost in, then the project.
+    // When except refers to key, a definition of key that refers back to key cannot supply a value, so it is left out:
+    // VERSION: $VERSION in every job would otherwise lead from each job to all the others, for each level followed.
+    // What a variable that refers to itself leads to in the file is only inferred, since it is not certain which
+    // definition GitLab expands the reference to.
     private List<Candidate> Chain(string key, GitLabCiVariable? except, TraceDiagnostics diagnostics)
     {
-        var fromFiles = options.Variables
-            .Where(v => string.Equals(v.Name, key, StringComparison.Ordinal) && !ReferenceEquals(v, except))
+        var self = except is not null && string.Equals(except.Name, key, StringComparison.Ordinal);
+        var fromFiles = Named(key)
+            .Where(v => !ReferenceEquals(v, except) && (except is null || GitLabTraceOptions.ReferenceTarget(v.Value) != key))
             .OrderBy(v => v.Job is not null)
-            .Select(v => new Candidate(null, v));
+            .Select(v => new Candidate(null, v, self));
         var effective = variables.Effective(key, options.Environment);
         if (effective.Count == 0 && variables.Find(key) is { Count: > 0 } scoped && _scopeWarnings.Add(key))
         {
@@ -107,8 +114,21 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         return fromFiles.Concat(effective.Select(v => new Candidate(v, null))).ToList();
     }
 
+    // The CI file variables named key, in file order. They are indexed once, and again only when a CI file was added.
+    private IEnumerable<GitLabCiVariable> Named(string key)
+    {
+        if (_byName is null || _indexed != options.Variables.Count)
+        {
+            _byName = options.Variables.ToLookup(v => v.Name, StringComparer.Ordinal);
+            _indexed = options.Variables.Count;
+        }
+
+        return _byName[key];
+    }
+
     private static ProvenanceStep ToStep(Candidate candidate, ProvenanceStep layer, string how, bool inferred)
     {
+        inferred |= candidate.Inferred;
         var notes = new List<string> { how };
         string? value;
         if (candidate.Variable is { } variable)
@@ -199,7 +219,7 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
 
     private static GitLabVariableRef Reference(GitLabVariable variable) => new(variable.Level, variable.Owner, variable.Key, variable.EnvironmentScope);
 
-    private sealed record Candidate(GitLabVariable? Variable, GitLabCiVariable? File);
+    private sealed record Candidate(GitLabVariable? Variable, GitLabCiVariable? File, bool Inferred = false);
 
     // The default rule a trace uses for configuration keys. A resolver is built without the trace, so it cannot see the
     // trace's own SensitiveKeyPattern.

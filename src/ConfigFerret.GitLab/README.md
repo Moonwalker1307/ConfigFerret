@@ -97,7 +97,10 @@ variables that cannot be read fail the load.
   marked as inferred.
 
 CI files also add their own variables, global and per job (`NAME: value`, or `NAME:` with `value:`). A variable whose
-whole value is `$OTHER` is traced on to `OTHER`.
+whole value is `$OTHER` is traced on to `OTHER`, leaving out the CI file variables that are themselves `OTHER: $OTHER`,
+since they cannot supply a value. A variable that refers to itself (`VERSION: $VERSION` in a job) is traced on to the
+other `VERSION` variables, once: the ones in CI files are marked as inferred, since which one GitLab expands the
+reference to is not certain, and project, group and instance variables are listed as usual.
 
 The steps follow GitLab's precedence, lowest first: CI file global variables, CI file job variables, instance
 variables, group variables from the outermost group in, then project variables, so the last one wins. For each owner,
