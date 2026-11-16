@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using ConfigFerret.Desktop.Services;
 
 namespace ConfigFerret.Desktop.Credentials;
 
@@ -14,7 +15,7 @@ public sealed class SecretServiceStore : ICredentialStore
     private readonly string _tool;
 
     /// <summary>Creates the store.</summary>
-    /// <param name="tool">The secret-tool executable. Defaults to <c>secret-tool</c> on the PATH.</param>
+    /// <param name="tool">The secret-tool executable: a path, or a name looked up on the PATH only. Defaults to <c>secret-tool</c>.</param>
     public SecretServiceStore(string tool = "secret-tool") => _tool = tool;
 
     /// <inheritdoc />
@@ -58,7 +59,7 @@ public sealed class SecretServiceStore : ICredentialStore
 
     private (int ExitCode, string Output, string Error) Run(IReadOnlyList<string> arguments, string? input)
     {
-        var start = new ProcessStartInfo(_tool)
+        var start = new ProcessStartInfo(ToolPath.Find(_tool) ?? throw new CredentialStoreException(NotInstalled))
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
