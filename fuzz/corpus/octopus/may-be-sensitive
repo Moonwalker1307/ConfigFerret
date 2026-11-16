@@ -1,0 +1,3 @@
+2[{"Id":"Projects-1","Name":"Api","VariableSetId":"vs-1"}]
+%%
+{"ScopeValues":{"Channels":[{"Id":"Channels-1","Name":"Beta"}]},"Variables":[{"Name":"A","Value":null,"Type":"Sensitive","IsSensitive":true,"Scope":{}},{"Name":"A","Value":"plain","Type":"String","Scope":{"Channel":["Channels-1"]}}]}
