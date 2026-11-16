@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.GitLab.Tests;
@@ -106,6 +107,7 @@ public class GitLabResolverTests
         Assert.Equal("GitLab variable REVIEW_ONLY is set only for environment scopes review/*, staging, and none applies to a job with no environment.", Assert.Single(none.Warnings));
 
         Assert.Equal("r", Assert.Single(Resolve(EnvStep("REVIEW_ONLY", "r"), o => o.Environment = "review/x")).Value);
+        Assert.Empty(Resolve(EnvStep("X", "r"), o => o.Map("X", "REVIEW_ONLY")));
     }
 
     [Fact]
@@ -323,6 +325,67 @@ public class GitLabResolverTests
             Environment.SetEnvironmentVariable(prefix + "DB_TIMEOUT", null);
             Environment.SetEnvironmentVariable(prefix + "DB_PASSWORD", null);
         }
+    }
+
+    [Theory]
+    [InlineData("deploy:\n  script:\n    - export {0}MAIL_AUTH=\"${0}DB_PASSWORD\"\n", ".gitlab-ci.yml line 3 sets {0}MAIL_AUTH from ${0}DB_PASSWORD")]
+    [InlineData("variables:\n  {0}MAIL_AUTH: ${0}DB_PASSWORD\n", ".gitlab-ci.yml line 2 sets {0}MAIL_AUTH from ${0}DB_PASSWORD")]
+    [InlineData(null, "linked explicitly")]
+    public void Redacts_a_value_linked_to_a_masked_variable_whose_scope_does_not_apply(string? ciFile, string how)
+    {
+        const string prefix = "CFGLSCOPED_";
+        const string secret = "hunter2";
+        var value = $"smtp://app:{secret}@mail";
+        Environment.SetEnvironmentVariable(prefix + "MAIL_AUTH", value);
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            var variables = new GitLabVariables([new(prefix + "DB_PASSWORD", null, GitLabVariableLevel.Project, "contoso/api", "production", IsMasked: true)]);
+
+            // No Environment, so the production variable does not apply.
+            var report = ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [prefix + "MAIL_AUTH"] = value })
+                .WithGitLab(variables, o =>
+                {
+                    if (ciFile is null)
+                    {
+                        o.Map(prefix + "MAIL_AUTH", prefix + "DB_PASSWORD");
+                    }
+                    else
+                    {
+                        o.AddCiFileText(string.Format(CultureInfo.InvariantCulture, ciFile, prefix), ".gitlab-ci.yml");
+                    }
+                })
+                .Trace();
+
+            Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.Explain("MAIL_AUTH"), StringComparison.Ordinal);
+            var setting = report.Find("MAIL_AUTH")!;
+            Assert.True(setting.IsSensitive);
+            Assert.Equal("***", setting.Value);
+            var origin = Flatten(setting.Steps).Last();
+            Assert.Equal($"GitLab variable {prefix}DB_PASSWORD", origin.Source);
+            Assert.True(origin.IsSensitive);
+            Assert.True(origin.IsEffective);
+            Assert.Null(origin.Value);
+            Assert.Null(origin.Reference);
+            Assert.Equal(string.Format(CultureInfo.InvariantCulture, how, prefix) + "; masked, and set only for environment scopes that do not apply", origin.Note);
+            Assert.All(Flatten(setting.Steps), s =>
+            {
+                Assert.DoesNotContain(secret, s.Value ?? string.Empty, StringComparison.Ordinal);
+                Assert.DoesNotContain(secret, s.Note ?? string.Empty, StringComparison.Ordinal);
+            });
+            Assert.Contains(report.Warnings, w => w.Contains("environment scopes production", StringComparison.Ordinal));
+            Assert.All(report.Warnings, w => Assert.DoesNotContain(secret, w, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(prefix + "MAIL_AUTH", null);
+        }
+
+        static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
+            steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
     }
 
     [Fact]
