@@ -55,6 +55,13 @@ public sealed partial class HelmChart
         var chart = new HelmChart(chartFolder);
         chart._warnings.AddRange(warnings);
 
+        // A chart folder that is not known leaves the templates unread, and the last warning says why.
+        if (chartFolder is null)
+        {
+            chart.TemplatesNotRead = true;
+            chart._whyTemplatesNotRead = chart._warnings.Count - 1;
+        }
+
         // A chart in the checkout may hold links, and Argo CD and Flux read nothing outside the checkout through them.
         // A chart folder that was passed is read as it is, like a chart for helm install. Each file is checked before
         // it is looked at, so that the warnings never tell whether something outside the checkout exists.
@@ -83,15 +90,24 @@ public sealed partial class HelmChart
             chart.AddGitOpsLayer(application, layer, data);
         }
 
+        // A templates folder that is refused and templates that cannot be read leave the templates unread too. A chart
+        // without a templates folder has none, which is not the same.
         if (chartFolder is not null)
         {
             if (checkout is not null && !Kustomization.IsInFolder(Path.Join(chartFolder, "templates"), checkout))
             {
-                chart._warnings.Add($"The chart's templates folder for {application.DisplayName} is outside {checkout}, so it was not read.");
+                chart.TemplatesNotReadBecause($"The chart's templates folder for {application.DisplayName} is outside {checkout}, so it was not read.");
             }
             else
             {
-                chart.AddTemplates(chartFolder);
+                try
+                {
+                    chart.AddTemplates(chartFolder);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    chart.TemplatesNotReadBecause($"Could not read the chart's templates for {application.DisplayName}: {ex.Message}");
+                }
             }
         }
 
@@ -135,6 +151,31 @@ public sealed partial class HelmChart
         var prefix = path + ".";
         var next = LowerBound(sortedPaths, prefix);
         return next < sortedPaths.Length && sortedPaths[next].StartsWith(prefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>True when the chart's templates, or some of them, were not read, so any value may be named in them.</summary>
+    internal bool TemplatesNotRead { get; private set; }
+
+    // The warning that says why the templates were not read.
+    private int _whyTemplatesNotRead = -1;
+
+    private void TemplatesNotReadBecause(string warning)
+    {
+        TemplatesNotRead = true;
+        _whyTemplatesNotRead = _warnings.Count;
+        _warnings.Add(warning);
+    }
+
+    /// <summary>
+    /// Adds to the warning that says why the templates were not read that no value is listed as unused, so a GitOps
+    /// source says it in the same line rather than in one of its own.
+    /// </summary>
+    internal void SayNoValueIsListedAsUnused()
+    {
+        if (_whyTemplatesNotRead >= 0)
+        {
+            _warnings[_whyTemplatesNotRead] += " No Helm value is listed as unused.";
+        }
     }
 
     /// <summary>
