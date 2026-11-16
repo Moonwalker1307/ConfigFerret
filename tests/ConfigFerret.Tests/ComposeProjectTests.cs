@@ -502,6 +502,43 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void Reset_and_override_tags_on_one_environment_entry_apply_to_that_entry()
+    {
+        using var folder = new TempFolder();
+        folder.Write(".env", "KEYRESET=fromdotenv\n");
+        folder.Write("a.envfile", "FROM_FILE=from-file\n");
+        var main = folder.Write("compose.yaml", """
+            services:
+              app:
+                env_file: a.envfile
+                environment:
+                  KEYRESET: main
+                  FROM_FILE: main
+                  KEPT: main
+                  REPLACED: main
+            """);
+        var over = folder.Write("compose.override.yaml", """
+            services:
+              app:
+                environment:
+                  KEYRESET: !reset null
+                  FROM_FILE: !reset {}
+                  REPLACED: !override 3.10
+            """);
+
+        var service = Service(ComposeProject.Load(main, over));
+
+        Assert.DoesNotContain("KEYRESET", service.Environment.Keys);
+        Assert.Empty(service.Layers("KEYRESET"));
+        Assert.Equal("from-file", service.Environment["FROM_FILE"]);
+        Assert.Equal(["env_file a.envfile"], service.Layers("FROM_FILE").Select(l => l.Source));
+        Assert.Equal("main", service.Environment["KEPT"]);
+        Assert.Equal("3.10", service.Environment["REPLACED"]);
+        Assert.Equal(["compose.override.yaml:6"], service.Layers("REPLACED").Select(l => l.Location));
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
     public void Applies_yaml_merge_keys()
     {
         var project = Parse("""
