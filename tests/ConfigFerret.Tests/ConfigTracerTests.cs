@@ -235,14 +235,104 @@ public class ConfigTracerTests
     [InlineData("Webhook:HmacKey", true)]
     [InlineData("Api:Bearer", true)]
     [InlineData("CUSTOMCONNSTR_Db", true)]
+    // A short word that ends a PascalCase or camelCase name, in each way .NET configuration writes keys.
+    [InlineData("JwtKey", true)]
+    [InlineData("Auth:JwtKey", true)]
+    [InlineData("Auth__JwtKey", true)]
+    [InlineData("AUTH_JWT_KEY", true)]
+    [InlineData("auth-jwt-key", true)]
+    [InlineData("auth:jwtKey", true)]
+    [InlineData("Auth:JWTKey", true)]
+    [InlineData("Cosmos:AuthKey", true)]
+    [InlineData("Cosmos__PrimaryKey", true)]
+    [InlineData("Cosmos:AuthKey2", true)]
+    [InlineData("Storage:SasKey", true)]
+    [InlineData("Storage:BlobSas", true)]
+    [InlineData("Mail:SmtpPass", true)]
+    [InlineData("MAIL_SMTP_PASS", true)]
+    [InlineData("mail:smtpPass", true)]
+    [InlineData("SentryDsn", true)]
+    [InlineData("Logging__SentryDsn", true)]
+    [InlineData("SENTRY_DSN", true)]
+    [InlineData("logging:sentryDsn", true)]
+    [InlineData("App:LicenseKey", true)]
+    [InlineData("Deploy:SshKey", true)]
+    [InlineData("Crypto:AesKey", true)]
+    // A SAS URL carries the signature in its query string.
+    [InlineData("Storage:SasUrl", true)]
+    [InlineData("Storage:BlobSasUri", true)]
+    [InlineData("storage:sasUrl", true)]
+    [InlineData("STORAGE_SAS_URL", true)]
+    // Multi-word names with _ or - between the words.
+    [InlineData("DB_CONNECTION_STRING", true)]
+    [InlineData("Db:Connection_String", true)]
+    [InlineData("db-connection-string", true)]
+    [InlineData("Redis__ConnectionString", true)]
+    [InlineData("DB_CONN_STR", true)]
+    [InlineData("OPENAI_API_KEY", true)]
+    [InlineData("openai-api-key", true)]
+    [InlineData("Jwt__SigningKey", true)]
+    [InlineData("JWT_SIGNING_KEY", true)]
+    [InlineData("TLS_PRIVATE_KEY", true)]
+    [InlineData("tls-private-key", true)]
+    [InlineData("AWS_SECRET_ACCESS_KEY", true)]
+    [InlineData("SERVICEBUS_SHARED_ACCESS_SIGNATURE", true)]
+    [InlineData("servicebus-shared-access-signature", true)]
+    [InlineData("GITHUB_TOKEN", true)]
+    [InlineData("Db:AdminPwd", true)]
     [InlineData("Cache:KeyPrefix", false)]
     [InlineData("Proxy:PassThrough", false)]
     [InlineData("Logging:LogLevel:Default", false)]
     [InlineData("Kestrel:Certificates:Default:Path", false)]
     [InlineData("Ui:Keyboard", false)]
     [InlineData("Db:Timeout", false)]
+    // A short word that starts or sits inside a PascalCase name names something about a key, not the key.
+    [InlineData("Azure:KeyVaultName", false)]
+    [InlineData("Db:PrimaryKeyColumn", false)]
+    [InlineData("Jwt:KeyId", false)]
+    [InlineData("Aws:KmsKeyId", false)]
+    [InlineData("Kestrel:Certificates:Default:KeyPath", false)]
+    [InlineData("Auth:Keyless", false)]
+    [InlineData("Storage:SasUrlExpiryDays", false)]
+    [InlineData("Kafka:SaslMechanism", false)]
+    [InlineData("SASL_MECHANISM", false)]
+    // Keys that are not secret by what they are.
+    [InlineData("Cosmos:PartitionKey", false)]
+    [InlineData("Cosmos:partitionKey", false)]
+    [InlineData("Cosmos:PartitionKeyPath", false)]
+    [InlineData("RabbitMq:RoutingKey", false)]
+    [InlineData("Jwt:PublicKey", false)]
+    [InlineData("Jwt:RsaPublicKey", false)]
+    // The short words inside ordinary words, which have no PascalCase boundary.
+    [InlineData("Network:Passive", false)]
+    [InlineData("Ui:Compass", false)]
+    [InlineData("Proxy:Bypass", false)]
+    [InlineData("Proxy:BypassOnLocal", false)]
+    [InlineData("Auth:Passport", false)]
+    [InlineData("Zoo:Monkey", false)]
+    [InlineData("Sports:Hockey", false)]
+    [InlineData("Menu:Turkey", false)]
+    [InlineData("Region:Kansas", false)]
     public void Default_pattern_catches_common_secret_names_only(string key, bool sensitive)
     {
         Assert.Equal(sensitive, new TraceOptions().SensitiveKeyPattern!.IsMatch(key));
+    }
+
+    [Theory]
+    [InlineData("a")]
+    [InlineData("A")]
+    [InlineData("_")]
+    [InlineData("Key")]
+    [InlineData("aKe")]
+    [InlineData("PartitionKey_")]
+    [InlineData("SasUr")]
+    [InlineData("connection_strin")]
+    public void Default_pattern_rejects_long_keys_without_backtracking(string repeated)
+    {
+        // A key with no secret word in it, 10,000 characters long: a pattern that backtracks would hit the timeout.
+        var key = string.Concat(Enumerable.Repeat(repeated, 10_000 / repeated.Length)) + "Prefix";
+        var pattern = new Regex(TraceOptions.DefaultSensitiveKeyPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+        Assert.DoesNotMatch(pattern, key);
     }
 }

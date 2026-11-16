@@ -555,8 +555,20 @@ Workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod and
 ## Secrets
 
 Values are redacted as `***` when they come from a Secret, user secrets, key-per-file or a `*CONNSTR_` environment
-variable, or when the key looks secret (`password`, `pass`, `token`, `apikey`, `key`, `signingkey`, `connectionstring`, `sas`, `dsn` and so on). Turn this off
-only on your own machine:
+variable, or when the key looks secret. A key looks secret when:
+
+- it contains, in any letter case, `password`, `passwd`, `pwd`, `passphrase`, `secret`, `token`, `credential`,
+  `bearer`, `apikey`, `connectionstring`, `connstr`, `privatekey`, `accesskey` or `sharedaccess`, also with `_` or `-`
+  between the words (`OPENAI_API_KEY`, `DB_CONNECTION_STRING`, `shared-access-signature`), or `key` right after
+  `signing`, `encryption`, `master`, `shared`, `account`, `storage`, `hmac` or `subscription` (`Jwt:SigningKey`);
+- `pass`, `key`, `sas` or `dsn`, in any letter case, has no letter right before or after it (`Db:Pass`, `Jwt:Key`,
+  `DB_PASS`, `sentry-dsn`);
+- `Key`, `Pass`, `Sas` or `Dsn`, written just so, has no letter right after it, so it ends a PascalCase or camelCase
+  word (`JwtKey`, `Cosmos__AuthKey`, `smtpPass`, `SentryDsn`), except in `PartitionKey`, `RoutingKey` and `PublicKey`;
+- `SasUrl` or `SasUri` ends a word (`Storage:SasUrl`, `blobSasUri`, `sasUrl`), since a SAS URL holds the signature.
+
+So `Cache:KeyPrefix`, `KeyVaultName`, `PrimaryKeyColumn`, `PassThrough`, `Bypass` and `SasUrlExpiryDays` stay
+visible. Turn redaction off only on your own machine:
 
 ```csharp
 ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
