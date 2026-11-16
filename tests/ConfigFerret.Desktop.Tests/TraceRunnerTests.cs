@@ -14,10 +14,10 @@ public class TraceRunnerTests
     public void The_note_on_skipped_code_files_names_the_first_five()
     {
         Assert.Equal(
-            "Reading A.cs for the keys the app reads took too long, so it was skipped. A setting marked dead may still be read there.",
+            "The search for the keys the app reads skipped A.cs, because it is over 1 MB or took too long to read. A setting marked dead may still be read there.",
             TraceRunner.SkippedCodeNote(["A.cs"]));
         Assert.Equal(
-            "Reading F0.cs, F1.cs, F2.cs, F3.cs, F4.cs and 4995 more for the keys the app reads took too long, so they were skipped. A setting marked dead may still be read there.",
+            "The search for the keys the app reads skipped F0.cs, F1.cs, F2.cs, F3.cs, F4.cs and 4995 more, because they are over 1 MB or took too long to read. A setting marked dead may still be read there.",
             TraceRunner.SkippedCodeNote(Enumerable.Range(0, 5000).Select(i => $"F{i}.cs").ToList()));
     }
 

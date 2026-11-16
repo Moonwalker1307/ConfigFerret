@@ -55,6 +55,7 @@ public sealed partial class CodeReadScanner
     private readonly Dictionary<string, string> _bound = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OptionsShape> _shapes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _interfaces = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _typesInSkippedFiles = new(StringComparer.Ordinal);
     private readonly SectionNode _tree = new();
     private readonly List<(string File, int Line)> _dynamic = [];
     private readonly List<string> _skipped = [];
@@ -68,7 +69,10 @@ public sealed partial class CodeReadScanner
     /// <summary>How many C# files were read.</summary>
     public int FilesScanned { get; private set; }
 
-    /// <summary>C# files the scan gave up on because reading them took too long, so a key only they read counts as not read.</summary>
+    /// <summary>
+    /// C# files the scan skipped because they are over 1 MB or reading them took too long, so a key only they read counts
+    /// as not read.
+    /// </summary>
     public IReadOnlyList<string> SkippedFiles => _skipped;
 
     /// <summary>Where code reads a key the scanner cannot work out, such as <c>config[name]</c>, as file and line.</summary>
@@ -102,6 +106,12 @@ public sealed partial class CodeReadScanner
                 {
                     sources.Add((file, File.ReadAllText(file)));
                 }
+                else
+                {
+                    // Listed first, so a file that fails to read partway is still listed.
+                    scanner._skipped.Add(Path.GetRelativePath(folder, file));
+                    scanner.ReadTypeNames(file, cancellationToken);
+                }
             }
             catch (IOException)
             {
@@ -119,6 +129,41 @@ public sealed partial class CodeReadScanner
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     public static CodeReadScanner FromSources(IEnumerable<(string Name, string Text)> sources, CancellationToken cancellationToken = default) =>
         FromSources(sources, null, cancellationToken);
+
+    // A file too big to read is still searched for the names of the types it declares, a block at a time. Each of them may
+    // have properties the scan can't see, such as a part of a partial class, so it is left open.
+    private void ReadTypeNames(string file, CancellationToken cancellationToken)
+    {
+        const int Overlap = 1024;
+        using var reader = new StreamReader(file);
+        var buffer = new char[MaxFileBytes];
+        var carried = 0;
+        while (true)
+        {
+            var wanted = buffer.Length - carried;
+            var read = reader.ReadBlock(buffer, carried, wanted);
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = carried + read;
+            try
+            {
+                foreach (Match m in TypeStart().Matches(new string(buffer, 0, length)))
+                {
+                    (m.Groups["interface"].Success ? _interfaces : _typesInSkippedFiles).Add(m.Groups["name"].Value);
+                }
+            }
+            catch (RegexMatchTimeoutException)
+            {
+            }
+
+            // The last characters are read again with the next block, so a declaration split between blocks is found.
+            carried = Math.Min(Overlap, length);
+            Array.Copy(buffer, length - carried, buffer, 0, carried);
+            if (read < wanted)
+            {
+                break;
+            }
+        }
+    }
 
     // For tests: atStep runs with the file name and "types", "properties" or "calls" where a pattern could time out.
     internal static CodeReadScanner FromSources(IEnumerable<(string Name, string Text)> sources, Action<string, string>? atStep, CancellationToken cancellationToken)
@@ -319,6 +364,17 @@ public sealed partial class CodeReadScanner
             {
                 declared.ForEach(shape => shape.Open = true);
             }
+        }
+
+        foreach (var name in _typesInSkippedFiles)
+        {
+            if (!_shapes.TryGetValue(name, out var shape))
+            {
+                shape = new OptionsShape(null);
+                _shapes.Add(name, shape);
+            }
+
+            shape.Open = true;
         }
 
         for (var i = 0; i < files.Count; i++)

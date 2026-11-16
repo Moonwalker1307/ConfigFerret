@@ -288,8 +288,8 @@ public sealed partial class TraceRunner
 
     // Names the first five files the code scan skipped, and how many more.
     internal static string SkippedCodeNote(IReadOnlyList<string> files) =>
-        $"Reading {string.Join(", ", files.Take(5))}{(files.Count > 5 ? $" and {files.Count - 5} more" : string.Empty)} for the keys the app reads took too long, "
-        + $"so {(files.Count == 1 ? "it was" : "they were")} skipped. A setting marked dead may still be read there.";
+        $"The search for the keys the app reads skipped {string.Join(", ", files.Take(5))}{(files.Count > 5 ? $" and {files.Count - 5} more" : string.Empty)}, "
+        + $"because {(files.Count == 1 ? "it is" : "they are")} over 1 MB or took too long to read. A setting marked dead may still be read there.";
 
     // A variable a prefix strips also sets its whole name, such as ORDERS_Db:Password next to Db:Password. Both rows come
     // from the one variable, so the whole name counts as read when the name without the prefix is. Only a row an

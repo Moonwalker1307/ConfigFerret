@@ -73,9 +73,10 @@ such as `Logging`, `AllowedHosts` and variables that start with `ASPNETCORE_` or
 commented-out code doesn't.
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are
-listed under the scan, and a dead setting may still be read there. So is a file the scan gave up on because reading it
-took too long. A class whose declaration or one of whose properties the scan can't take apart, or whose bases go more
-than 16 levels up, counts as having any property. Check other environments and apps before deleting.
+listed under the scan, and a dead setting may still be read there. So is a file the scan skipped because it is over
+1 MB or reading it took too long; the classes such a file declares count as having any property. A class whose
+declaration or one of whose properties the scan can't take apart, or whose bases go more than 16 levels up, counts as
+having any property too. Check other environments and apps before deleting.
 
 ## Download
 
