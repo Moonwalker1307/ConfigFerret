@@ -945,6 +945,63 @@ public class CodeReadScannerTests
         Assert.Equal(1, scanner.FilesScanned);
         Assert.True(scanner.Check("Big:Key").IsRead);
         Assert.False(scanner.Check("Over:Key").IsRead);
+        Assert.Equal(["Over.cs"], scanner.SkippedFiles);
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void A_file_over_one_megabyte_that_cannot_be_read_is_still_listed()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has no Unix file mode.");
+        using var temp = new TempFolder();
+        temp.Write("Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write("Big.cs", new string(' ', 1024 * 1024 + 1));
+        File.SetUnixFileMode(temp.Full("Big.cs"), UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanOpen(temp.Full("Big.cs")), "A user who may read any file, such as root, can't see the failure.");
+
+            var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+            Assert.Equal(["Big.cs"], scanner.SkippedFiles);
+        }
+        finally
+        {
+            File.SetUnixFileMode(temp.Full("Big.cs"), UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    private static bool CanOpen(string file)
+    {
+        try
+        {
+            File.OpenRead(file).Dispose();
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    [Fact]
+    public void The_classes_of_a_file_over_one_megabyte_are_left_open()
+    {
+        using var temp = new TempFolder();
+        temp.Write("Program.cs", """services.Configure<AppOptions>(cfg.GetSection("App")); services.Configure<CheckedOptions>(cfg.GetSection("Checked"));""");
+        temp.Write("AppOptions.cs", """public partial class AppOptions { public int Port { get; set; } }""");
+        temp.Write("CheckedOptions.cs", """public sealed class CheckedOptions : IOChecked { public int Size { get; set; } }""");
+
+        // The second declaration starts just before the first block of the file ends, so it is split between blocks.
+        const string Head = "public partial class AppOptions { public string Region { get; set; } = \"\"; }";
+        temp.Write("Generated/Big.cs", Head + new string(' ', 1024 * 1024 - 10 - Head.Length) + "public interface IOChecked { }");
+
+        var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Generated/Big.cs".Replace('/', Path.DirectorySeparatorChar)], scanner.SkippedFiles);
+        Assert.True(scanner.Check("App:Port").IsRead);
+        Assert.True(scanner.Check("App:Region").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Checked is bound to CheckedOptions, which has no property Color"), scanner.Check("Checked:Color"));
     }
 
     [Fact]
