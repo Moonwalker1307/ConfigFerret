@@ -469,7 +469,7 @@ public sealed class VaultSecrets
             _requests++;
             try
             {
-                return await JsonApi.GetAsync(client, new Uri(api, relative), AddHeaders, "HashiCorp Vault", cancellationToken).ConfigureAwait(false);
+                return await JsonApi.GetAsync(client, new Uri(api, relative), AddHeaders, "HashiCorp Vault", null, options.Token, cancellationToken).ConfigureAwait(false);
             }
             catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound
                 || (what is null && ex.StatusCode is { } status && (int)status is >= 400 and < 500))

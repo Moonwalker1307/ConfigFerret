@@ -169,6 +169,9 @@ made, or a provider that keeps a section, fails too, with a message that names t
 
 - Tokens are sent only in the `X-Vault-Token` and `X-Consul-Token` headers, and redirects are not followed. They
   never appear in a report, a warning or an exception message.
+- When Vault or Consul refuses a request, the error or warning gives the reason the server sends, cut short and
+  without control characters, and leaves it out when it repeats the token or four of its characters in a row; a
+  fixed start such as `hvs.` does not count.
 - Vault stops after `MaxRequests` requests (default 5000) or `MaxSecrets` secrets (default 2000), and lists at most
   `MaxDepth` folder levels (default 10), with a warning, so a large mount or a misbehaving server cannot keep a trace
   going. Keys that are not a single path segment (`..`, `a/b`, longer than 1024 characters) are skipped. A secret's

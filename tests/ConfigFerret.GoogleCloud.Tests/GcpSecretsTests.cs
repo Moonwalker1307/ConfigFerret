@@ -387,6 +387,20 @@ public class GcpSecretsTests
         Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsolutePath.StartsWith("/v1/projects/123/secrets/D/versions/", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_out_a_reason_that_repeats_the_token(bool fourCharacters)
+    {
+        // A proxy or server that echoes the request's headers back must not put the token into the message.
+        var echoed = fourCharacters ? Token[^4..] : Token;
+        var handler = new FakeHttpHandler().Respond(List, $$$"""{"error":{"code":401,"message":"Request had invalid credentials {{{echoed}}}."}}""", HttpStatusCode.Unauthorized);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Load(handler));
+
+        Assert.Equal("Google Cloud Secret Manager returned 401 Unauthorized for /v1/projects/contoso-prod/secrets.", ex.Message);
+    }
+
     [Fact]
     public async Task Fails_with_the_servers_message_when_the_list_is_refused()
     {
