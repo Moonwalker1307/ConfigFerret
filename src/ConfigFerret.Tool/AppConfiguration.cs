@@ -60,7 +60,8 @@ internal static partial class AppConfiguration
             builder.Add(new SimulatedEnvironmentVariablesSource(inputs.Environment, prefix));
         }
 
-        var hostConfiguration = builder.AddCommandLine([.. inputs.CommandLine]).Build();
+        AddCommandLine(builder, inputs.CommandLine);
+        var hostConfiguration = builder.Build();
         var name = hostConfiguration["environment"];
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -156,7 +157,7 @@ internal static partial class AppConfiguration
 
         if (inputs.CommandLine.Count > 0)
         {
-            builder.AddCommandLine([.. inputs.CommandLine]);
+            AddCommandLine(builder, inputs.CommandLine);
         }
 
         // A file the app adds itself comes after everything the host set up.
@@ -166,6 +167,22 @@ internal static partial class AppConfiguration
         }
 
         return builder.Build();
+    }
+
+    // The command-line provider quotes an argument it rejects, and an argument may hold a secret, so its message is
+    // left out. It parses when it loads, so the arguments are loaded once here to see the error at this place.
+    private static void AddCommandLine(ConfigurationBuilder builder, IReadOnlyList<string> args)
+    {
+        try
+        {
+            new ConfigurationBuilder().AddCommandLine([.. args]).Build();
+        }
+        catch (FormatException)
+        {
+            throw new UsageException("The app's arguments after -- can't be read as a .NET command line: a short switch such as -p needs a switch mapping, which the tool doesn't know.");
+        }
+
+        builder.AddCommandLine([.. args]);
     }
 
     private static void AddJsonFiles(ConfigurationBuilder builder, List<string> files)
