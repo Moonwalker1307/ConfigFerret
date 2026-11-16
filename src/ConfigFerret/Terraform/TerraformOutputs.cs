@@ -139,7 +139,18 @@ public sealed partial class TerraformOutputs
             return;
         }
 
-        foreach (var file in Directory.EnumerateFiles(folder, "*.tf").Order(StringComparer.Ordinal))
+        List<string> files;
+        try
+        {
+            files = [.. Directory.EnumerateFiles(folder, "*.tf").Order(StringComparer.Ordinal)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _warnings.Add($"Could not read {folder}: {ex.Message}");
+            return;
+        }
+
+        foreach (var file in files)
         {
             try
             {

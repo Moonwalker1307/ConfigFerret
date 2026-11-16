@@ -198,6 +198,43 @@ public sealed class TerraformTests : IDisposable
 
     [Fact]
     [UnsupportedOSPlatform("windows")]
+    public void A_terraform_folder_it_may_not_list_is_a_warning()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
+        var locked = Directory.CreateDirectory(Path.Join(_root, "locked")).FullName;
+        File.WriteAllText(Path.Join(locked, "main.tf"), "output \"a\" {\n  value = 1\n}\n");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanList(locked), "The process may read any folder, for example as root.");
+
+            var outputs = TerraformOutputs.Load(OutputsFile, terraformFolder: locked);
+
+            Assert.StartsWith($"Could not read {locked}: ", Assert.Single(outputs.Warnings), StringComparison.Ordinal);
+            Assert.NotEmpty(outputs.Values);
+            Assert.Empty(outputs.Definitions);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static bool CanList(string folder)
+    {
+        try
+        {
+            _ = Directory.EnumerateFiles(folder).Any();
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
     public void A_tf_file_it_may_not_read_is_a_warning()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
