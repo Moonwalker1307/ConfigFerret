@@ -496,9 +496,11 @@ every key as read. ConfigFerret's own tracing is not recorded.
 
 ### Plugging in another source
 
-Every extension package implements `ConfigFerret.Sources.IConfigSource` (read the store once and return a
-`LoadedConfigSource`), and describes its settings with an `IConfigSourceProvider`, so the desktop app, the tool and your
-own code can list, configure and load each source the same way:
+The AWS, Azure, Azure DevOps, Google Cloud, GitLab, HashiCorp and Kubernetes cluster packages implement
+`ConfigFerret.Sources.IConfigSource` (read the store once and return a `LoadedConfigSource`), and describe their settings
+with an `IConfigSourceProvider`, so the desktop app, the tool and your own code can list, configure and load each of these
+sources the same way. The GitHub and Octopus packages implement neither interface; use `WithGitHub` and `WithOctopus`
+for them.
 
 ```csharp
 using ConfigFerret.Sources;
