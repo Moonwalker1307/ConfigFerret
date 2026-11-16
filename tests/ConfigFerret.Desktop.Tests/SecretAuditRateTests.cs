@@ -158,6 +158,24 @@ public class SecretAuditRateTests : IDisposable
     }
 
     [Fact]
+    public void Rates_a_value_from_the_Key_Vault_configuration_provider_as_protected()
+    {
+        var root = new ConfigurationBuilder()
+            .Add(new global::Azure.Extensions.AspNetCore.Configuration.Secrets.AzureKeyVaultConfigurationProvider(new() { ["Payments:ApiKey"] = ApiKey, ["Payments:Region"] = "west" }))
+            .Build();
+        var report = Trace(root);
+
+        var apiKey = SecretAudit.Rate(report.Find("Payments:ApiKey")!);
+        var region = SecretAudit.Rate(report.Find("Payments:Region")!);
+
+        Assert.Equal(SecretRating.Protected, apiKey.Rating);
+        Assert.Equal("Kept in AzureKeyVaultConfigurationProvider (not committed).", apiKey.Reason);
+        Assert.Equal(SecretRating.Protected, region.Rating);
+        AssertNoValue(apiKey);
+        AssertNoValue(region, "west");
+    }
+
+    [Fact]
     public void Rates_the_same_value_from_a_config_map_as_exposed()
     {
         var finding = RateContainer("Payments__ApiKey", PodYaml(secret: false));
