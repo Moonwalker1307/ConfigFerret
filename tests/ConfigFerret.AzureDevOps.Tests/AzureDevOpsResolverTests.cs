@@ -717,6 +717,34 @@ public class AzureDevOpsResolverTests
         Assert.InRange(resolver.Examined, stages, 20L * (stages + items));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Leaves_out_a_job_the_bound_cuts_without_calling_it_missing(bool linked)
+    {
+        // Job A links MAIL_AUTH to X, which the pipeline sets exactly as often as one step looks at, so following A
+        // uses up the bound and job B, which sets MAIL_AUTH itself or links it to its own Y, is cut on its first entry.
+        var pipeline = new StringBuilder("variables:\n");
+        for (var i = 0; i < 1_000; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- name: X\n  value: v{i}\n");
+        }
+
+        pipeline.Append("jobs:\n- job: A\n  steps:\n  - script: ./run.sh\n    env:\n      MAIL_AUTH: $(X)\n");
+        pipeline.Append(linked
+            ? "- job: B\n  variables:\n    Y: y\n  steps:\n  - script: ./run.sh\n    env:\n      MAIL_AUTH: $(Y)\n"
+            : "- job: B\n  variables:\n    MAIL_AUTH: direct\n  steps:\n  - script: ./run.sh\n");
+        var resolver = Resolver(o => o.AddPipelineText(pipeline.ToString(), "azure-pipelines.yml"));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "v999"), diagnostics);
+
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.All(steps, s => Assert.True(s.IsSensitive));
+        Assert.Contains(diagnostics.Warnings, w => w.Contains("than the trace follows for one step", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics.Warnings, w => w.Contains("no such variable", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Keeps_the_job_own_variable_when_jobs_outside_stages_set_it_more_often_than_the_bound()
     {

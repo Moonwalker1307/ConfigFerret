@@ -162,9 +162,11 @@ internal sealed partial class AzureDevOpsResolver(AzureDevOpsVariableGroups grou
         for (var i = 0; i < followed.Count; i++)
         {
             var (unit, chain) = followed[i];
-            if (chain.Count == 0)
+
+            // A chain the bound cut, always the last one followed, may be empty without the variable being missing.
+            if (chain.Count == 0 && unit.Mapping is not null && !(_cut && i == followed.Count - 1))
             {
-                WarnMissing(name, unit.Mapping!, diagnostics);
+                WarnMissing(name, unit.Mapping, diagnostics);
             }
 
             var found = chain.Select(c => Step(c with { Alternative = true, Sensitive = sensitive }, layer, How(c, name, unit), inferred: unit.Mapping is null, layer.Value)).ToList();

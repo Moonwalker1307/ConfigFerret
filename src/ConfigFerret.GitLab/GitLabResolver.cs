@@ -153,13 +153,16 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
         {
             var (unit, chain) = followed[i];
             var how = How(name, unit);
-            if (chain.Count == 0)
+
+            // A chain the bound cut, always the last one followed, may be empty without the variable being missing.
+            var missing = chain.Count == 0 && unit.Mapping is not null && !(_cut && i == followed.Count - 1);
+            if (missing)
             {
                 WarnMissing(name, unit.Mapping!, diagnostics);
             }
 
             var found = chain.Count == 0
-                ? MaskedInOtherScopes(unit.Mapping!.Key, how).Select(s => s with { IsInferred = true }).ToList()
+                ? missing ? MaskedInOtherScopes(unit.Mapping!.Key, how).Select(s => s with { IsInferred = true }).ToList() : []
                 : chain.Select(c => Step(c with { Alternative = true, Sensitive = sensitive }, layer, how, inferred: true, layer.Value)).ToList();
             var value = ends[i] as string ?? (chain.Count == 0 ? null : chain[^1].Value);
             steps.Add((layer.Value is not null && string.Equals(value, layer.Value, StringComparison.Ordinal), found));
