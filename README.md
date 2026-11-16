@@ -640,9 +640,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   pass are read as they are.
 - A trace follows each .NET configuration layer at most `MaxDepth` levels upstream (default 8). It also stops asking
   resolvers once they have added 1,000 upstream steps to one setting or 250,000 to the whole trace, so a resolver
-  that links each step to several others cannot make a trace grow without end. A setting cut off this way gets a
-  warning, and its values are hidden as `***` unless `RevealSensitiveValues` is on, since the part not traced may
-  hold a secret. Once the trace-wide limit is reached, every setting after it is cut off.
+  that links each step to several others cannot make a trace grow without end. A setting cut off this way, or with a
+  chain that goes on beyond `MaxDepth`, gets a warning, and its values are hidden as `***` unless
+  `RevealSensitiveValues` is on, since the part not traced may hold a secret. Once the trace-wide limit is reached,
+  every setting after it is cut off. A `MaxDepth` of 0 follows nothing upstream and hides nothing for it.
 - Unread keys come from recorded reads only; the code is not scanned for keys it could read.
 - Custom configuration providers show their `ToString()`. Add an `IOriginResolver` with `WithResolver` to trace
   further upstream from them.
