@@ -122,6 +122,22 @@ public class AzureDevOpsResolverTests
     }
 
     [Fact]
+    public void Ranks_a_stage_variable_over_a_pipeline_variable_written_below_the_stages()
+    {
+        // The pipeline's variables block comes after the stages, but the stage's own variable is the one its job sees.
+        const string pipeline = "stages:\n- stage: deploy\n  variables:\n    Db.Timeout: 60\n  jobs:\n  - job: run\n    steps:\n    - script: ./run.sh\n"
+            + "variables:\n  Db.Timeout: 30\n";
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), new AzureDevOpsVariableGroups("contoso/api", []))
+            .Resolve(EnvStep("DB_TIMEOUT", "60"), diagnostics);
+
+        Assert.Equal(["azure-pipelines.yml line 10", "azure-pipelines.yml line 4"], steps.Select(s => s.Location));
+        Assert.Equal("60", steps[^1].Value);
+        Assert.DoesNotContain("differs", steps[^1].Note ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Reads_variable_names_with_a_hyphen_or_a_space()
     {
         // Key Vault secret names hold hyphens, and Azure Pipelines variable names may hold spaces.
