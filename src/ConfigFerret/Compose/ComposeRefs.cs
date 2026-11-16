@@ -168,11 +168,20 @@ internal static class ComposeSteps
             Location = string.Create(CultureInfo.InvariantCulture, $"line {entry.Line}"),
             Value = entry.Value,
             IsSensitive = IsSensitive(entry),
-            Note = Join(Join(note, entry.IsInherited ? "a bare key, so the value comes from the shell" : null), cut ? CutNote : null),
+            Note = Join(Join(note, entry.IsInherited ? BareKeyNote(entry) : null), cut ? CutNote : null),
             Reference = new DotEnvEntryRef(entry.Path ?? entry.File, entry.Name),
             Origins = origins,
         };
     }
+
+    // A bare key takes the variable it names from what the file is read with: the shell, a file such as the project's
+    // .env, or for an env_file the service's environment entry.
+    private static string BareKeyNote(DotEnvEntry entry) => entry.References switch
+    {
+        [{ From: { } from }] => $"a bare key, so the value comes from {from.File}",
+        [{ Environment: { } environment }] => $"a bare key, so the value comes from the environment entry at {environment.At}",
+        _ => "a bare key, so the value comes from the shell",
+    };
 
     // Builds the steps depth first, one taken from the budget each, so a file whose values each take several others
     // can't make the tree grow by that factor at every level.
