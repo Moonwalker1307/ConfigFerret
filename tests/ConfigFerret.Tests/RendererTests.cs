@@ -175,8 +175,9 @@ public class RendererTests
         const string hostile = Hostile + "\u2028\u2029\t\u0000";
         var json = JsonRenderer.Render(HostileReport(hostile));
 
+        // The report's own lines end the way the platform ends them (\r\n on Windows), so only those are set aside.
         Assert.Equal(JsonRenderer.Render(HostileReport("x")).Split('\n').Length, json.Split('\n').Length);
-        Assert.Equal([], json.Replace("\n", "", StringComparison.Ordinal).Where(c => char.IsControl(c) || c is '\u2028' or '\u2029').Select(c => $"U+{(int)c:X4}"));
+        Assert.Equal([], json.Replace(Environment.NewLine, "", StringComparison.Ordinal).Where(c => char.IsControl(c) || c is '\u2028' or '\u2029').Select(c => $"U+{(int)c:X4}"));
         using var doc = JsonDocument.Parse(json);
         var setting = doc.RootElement.GetProperty("settings")[0];
         Assert.Equal("key " + hostile, setting.GetProperty("key").GetString());
