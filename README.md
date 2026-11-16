@@ -623,7 +623,7 @@ in `tests/ConfigFerret.Tests/Snapshots/`, using [Verify](https://github.com/Veri
 the output on purpose, the failing test writes a `.received.` file next to the snapshot: check the diff, then
 rename it to `.verified.` (or accept it in your diff tool) and commit it.
 
-CI builds and tests both on Linux for pull requests, and on Windows, Linux and macOS after a merge to `main`, then packs the four NuGet packages (the three libraries and `ConfigFerret.Tool`), all with the same version, and installs and runs the tool from its package. Pushing a `v*` tag publishes
+CI builds and tests both on Linux for pull requests, and on Windows, Linux and macOS after a merge to `main`, then packs every packable project under `src/` (`ConfigFerret`, the nine extension packages and `ConfigFerret.Tool`, eleven NuGet packages; the desktop app and the web app are not packed), all with the same version, and installs and runs the tool from its package. Pushing a `v*` tag publishes
 them to nuget.org with [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing), so no API key
 is stored. It needs a trusted publishing policy on nuget.org for workflow `ci.yml` in this repository, owned by
 the nuget.org account `Moonwalker1307` (set the `NUGET_USER` repository variable to use another account).
