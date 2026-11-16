@@ -889,6 +889,59 @@ public class ComposeProjectTests
         Assert.Equal("c8.yaml:1: includes nest more than 8 deep.", ex.Message);
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task Loads_a_file_included_many_times_once()
+    {
+        using var folder = new TempFolder();
+        for (var i = 0; i < 6; i++)
+        {
+            folder.Write($"l{i}.yaml", "include:\n" + string.Concat(Enumerable.Repeat($"  - l{i + 1}.yaml\n", 12)));
+        }
+
+        folder.Write("l6.yaml", "services: {}\n---\nx: 1\n");
+
+        var project = await Task.Run(() => ComposeProject.Load(Path.Join(folder.Path, "l0.yaml")), TestContext.Current.CancellationToken);
+
+        Assert.Empty(project.ServiceNames);
+        Assert.Equal("l6.yaml holds 2 YAML documents; only the first is read.", Assert.Single(project.Warnings));
+    }
+
+    [Fact]
+    public void Lists_a_warning_of_a_file_that_several_files_include_once()
+    {
+        using var folder = new TempFolder();
+        for (var i = 0; i < 8; i++)
+        {
+            foreach (var name in new[] { "a", "b" })
+            {
+                folder.Write($"{name}{i}.yaml", $"include: [a{i + 1}.yaml, b{i + 1}.yaml]\n");
+            }
+        }
+
+        folder.Write("a8.yaml", "services: {}\n---\nx: 1\n");
+        folder.Write("b8.yaml", "services: {}\n");
+
+        var project = ComposeProject.Load(Path.Join(folder.Path, "a0.yaml"));
+
+        Assert.Equal(["a8.yaml holds 2 YAML documents; only the first is read."], project.Warnings);
+    }
+
+    [Theory]
+    [InlineData("include:\n  - ${EMPTY}\n", "path")]
+    [InlineData("include:\n  - path: other.yaml\n    env_file: ${EMPTY}\n", "env_file")]
+    [InlineData("include:\n  - path: other.yaml\n    project_directory: \"x\\0y\"\n", "project_directory")]
+    public void Rejects_an_include_whose_path_is_empty_or_not_a_path(string yaml, string what)
+    {
+        using var folder = new TempFolder();
+        folder.Write("other.yaml", "services: {}\n");
+
+        var ex = Assert.Throws<FormatException>(() => Parse(yaml, o => o.ProjectDirectory = folder.Path));
+
+        Assert.StartsWith($"compose.yaml:2: the include's {what} ", ex.Message, StringComparison.Ordinal);
+        Assert.EndsWith("not a valid path.", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(Parse("include:\n  - path: other.yaml\n    project_directory: ${EMPTY}\n", o => o.ProjectDirectory = folder.Path).ServiceNames);
+    }
+
     [Fact]
     public void Shows_paths_outside_the_project_directory_in_full()
     {
