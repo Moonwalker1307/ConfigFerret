@@ -251,15 +251,13 @@ internal static class Cli
                 }
             }
 
-            // The hosts always add the environment variables without a prefix first; each prefix is another call after it.
-            var prefixes = result.GetValue(app.NoDefaultEnv) ? new List<string>() : [string.Empty];
-            prefixes.AddRange(result.GetValue(app.EnvPrefix) ?? []);
             var inputs = new AppInputs(
                 result.GetValue(app.App) ?? ".",
                 result.GetValue(app.Environment),
                 result.GetValue(app.Config) ?? [],
                 result.GetValue(app.ConfigBeforeEnv),
-                prefixes,
+                result.GetValue(app.EnvPrefix) ?? [],
+                !result.GetValue(app.NoDefaultEnv),
                 environment,
                 appArgs,
                 result.GetValue(app.UserSecretsId),

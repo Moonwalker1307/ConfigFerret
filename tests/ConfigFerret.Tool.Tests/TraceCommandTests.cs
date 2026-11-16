@@ -215,6 +215,34 @@ public class TraceCommandTests
     }
 
     [Fact]
+    public async Task Maps_ASPNETCORE_and_DOTNET_variables_to_keys_below_the_settings_files()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Timeout": 30 } }""", TestContext.Current.CancellationToken);
+            string[] input = ["trace", "-a", app.FullName, "--no-user-secrets", "--env", "ASPNETCORE_URLS=http://+:8080", "--env", "DOTNET_Db__Timeout=5", "urls", "Db:Timeout"];
+
+            var result = await new ToolRunner().RunAsync(input);
+            var withoutDefaults = await new ToolRunner().RunAsync([.. input, "--no-default-env"]);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("""URLS = "http://+:8080""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[effective]  environment variable ASPNETCORE_URLS = "http://+:8080""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""Db:Timeout = "30""", result.Output, StringComparison.Ordinal);
+            Assert.Contains("""[overridden] environment variable DOTNET_Db__Timeout = "5""", result.Output, StringComparison.Ordinal);
+
+            Assert.Equal(1, withoutDefaults.ExitCode);
+            Assert.Contains("urls is not set by any configuration provider.", withoutDefaults.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("DOTNET_Db__Timeout", withoutDefaults.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Loads_config_files_after_the_environment_variables_and_the_command_line()
     {
         var app = Directory.CreateTempSubdirectory("configferret-app-");

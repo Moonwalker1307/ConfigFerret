@@ -84,7 +84,7 @@ internal sealed class AppOptions
 
     public Option<bool> NoDefaultEnv { get; } = new("--no-default-env")
     {
-        Description = "Leave out the AddEnvironmentVariables call without a prefix, for an app that builds its configuration without the host defaults.",
+        Description = "Leave out the environment variables the host adds by itself (with the prefixes ASPNETCORE_ and DOTNET_, and without a prefix), for an app that builds its configuration without the host defaults.",
     };
 
     public Option<string?> UserSecretsId { get; } = new("--user-secrets-id")

@@ -79,24 +79,30 @@ or as a JSON array. Repeat it to combine several runs.
 
 ## How the app's configuration is built
 
-`trace` and `unused` read the app folder (`--app`, default the current folder) in the order the .NET host does:
+`trace` and `unused` read the app folder (`--app`, default the current folder) in the order
+`WebApplication.CreateBuilder` does:
 
-1. `appsettings.json`, then `appsettings.{Environment}.json`. The environment is `--environment`, else
+1. Environment variables starting with `ASPNETCORE_`, then those starting with `DOTNET_`, with the prefix removed, so
+   `ASPNETCORE_URLS` sets the key `URLS`.
+2. `appsettings.json`, then `appsettings.{Environment}.json`. The environment is `--environment`, else
    `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT` from the app's variables, else `Production`. A name with a
    slash or backslash in it is refused, so the settings file always comes from the app folder.
-2. User secrets, in Development only, using the `UserSecretsId` in the folder's project file (or `--user-secrets-id`).
+3. User secrets, in Development only, using the `UserSecretsId` in the folder's project file (or `--user-secrets-id`).
    `--no-user-secrets` turns this off.
-3. Environment variables: the `AddEnvironmentVariables` call without a prefix that the host makes, then one call per
-   `--env-prefix`, in order. `--no-default-env` leaves out the call without a prefix, for an app that builds its
-   configuration without the host defaults. The tool puts the `--env-prefix` calls below the app's command line,
-   but an app that calls `AddEnvironmentVariables(prefix)` itself reads them above it: with
+4. Environment variables: the `AddEnvironmentVariables` call without a prefix that the host makes, then one call per
+   `--env-prefix`, in order. The tool puts the `--env-prefix` calls below the app's command line, but an app that
+   calls `AddEnvironmentVariables(prefix)` itself reads them above it: with
    `--env-prefix ORDERS_ --env ORDERS_Db__Timeout=42 -- --Db:Timeout=7` the tool says 7 where the app reads 42.
-4. The app's command line: everything after `--`.
-5. Each `--config` file, in order. A file the app adds with `AddJsonFile` comes after everything the host set up.
-   `--config-before-env` loads them right after the files in step 1 instead, below user secrets, the variables and
+5. The app's command line: everything after `--`.
+6. Each `--config` file, in order. A file the app adds with `AddJsonFile` comes after everything the host set up.
+   `--config-before-env` loads them right after the files in step 2 instead, below user secrets, the variables and
    the command line. Use it for an app that adds the variables again after its file, such as
    `AddJsonFile("extra.json").AddEnvironmentVariables()`, and for an `{ApplicationName}.settings.json` the tool does
    not find by itself.
+
+`--no-default-env` leaves out the environment variables in steps 1 and 4 that the host adds by itself, keeping only
+the `--env-prefix` calls, for an app that builds its configuration without the host defaults. To leave out only the
+`ASPNETCORE_` and `DOTNET_` variables, pass `--no-default-env --env-prefix ""`.
 
 The tool reads at most 64 MB from a file it finds by itself: the two `appsettings` files and the files in a
 `--manifests` folder. An `appsettings` file may be a symbolic link, but only to a file in the app folder. To read a
