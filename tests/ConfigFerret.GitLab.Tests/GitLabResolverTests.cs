@@ -692,6 +692,31 @@ public class GitLabResolverTests
         Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Follows_links_through_secret_named_references_to_the_same_variable_as_one(bool stagingFirst)
+    {
+        const string prefix = "CFGLSAMEREF_";
+        const string secret = "fake-db-pass";
+        const string staging = "deploy-staging:\n  variables:\n    PFX_APP_DB_PASSWORD: $PFX_DB_PASSWORD\n  script:\n    - export PFX_MAIL_AUTH=$PFX_APP_DB_PASSWORD\n";
+        const string production = "deploy-production:\n  variables:\n    PFX_APP_DB_PASSWORD: $PFX_DB_PASSWORD\n  script:\n    - export PFX_MAIL_AUTH=$PFX_APP_DB_PASSWORD\n";
+        var variables = new GitLabVariables([new(prefix + "DB_PASSWORD", null, GitLabVariableLevel.Project, "contoso/api", IsMasked: true)]);
+
+        var report = TraceMany(prefix, new() { ["MAIL_AUTH"] = secret }, variables, stagingFirst ? staging + production : production + staging, null);
+
+        // Both jobs' references come to the same masked variable, so it is one certain link, and still redacted.
+        AssertNowhere(report, "MAIL_AUTH", secret);
+        var setting = report.Find("MAIL_AUTH")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        var link = Assert.Single(Assert.Single(setting.Steps).Origins);
+        Assert.False(link.IsInferred);
+        Assert.Equal($"GitLab project variable {prefix}DB_PASSWORD", Assert.Single(link.Origins).Source);
+        Assert.All(Flatten(setting.Steps), s => Assert.True(s.IsSensitive));
+        Assert.DoesNotContain(report.Warnings, w => w.Contains("GitLab CI jobs", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Compares_what_a_reference_comes_to_in_each_job()
     {

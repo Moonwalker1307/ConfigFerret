@@ -124,12 +124,12 @@ Once a name has a CI file link, every job that counts and may set it is followed
 outside jobs, and the jobs that set the name in `variables:` without a link for it. When they come to different values,
 every one of them is listed as an inferred step and a warning names the jobs; the same goes for jobs that set a name to
 different values in `variables:`. A value that is a reference is compared by what it comes to in its own job (the same
-CI file value or the same GitLab variable). One the trace cannot compare, such as a masked value, a variable named like
-a secret, `db-$SUFFIX` or a reference with several definitions, keeps them alternatives, and the warning then says the
-values cannot be compared rather than that they differ. None of the alternatives is then compared with the value seen
-here, and the one that comes to that value goes last (the tracer marks the last step effective), also when it is reached
-through a whole-value reference such as `ALIAS: $TIMEOUT`. When any of them may hold a secret, all of them are marked
-sensitive.
+CI file value or the same GitLab variable), whatever the variable's name. One the trace cannot compare, such as a masked
+value, a value written in a variable named like a secret, `db-$SUFFIX` or a reference with several definitions, keeps
+them alternatives, and the warning then says the values cannot be compared rather than that they differ. None of the
+alternatives is then compared with the value seen here, and the one that comes to that value goes last (the tracer marks
+the last step effective), also when it is reached through a whole-value reference such as `ALIAS: $TIMEOUT`. When any of
+them may hold a secret, all of them are marked sensitive.
 
 One trace step looks at no more than 1,000 CI file variables, the most upstream steps the tracer keeps for a setting.
 It counts only the variables the job sees, and looks at them in the order they win, as the tracer keeps the end of a
