@@ -179,14 +179,29 @@ internal static partial class Targets
         }
 
         var flagKeys = ExpectedFlagKeys(responses, options.TrimKeyPrefixes);
+        // The provider keeps the last setting of each stored key, compared with case; Find ignores case.
+        var lastByKey = new Dictionary<string, AzureAppConfigurationSetting>(StringComparer.Ordinal);
+        foreach (var setting in settings.Settings)
+        {
+            lastByKey[setting.Key] = setting;
+        }
+
         foreach (var setting in settings.Settings)
         {
             // A stored key finds the stored key-value, and each configuration key it sets finds the value it sets there. An
-            // empty configuration key is no key and finds nothing.
+            // empty configuration key is no key and finds nothing. The last setting of a stored key sets all its values; an
+            // earlier one, which it replaces, only those under keys the last one also sets, and is found under no other.
+            var all = SetValues(settings, setting);
+            var last = lastByKey[setting.Key];
+            var lastKeys = SetValues(settings, last).Select(value => value.ConfigurationKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var sets = ReferenceEquals(last, setting) ? all : all.Where(value => lastKeys.Contains(value.ConfigurationKey)).ToList();
+            var indexed = settings.IndexedValues(setting);
             if (string.IsNullOrEmpty(setting.Key) || !settings.Find(setting.Key).Contains(setting)
-                || (settings.Flattened(setting) ?? [setting]).Any(value => value.ConfigurationKey.Length == 0
-                    ? settings.FindByConfigurationKey(value.ConfigurationKey).Count > 0
-                    : !settings.FindByConfigurationKey(value.ConfigurationKey).Contains(value)))
+                || settings.FindByConfigurationKey(string.Empty).Count > 0
+                || !indexed.SequenceEqual<AzureAppConfigurationSetting>(sets, ReferenceEqualityComparer.Instance)
+                || sets.Any(value => !settings.FindByConfigurationKey(value.ConfigurationKey).Contains(value))
+                || all.Except<AzureAppConfigurationSetting>(sets, ReferenceEqualityComparer.Instance).Any(value =>
+                    settings.FindByConfigurationKey(value.ConfigurationKey).Any(found => ReferenceEquals(found, value))))
             {
                 throw new InvariantException($"AzureAppConfigurationSettings cannot find key '{setting.Key}'.");
             }
@@ -242,6 +257,10 @@ internal static partial class Targets
         var loaded = settings.ToLoadedSource();
         Render(loaded, keys, provider: false);
     }
+
+    // The values a stored setting sets, the ones it is flattened to or itself, without the empty key, which is no key.
+    private static List<AzureAppConfigurationSetting> SetValues(AzureAppConfigurationSettings settings, AzureAppConfigurationSetting setting) =>
+        (settings.Flattened(setting) ?? [setting]).Where(value => value.ConfigurationKey.Length > 0).ToList();
 
     // For each feature flag key in the scripted responses, the configuration keys the loader may give it:
     // FeatureManagement:<id>, where id is the non-blank "id" string of the item's value or else the name in the key,

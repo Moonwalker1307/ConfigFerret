@@ -126,7 +126,13 @@ App Configuration (`LayerKind.AzureAppConfiguration`):
 - **Explicit links** (certain): `Map("TIMEOUT", "Orders:Db:Timeout")` or `Links`.
 
 Each label in `Labels` is read in order, and a key with several labels lists them lowest priority first, so the last
-label wins, as with the provider's `Select` calls. Feature flags (`.appconfig.featureflag/<name>`) map to
+label wins, as with the provider's `Select` calls. As in the provider, the key-value of the last label replaces the
+earlier ones with the same key, case included, whole: an earlier one is listed only under the keys the last one also
+sets, below it, so a JSON key-value in `base` sets nothing that a plain one in `prod` does not, and the other way round.
+Keys that differ only in case, such as `K` and `k`, are two key-values that both set their values; where they set the
+same configuration key, which one wins in the app is not modelled, and the one read later is shown as effective.
+Feature flags
+(`.appconfig.featureflag/<name>`) map to
 `FeatureManagement:<name>`, and `TrimKeyPrefixes` trims that key as the provider does: with `FeatureManagement:`, the
 flag `Beta` is traced as `Beta`. The keys the provider writes under a flag that is on and has filters
 (`EnabledFor:<i>:Name`, `EnabledFor:<i>:Parameters:...` and `RequirementType`, such as `Beta:EnabledFor:0:Name`) lead
