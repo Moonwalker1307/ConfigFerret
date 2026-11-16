@@ -45,7 +45,10 @@ public sealed class LoadedConfigSource
     /// <summary>Problems found while reading. The resolver also adds them to the trace's warnings.</summary>
     public IReadOnlyList<string> Warnings { get; }
 
-    /// <summary>The entries that no step in <paramref name="report"/> links to, so nothing seems to use them.</summary>
+    /// <summary>
+    /// The entries that no step in <paramref name="report"/> links to and that the resolver does not otherwise know to be
+    /// used, so nothing seems to use them.
+    /// </summary>
     public IReadOnlyList<SourceEntry> FindUnused(ProvenanceReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -65,7 +68,8 @@ public sealed class LoadedConfigSource
             }
         }
 
-        return Entries.Where(e => !used.Contains(e.Reference)).ToList();
+        var knows = Resolver as IKnowsUses;
+        return Entries.Where(e => !used.Contains(e.Reference) && knows?.IsUsed(e.Reference) != true).ToList();
     }
 }
 

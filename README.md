@@ -634,7 +634,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   placeholders links to the source line only, and is redacted when a loaded Secret fills one of them; when the
   `substituteFrom` Secret was not loaded, nothing says it holds a secret and the value is shown. The
   `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation is not read. `${VAR}` inside a HelmRelease's values
-  is not linked.
+  is not linked. `FindUnused` never lists a variable that a YAML file under `spec.path` names anywhere, for example
+  in an Ingress host, since Flux substitutes it there too; a `${VAR}` in a comment or in a file the build leaves out
+  counts as well. The variable stays in `Entries`.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest

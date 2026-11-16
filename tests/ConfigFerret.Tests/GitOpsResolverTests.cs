@@ -438,6 +438,67 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    public void A_variable_that_a_manifest_in_the_folder_uses_anywhere_is_not_unused()
+    {
+        Write("apps/app.yaml", """
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data:
+              Smtp__Endpoint: "${SMTP_HOST}:${SMTP_PORT}"
+              Region: ${REGION}
+            ---
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata: {name: api}
+            spec:
+              rules:
+                - host: api.${CLUSTER_DOMAIN}
+            """);
+        var resolver = new GitOpsResolver(
+            Kustomization("""
+                    substitute: {SMTP_HOST: smtp.local, SMTP_PORT: '25', REGION: eu, REALLY_UNUSED: x}
+                    substituteFrom:
+                      - {kind: Secret, name: cluster}
+                """),
+            new GitOpsOptions
+            {
+                RepositoryRoot = _root,
+                Data = KubernetesManifests.Parse("""
+                    apiVersion: v1
+                    kind: Secret
+                    metadata: {name: cluster}
+                    stringData: {CLUSTER_DOMAIN: fake.example.test}
+                    """, "secrets.yaml"),
+            });
+        var tracer = ConfigTracer.ForContainer(KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: {name: cfg}
+            data: {Smtp__Endpoint: "smtp.local:25", Region: eu}
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  envFrom:
+                    - configMapRef: {name: cfg}
+            """));
+        var loaded = new LoadedConfigSource("flux", resolver, resolver.Entries());
+        tracer.WithSource(loaded);
+
+        Assert.Equal(["REALLY_UNUSED"], loaded.FindUnused(tracer.Trace()).Select(e => e.Name));
+
+        // Entries still lists every variable that was read, secret ones too.
+        Assert.Equal(["CLUSTER_DOMAIN", "REALLY_UNUSED", "REGION", "SMTP_HOST", "SMTP_PORT"], loaded.Entries.Select(e => e.Name));
+        Assert.Equal(
+            new SourceEntry("CLUSTER_DOMAIN", new GitOpsVariableRef("apps", "CLUSTER_DOMAIN"), true, "substituteFrom Secret cluster", "Flux Kustomization apps"),
+            loaded.Entries[0]);
+    }
+
+    [Fact]
     public void Warns_when_the_manifests_behind_substitutions_cannot_be_found()
     {
         var noRoot = new GitOpsResolver(Kustomization("    substitute: {A: b}"));
