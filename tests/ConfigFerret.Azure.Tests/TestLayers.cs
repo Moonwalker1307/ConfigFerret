@@ -28,14 +28,6 @@ internal static class TestLayers
     };
 }
 
-/// <summary>Stands in for the Azure SDK's Key Vault configuration provider: ConfigFerret only sees its type name.</summary>
-internal sealed class AzureKeyVaultConfigurationProvider(Dictionary<string, string?> data) : ConfigurationProvider, IConfigurationSource
-{
-    public override void Load() => Data = new Dictionary<string, string?>(data, StringComparer.OrdinalIgnoreCase);
-
-    public IConfigurationProvider Build(IConfigurationBuilder builder) => this;
-}
-
 /// <summary>Stands in for the App Configuration provider: ConfigFerret only sees its type name.</summary>
 internal sealed class AzureAppConfigurationProvider(Dictionary<string, string?> data) : ConfigurationProvider, IConfigurationSource
 {
