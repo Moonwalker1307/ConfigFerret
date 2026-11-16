@@ -493,10 +493,11 @@ public static partial class HelmValueUsage
         }
     }
 
+    // Only the system's own separator is replaced: on Linux and macOS a "\" is part of a file name.
     private static string Display(string chartFolder, string file)
     {
         var relative = Path.GetRelativePath(chartFolder, file);
-        return relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? Path.GetFileName(file) : relative.Replace('\\', '/');
+        return relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? Path.GetFileName(file) : relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 
     // Each pattern reads a run of one kind of character in one way only, or reads only a short text, so it can't try a

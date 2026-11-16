@@ -159,6 +159,25 @@ public class HelmValueUsageTests
     }
 
     [Fact]
+    public void Keeps_a_backslash_in_a_values_file_name_as_part_of_the_name()
+    {
+        // On Windows a backslash is the separator, so no name can hold one.
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var temp = new TempFolder();
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("env/values-eu.yaml", "a: 1\n");
+        temp.Write("env\\values-eu.yaml", "a: 1\n");
+
+        var dead = HelmValueUsage.FindDead(temp.Path, [temp.Full("env/values-eu.yaml"), temp.Full("env\\values-eu.yaml")]);
+
+        Assert.Equal([("a", "env/values-eu.yaml"), ("a", "env\\values-eu.yaml")], dead.Select(d => (d.Path, d.File)));
+    }
+
+    [Fact]
     public void Lists_a_value_once_per_file_that_sets_it()
     {
         var dead = HelmValueUsage.FindDead(
