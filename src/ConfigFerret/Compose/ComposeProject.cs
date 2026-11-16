@@ -29,8 +29,10 @@ namespace ConfigFerret.Compose;
 /// shell), then the project's env files (<see cref="ComposeOptions.EnvFiles"/>, else the project directory's
 /// <c>.env</c>). The process environment is read only when <see cref="ComposeOptions.UseProcessEnvironment"/> is set.
 /// An included file sees the environment of the project that includes it first; its own env files only add variables
-/// that are not set there. In a service's <c>env_file</c>, <c>${VAR}</c> and a bare key take a variable from that
-/// environment, then from the service's own <c>environment</c> entries.
+/// that are not set there. Like compose, included services join the project: one that the including files declare too
+/// is merged with the included one as its base, and a service can extend an included one. In a service's
+/// <c>env_file</c>, <c>${VAR}</c> and a bare key take a variable from the project's environment, then from the
+/// service's own <c>environment</c> entries.
 /// </para>
 /// <para>
 /// A file that compose would need but that is missing (a required <c>env_file</c>, an <c>extends</c> file or an
@@ -63,7 +65,15 @@ public sealed class ComposeProject
     private readonly Dictionary<string, ComposeFile> _extendsFiles = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<Part>> _parts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ComposeService> _services = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ComposeProject> _included = new(StringComparer.Ordinal);
+
+    // The parts of the services that each compose file's includes bring in, by file and service, a later include's
+    // first; and the services they bring in, in the order they first do.
+    private readonly Dictionary<ComposeFile, Dictionary<string, List<Part>>> _imported = new(ReferenceEqualityComparer.Instance);
+    private readonly List<string> _importedNames = [];
+    private readonly HashSet<string> _importedNameSet = new(StringComparer.Ordinal);
+
+    // The parts that extends brought in for all services of the load so far. Only the root project computes services.
+    private int _extendedParts;
     private readonly List<string> _serviceNames = [];
     private readonly List<string> _warnings = [];
     private readonly Dictionary<string, MountDefinition> _secrets = new(StringComparer.Ordinal);
@@ -134,9 +144,7 @@ public sealed class ComposeProject
     public ComposeService? FindService(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
-        return _services.TryGetValue(name, out var service) ? service
-            : _included.TryGetValue(name, out var project) ? project.FindService(name)
-            : null;
+        return _services.TryGetValue(name, out var service) ? service : null;
     }
 
     /// <summary>Reads and merges compose files, like <c>docker compose -f a.yaml -f b.yaml</c>.</summary>
@@ -208,7 +216,7 @@ public sealed class ComposeProject
                     project._serviceNames.Add(name);
                 }
 
-                parts.Add(new Part(file, name, service));
+                parts.Add(new Part(file, name, service, project));
             }
         }
 
@@ -217,9 +225,28 @@ public sealed class ComposeProject
             project.ReadIncludes(file, depth, including);
         }
 
-        foreach (var (name, parts) in project._parts)
+        // Like compose, each compose file takes in what its includes bring in, its own services on top, before the
+        // files are merged in order: an included service is the base of one of the same name that its file declares.
+        foreach (var name in project._importedNames)
         {
-            project._services[name] = project.Compute(name, parts);
+            if (!project._parts.TryGetValue(name, out var own))
+            {
+                project._serviceNames.Add(name);
+                own = [];
+            }
+
+            project._parts[name] = [.. project._files.SelectMany(f =>
+                (project._imported.TryGetValue(f, out var byName) && byName.TryGetValue(name, out var imported) ? imported : [])
+                    .Concat(own.Where(p => ReferenceEquals(p.File, f))))];
+        }
+
+        // An included project's services are worked out once, in the root project, which holds them all.
+        if (depth == 0)
+        {
+            foreach (var (name, parts) in project._parts)
+            {
+                project._services[name] = project.Compute(name, parts);
+            }
         }
 
         return project;
@@ -374,15 +401,39 @@ public sealed class ComposeProject
                 _loaded[key] = sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, this, depth + 1, [.. including, .. full], _loaded, _origins);
             }
 
+            // Like compose, an earlier include wins over a later one, so a later include's parts go first. A service that
+            // two includes of this compose file bring in from the same file, as when both include one more file, is
+            // taken once; another compose file that includes it too takes it again. Its parts keep the included
+            // project, which fills in their ${VAR} references.
+            if (!_imported.TryGetValue(file, out var byName))
+            {
+                _imported[file] = byName = new(StringComparer.Ordinal);
+            }
+
             foreach (var name in sub.ServiceNames)
             {
-                if (_parts.ContainsKey(name) || _included.ContainsKey(name))
+                if (!byName.TryGetValue(name, out var imported))
                 {
-                    throw new FormatException($"{at}: the include brings in service {name}, which is already defined.");
+                    byName[name] = imported = [];
                 }
 
-                _included[name] = sub;
-                _serviceNames.Add(name);
+                if (_importedNameSet.Add(name))
+                {
+                    _importedNames.Add(name);
+                }
+
+                imported.InsertRange(0, [.. sub._parts[name].Where(p => !imported.Exists(i => string.Equals(i.File.Id, p.File.Id, StringComparison.Ordinal) && i.Service == p.Service))]);
+            }
+
+            // Like compose, the included secrets and configs join the project's, whose own win.
+            foreach (var (name, definition) in sub._secrets)
+            {
+                _secrets.TryAdd(name, definition);
+            }
+
+            foreach (var (name, definition) in sub._configs)
+            {
+                _configs.TryAdd(name, definition);
             }
 
             // A file that several includes bring in reports its problems once.
@@ -396,7 +447,7 @@ public sealed class ComposeProject
         var expanded = new List<Part>();
         foreach (var part in parts)
         {
-            Expand(part, expanded, [], warnings);
+            Expand(service, part, expanded, [], warnings);
         }
 
         var envFiles = new List<EnvFileDeclaration>();
@@ -470,8 +521,11 @@ public sealed class ComposeProject
         return list;
     }
 
-    // Puts the parts of the services that part extends before it, recursively, so later parts win.
-    private void Expand(Part part, List<Part> into, List<string> visiting, List<string> warnings)
+    // Puts the parts of the services that part extends before it, recursively, so later parts win. A base found by name
+    // can have parts from many included files, each extending further, so the parts one service brings in are bounded,
+    // and so are those that all services of the load bring in: each call adds one part, so it stops after at most that
+    // many calls and the extends depth.
+    private void Expand(string service, Part part, List<Part> into, List<string> visiting, List<string> warnings)
     {
         var key = part.File.Id + "#" + part.Service;
         if (visiting.Contains(key, StringComparer.Ordinal))
@@ -487,16 +541,16 @@ public sealed class ComposeProject
         if (MergedPairs(part.Node, 0).TryGetValue("extends", out var extends))
         {
             var at = Yaml.Location(part.File.Display, extends.Key);
-            var baseName = InterpolatedName(extends.Value is YamlMappingNode ? extends.Value.Str("service") : extends.Value.Scalar(), at, warnings)
+            var baseName = part.Owner.InterpolatedName(extends.Value is YamlMappingNode ? extends.Value.Str("service") : extends.Value.Scalar(), at, warnings)
                 ?? throw new FormatException($"{at}: extends needs a service.");
-            var baseFile = InterpolatedName(extends.Value.Str("file"), at, warnings);
+            var baseFile = part.Owner.InterpolatedName(extends.Value.Str("file"), at, warnings);
             visiting.Add(key);
             if (baseFile is not null)
             {
                 var file = LoadExtendsFile(part.File, baseFile, at, warnings);
                 if (file is not null && MergedPairs(file.Services, 0).TryGetValue(baseName, out var found) && found.Value is YamlMappingNode node)
                 {
-                    Expand(new Part(file, baseName, node), into, visiting, warnings);
+                    Expand(service, new Part(file, baseName, node, part.Owner), into, visiting, warnings);
                 }
                 else if (file is not null)
                 {
@@ -505,13 +559,13 @@ public sealed class ComposeProject
             }
             else if (MergedPairs(part.File.Services, 0).TryGetValue(baseName, out var same) && same.Value is YamlMappingNode node)
             {
-                Expand(new Part(part.File, baseName, node), into, visiting, warnings);
+                Expand(service, new Part(part.File, baseName, node, part.Owner), into, visiting, warnings);
             }
-            else if (_parts.TryGetValue(baseName, out var baseParts))
+            else if (part.Owner._parts.TryGetValue(baseName, out var baseParts))
             {
                 foreach (var basePart in baseParts)
                 {
-                    Expand(basePart, into, visiting, warnings);
+                    Expand(service, basePart, into, visiting, warnings);
                 }
             }
             else
@@ -520,6 +574,17 @@ public sealed class ComposeProject
             }
 
             visiting.RemoveAt(visiting.Count - 1);
+        }
+
+        if (into.Count >= _options.MaxExtendedParts)
+        {
+            throw new FormatException($"Service {service} extends services that bring in more than {_options.MaxExtendedParts} parts.");
+        }
+
+        // A part added while a service is still being visited is one that an extends brought in.
+        if (visiting.Count > 0 && ++_extendedParts > _options.MaxLoadExtendedParts)
+        {
+            throw new FormatException($"The services of this load extend services that bring in more than {_options.MaxLoadExtendedParts} parts.");
         }
 
         into.Add(part);
@@ -571,7 +636,7 @@ public sealed class ComposeProject
         foreach (var item in ItemsOrSelf(node).Where(i => !i.IsNull()))
         {
             var at = Yaml.Location(part.File.Display, item);
-            var path = InterpolatedName(item is YamlMappingNode ? item.Str("path") : item.Scalar(), at, warnings)
+            var path = part.Owner.InterpolatedName(item is YamlMappingNode ? item.Str("path") : item.Scalar(), at, warnings)
                 ?? throw new FormatException($"{at}: an env_file entry needs a path.");
             var required = !string.Equals(item.Str("required"), "false", StringComparison.OrdinalIgnoreCase);
             var raw = string.Equals(item.Str("format"), "raw", StringComparison.Ordinal);
@@ -623,7 +688,7 @@ public sealed class ComposeProject
                 }
             }
 
-            var interpolation = new Interpolation(Lookup, at);
+            var interpolation = new Interpolation(part.Owner.Lookup, at);
             var expanded = value is null ? null : interpolation.Expand(value);
             warnings.AddRange(interpolation.Unset.Select(v => UnsetWarning(at, v)));
             if (!environment.TryGetValue(name, out var list))
@@ -1030,7 +1095,9 @@ public sealed class ComposeProject
 
     private sealed record ComposeFile(string Id, string Display, string? Base, YamlMappingNode Root, YamlMappingNode? Services);
 
-    private sealed record Part(ComposeFile File, string Service, YamlMappingNode Node);
+    // Owner is the project the part's file belongs to, whose environment fills in its ${VAR} references: an included
+    // project for a service that an include brings in.
+    private sealed record Part(ComposeFile File, string Service, YamlMappingNode Node, ComposeProject Owner);
 
     private sealed record EnvFileDeclaration(string Display, string? FullPath, bool Required, bool Raw, string At);
 

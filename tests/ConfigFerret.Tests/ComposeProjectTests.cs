@@ -1100,18 +1100,152 @@ public class ComposeProjectTests
     }
 
     [Fact]
-    public void Rejects_an_include_that_redefines_a_service_or_includes_itself()
+    public void Rejects_an_include_that_includes_itself()
     {
         using var folder = new TempFolder();
-        folder.Write("other.yaml", "services:\n  app: {}\n");
-        folder.Write("loop.yaml", "include: [compose.yaml]\n");
-        var clash = folder.Write("compose.yaml", "include: [other.yaml]\nservices:\n  app: {}\n");
-
-        Assert.Equal("compose.yaml:1: the include brings in service app, which is already defined.", Assert.Throws<FormatException>(() => ComposeProject.Load(clash)).Message);
-
         var loop = folder.Write("start.yaml", "include: [loop.yaml]\n");
         folder.Write("loop.yaml", "include: [start.yaml]\n");
         Assert.Equal("loop.yaml:1: start.yaml includes itself.", Assert.Throws<FormatException>(() => ComposeProject.Load(loop)).Message);
+    }
+
+    [Fact]
+    public void Takes_a_service_that_two_includes_bring_in_once()
+    {
+        using var folder = new TempFolder();
+        folder.Write("common/compose.yaml", "services:\n  redis:\n    environment: { R: 1 }\n");
+        folder.Write("a/compose.yaml", "include: [../common/compose.yaml]\nservices:\n  a: {}\n");
+        folder.Write("b/compose.yaml", "include: [../common/compose.yaml]\nservices:\n  b: {}\n");
+        var compose = folder.Write("compose.yaml", "include:\n  - a/compose.yaml\n  - b/compose.yaml\nservices:\n  api: {}\n");
+
+        var project = ComposeProject.Load(compose);
+
+        Assert.Equal(["api", "a", "redis", "b"], project.ServiceNames);
+        Assert.Equal("1", Assert.Single(Service(project, "redis").Layers("R")).Value);
+    }
+
+    [Fact]
+    public void Each_compose_file_takes_in_its_own_includes()
+    {
+        // Like compose, each compose file imports what its includes bring in before the files are merged, so the
+        // override file's include of x.yaml lands over the main file's own redis.
+        using var folder = new TempFolder();
+        folder.Write("x.yaml", "services:\n  redis:\n    environment: { A: x }\n");
+        var main = folder.Write("compose.yaml", "include: [x.yaml]\nservices:\n  redis:\n    environment: { A: own }\n");
+        var over = folder.Write("compose.override.yaml", "include: [x.yaml]\n");
+
+        var project = ComposeProject.Load(main, over);
+
+        var redis = Service(project, "redis");
+        Assert.Equal("x", redis.Environment["A"]);
+        Assert.Equal(["x.yaml:3", "compose.yaml:4", "x.yaml:3"], redis.Layers("A").Select(l => l.Location));
+    }
+
+    [Fact]
+    public void Stops_when_extends_across_includes_bring_in_more_parts_than_the_bound()
+    {
+        // b is defined in three included files, and each b extends c, which three files further down define, so a
+        // brings in 3 * (3 + 1) parts and its own.
+        using var folder = new TempFolder();
+        folder.Write("r1.yaml", "include: [t1.yaml, t2.yaml, t3.yaml]\n");
+        folder.Write("r2.yaml", "include: [u1.yaml, u2.yaml, u3.yaml]\n");
+        for (var i = 1; i <= 3; i++)
+        {
+            folder.Write($"t{i}.yaml", $"include: [r2.yaml]\nservices:\n  b:\n    extends: c\n    environment: {{ B{i}: x }}\n");
+            folder.Write($"u{i}.yaml", $"services:\n  c:\n    environment: {{ C{i}: x }}\n");
+        }
+
+        var compose = folder.Write("compose.yaml", "include: [r1.yaml]\nservices:\n  a:\n    extends: b\n");
+        ComposeProject Load(int bound)
+        {
+            var options = new ComposeOptions { MaxExtendedParts = bound };
+            return ComposeProject.Load([compose], options);
+        }
+
+        Assert.Equal(["B1", "B2", "B3", "C1", "C2", "C3"], Service(Load(13), "a").Environment.Keys.Order(StringComparer.Ordinal));
+        var ex = Assert.Throws<FormatException>(() => Load(12));
+
+        Assert.Equal("Service a extends services that bring in more than 12 parts.", ex.Message);
+    }
+
+    [Fact]
+    public void Stops_when_the_services_of_one_load_bring_in_more_parts_through_extends_than_its_bound()
+    {
+        // As above, b brings in 3 * 3 parts of c and each a brings in 3 * (3 + 1), so a1 to a3, b and c bring in
+        // 3 * 12 + 9 parts, each service well under its own bound.
+        using var folder = new TempFolder();
+        folder.Write("r1.yaml", "include: [t1.yaml, t2.yaml, t3.yaml]\n");
+        folder.Write("r2.yaml", "include: [u1.yaml, u2.yaml, u3.yaml]\n");
+        for (var i = 1; i <= 3; i++)
+        {
+            folder.Write($"t{i}.yaml", $"include: [r2.yaml]\nservices:\n  b:\n    extends: c\n");
+            folder.Write($"u{i}.yaml", $"services:\n  c:\n    environment: {{ C{i}: x }}\n");
+        }
+
+        var compose = folder.Write("compose.yaml", "include: [r1.yaml]\nservices:\n  a1: { extends: b }\n  a2: { extends: b }\n  a3: { extends: b }\n");
+        ComposeProject Load(int bound)
+        {
+            var options = new ComposeOptions { MaxLoadExtendedParts = bound };
+            return ComposeProject.Load([compose], options);
+        }
+
+        Assert.Equal(["a1", "a2", "a3", "b", "c"], Load(45).ServiceNames);
+        var ex = Assert.Throws<FormatException>(() => Load(44));
+
+        Assert.Equal("The services of this load extend services that bring in more than 44 parts.", ex.Message);
+    }
+
+    [Fact]
+    public void A_service_the_including_file_also_declares_merges_over_the_included_one()
+    {
+        using var folder = new TempFolder();
+        folder.Write("inc/compose.yaml", "services:\n  db:\n    image: pg\n    environment:\n      LEVEL: included\n      KEEP: yes\n");
+        var compose = folder.Write("compose.yaml", "include: [inc/compose.yaml]\nservices:\n  db:\n    environment:\n      LEVEL: parent\n");
+
+        var project = ComposeProject.Load(compose);
+
+        var db = Service(project, "db");
+        Assert.Equal(["db"], project.ServiceNames);
+        Assert.Equal("parent", db.Environment["LEVEL"]);
+        Assert.Equal("yes", db.Environment["KEEP"]);
+        Assert.Equal(["inc/compose.yaml:5", "compose.yaml:5"], db.Layers("LEVEL").Select(l => l.Location));
+        Assert.Empty(project.Warnings);
+    }
+
+    [Fact]
+    public void An_earlier_include_wins_over_a_later_one_and_each_file_over_its_own_includes()
+    {
+        using var folder = new TempFolder();
+        folder.Write("a/compose.yaml", "services:\n  x:\n    environment: { V: a, A: a }\n");
+        folder.Write("b/compose.yaml", "services:\n  x:\n    environment: { V: b, B: b }\n");
+        folder.Write("c/compose.yaml", "services:\n  db:\n    environment: { LEVEL: from-override-include }\n");
+        var main = folder.Write("compose.yaml", "include: [a/compose.yaml, b/compose.yaml]\nservices:\n  db:\n    environment: { LEVEL: main }\n");
+        var over = folder.Write("compose.override.yaml", "include: [c/compose.yaml]\n");
+
+        var project = ComposeProject.Load(main, over);
+
+        var x = Service(project, "x");
+        Assert.Equal(("a", "a", "b"), (x.Environment["V"], x.Environment["A"], x.Environment["B"]));
+        Assert.Equal(["b/compose.yaml:3", "a/compose.yaml:3"], x.Layers("V").Select(l => l.Location));
+        Assert.Equal("from-override-include", Service(project, "db").Environment["LEVEL"]);
+        Assert.Equal(["db", "x"], project.ServiceNames);
+    }
+
+    [Fact]
+    public void A_service_can_extend_an_included_service()
+    {
+        using var folder = new TempFolder();
+        folder.Write("inc/.env", "FROM_INCLUDE=inc-dotenv\n");
+        folder.Write("inc/compose.yaml", "services:\n  db:\n    environment:\n      LEVEL: included\n      KEEP: ${FROM_INCLUDE}\n");
+        var compose = folder.Write("compose.yaml", "include: [inc/compose.yaml]\nservices:\n  worker:\n    extends: { service: db }\n    environment: { W: 1 }\n");
+
+        var project = ComposeProject.Load(compose);
+
+        var worker = Service(project, "worker");
+        Assert.Equal("included", worker.Environment["LEVEL"]);
+        Assert.Equal("inc-dotenv", worker.Environment["KEEP"]);
+        Assert.Equal("1", worker.Environment["W"]);
+        Assert.Empty(worker.Warnings);
+        Assert.Empty(project.Warnings);
     }
 
     [Fact]
@@ -1591,5 +1725,52 @@ public class ComposeProjectTests
         Assert.Throws<ArgumentNullException>(() => service.MountLayers(null!));
         Assert.Empty(service.Environment);
         Assert.Equal("app", service.Name);
+    }
+}
+
+// The large include runs alone, after the tests of this assembly that run in parallel, so that its processor time and
+// memory do not slow the timing tests of this assembly. Other test assemblies can still run beside it.
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class LargeComposeFiles
+{
+    public const string Name = "Large compose files";
+}
+
+[Collection(LargeComposeFiles.Name)]
+public class ComposeProjectLargeIncludeTests
+{
+    [Fact(Timeout = 60_000)]
+    public async Task Takes_in_a_large_include_in_linear_time()
+    {
+        // Three included files of about 1 MiB with 108,798 services each. Looking each imported name up in a list of all
+        // of them took 6 min 48 s (5 min 11 s of CPU) on a busy 4-core machine; with a set, the same run took 13 s.
+        using var folder = new TempFolder();
+        var count = 0;
+        foreach (var prefix in new[] { "x", "y", "z" })
+        {
+            var text = new System.Text.StringBuilder("services: {");
+            for (var i = 0; text.Length < 1_040_000; i++, count++)
+            {
+                text.Append(prefix);
+                var n = i;
+                do
+                {
+                    text.Append("0123456789abcdefghijklmnopqrstuvwxyz"[n % 36]);
+                    n /= 36;
+                }
+                while (n > 0);
+
+                text.Append(": {},");
+            }
+
+            folder.Write($"{prefix}.yaml", text.Append("}\n").ToString());
+        }
+
+        var compose = folder.Write("compose.yaml", "include: [x.yaml, y.yaml, z.yaml]\nservices:\n  api: {}\n");
+
+        var project = await Task.Run(() => ComposeProject.Load(compose), TestContext.Current.CancellationToken);
+
+        Assert.Equal(count + 1, project.ServiceNames.Count);
+        Assert.Empty(project.Warnings);
     }
 }
