@@ -22,7 +22,9 @@ public sealed record AzureAppConfigurationSetting(string Key, string? Label, str
     /// <summary>
     /// The configuration key the .NET provider sets: the key with any trimmed prefix removed, or
     /// <c>FeatureManagement:&lt;name&gt;</c> for a feature flag. For a value flattened from a key-value with a JSON content
-    /// type, the key the provider flattens it to, such as <c>Orders:Retry:Count</c>.
+    /// type, the key the provider flattens it to, such as <c>Orders:Retry:Count</c>. Empty for a feature flag with variants,
+    /// an allocation or telemetry, which the provider writes under <c>feature_management:feature_flags:&lt;i&gt;</c>
+    /// instead; such a flag sets no key that is traced, and an empty key is never indexed.
     /// </summary>
     public string ConfigurationKey { get; init; } = Key;
 
@@ -33,7 +35,8 @@ public sealed record AzureAppConfigurationSetting(string Key, string? Label, str
     /// The value. For a value flattened from a JSON key-value, the one value at <see cref="ConfigurationKey"/>; the stored
     /// key-value itself holds the whole JSON text. For a feature flag
     /// without filters, <c>True</c> or <c>False</c> as the .NET provider sets it. Null for a
-    /// Key Vault reference (the value is in the vault) and for a feature flag with filters.
+    /// Key Vault reference (the value is in the vault), for a feature flag with filters and for one with no
+    /// <see cref="ConfigurationKey"/>.
     /// </summary>
     public string? Value { get; init; }
 

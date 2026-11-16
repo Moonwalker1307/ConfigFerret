@@ -69,7 +69,8 @@ public sealed class AzureAppConfigurationSettings
         {
             ArgumentNullException.ThrowIfNull(setting, nameof(settings));
             Add(_byStoredKey, setting.Key, setting);
-            var values = Flattened(setting) ?? [setting];
+            // An empty configuration key is no key: a flag in the newer layout sets none that is traced.
+            var values = (Flattened(setting) ?? [setting]).Where(value => value.ConfigurationKey.Length > 0).ToList();
             foreach (var value in values)
             {
                 Add(_byKey, value.ConfigurationKey, value);
@@ -77,12 +78,13 @@ public sealed class AzureAppConfigurationSettings
             }
 
             // A JSON key-value also answers to its own configuration key, once, unless a value it sets already does.
-            if (!values.Any(value => string.Equals(value.ConfigurationKey, setting.ConfigurationKey, StringComparison.OrdinalIgnoreCase)))
+            if (setting.ConfigurationKey.Length > 0
+                && !values.Any(value => string.Equals(value.ConfigurationKey, setting.ConfigurationKey, StringComparison.OrdinalIgnoreCase)))
             {
                 Add(_byKeyOrOwnKey, setting.ConfigurationKey, setting);
             }
 
-            if (IsFlagWithFilters(setting))
+            if (IsFlagWithFilters(setting) && setting.ConfigurationKey.Length > 0)
             {
                 flagKeyLengths.Add(setting.ConfigurationKey.Length);
             }
@@ -215,6 +217,14 @@ public sealed class AzureAppConfigurationSettings
             }
         }
 
+        var newerLayout = settings.Count(s => s.Kind == AzureAppConfigurationSettingKind.FeatureFlag && s.ConfigurationKey.Length == 0);
+        if (newerLayout > 0)
+        {
+            warnings.Add(newerLayout == 1
+                ? $"Azure App Configuration {store} has 1 feature flag with variants, an allocation or telemetry, which the provider writes under feature_management:feature_flags; it is not traced."
+                : $"Azure App Configuration {store} has {newerLayout} feature flags with variants, an allocation or telemetry, which the provider writes under feature_management:feature_flags; they are not traced.");
+        }
+
         return new AzureAppConfigurationSettings(store, settings, warnings, flattened);
     }
 
@@ -232,7 +242,8 @@ public sealed class AzureAppConfigurationSettings
     internal static string? Detail(AzureAppConfigurationSetting setting) => setting.Kind switch
     {
         AzureAppConfigurationSettingKind.KeyVaultReference => setting.SecretId is null ? "Key Vault reference" : $"Key Vault reference to {setting.SecretId}",
-        AzureAppConfigurationSettingKind.FeatureFlag => setting.Enabled == true ? "feature flag, on" : "feature flag, off",
+        AzureAppConfigurationSettingKind.FeatureFlag => (setting.Enabled == true ? "feature flag, on" : "feature flag, off")
+            + (setting.ConfigurationKey.Length == 0 ? ", in the newer layout, not traced" : string.Empty),
         _ => string.IsNullOrEmpty(setting.ContentType) ? null : $"content type {setting.ContentType}",
     };
 
@@ -575,6 +586,7 @@ public sealed class AzureAppConfigurationSettings
     {
         var name = basic.Key[FeatureFlagPrefix.Length..];
         bool? enabled = null;
+        var newerLayout = false;
         var filters = new List<string>();
         try
         {
@@ -600,6 +612,8 @@ public sealed class AzureAppConfigurationSettings
                         .Where(name => name is not null)
                         .Select(name => name!));
                 }
+
+                newerLayout = IsNewerLayout(root);
             }
         }
         catch (JsonException)
@@ -613,17 +627,26 @@ public sealed class AzureAppConfigurationSettings
         }
 
         // The .NET provider sets FeatureManagement:<name> to true or false, or, with filters, FeatureManagement:<name>:EnabledFor.
-        // It trims that key by the prefixes, as it trims the keys of key-values.
-        var value = enabled is null || (enabled == true && filters.Count > 0) ? null : (enabled == true ? "True" : "False");
+        // It trims that key by the prefixes, as it trims the keys of key-values. A flag in the newer layout sets none of them.
+        var value = newerLayout || enabled is null || (enabled == true && filters.Count > 0) ? null : (enabled == true ? "True" : "False");
         return basic with
         {
             Kind = AzureAppConfigurationSettingKind.FeatureFlag,
-            ConfigurationKey = Trim("FeatureManagement:" + name, prefixes),
+            ConfigurationKey = newerLayout ? string.Empty : Trim("FeatureManagement:" + name, prefixes),
             Enabled = enabled,
             Filters = filters,
             Value = value,
         };
     }
+
+    // The provider writes a flag under feature_management:feature_flags:<i>, the newer layout, and not under
+    // FeatureManagement:<name>, when it has a variant with a name, an allocation or telemetry: its parser keeps a variant
+    // only when it is an object whose "name" is a string, and an allocation or telemetry only when it is an object.
+    private static bool IsNewerLayout(JsonElement flag) =>
+        (flag.TryGetProperty("variants", out var variants) && variants.ValueKind == JsonValueKind.Array
+            && variants.EnumerateArray().Any(v => v.ValueKind == JsonValueKind.Object && v.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String))
+        || (flag.TryGetProperty("allocation", out var allocation) && allocation.ValueKind == JsonValueKind.Object)
+        || (flag.TryGetProperty("telemetry", out var telemetry) && telemetry.ValueKind == JsonValueKind.Object);
 
     private static Uri? ReadSecretUri(string? raw)
     {
