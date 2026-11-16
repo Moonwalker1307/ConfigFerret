@@ -55,8 +55,13 @@ internal sealed class AppOptions
 
     public Option<string[]> Config { get; } = new("--config")
     {
-        Description = "Another JSON settings file the app loads after the appsettings files. Repeat in load order.",
+        Description = "A JSON settings file the app adds itself, loaded after the environment variables and the command line. Repeat in load order.",
         HelpName = "file",
+    };
+
+    public Option<bool> ConfigBeforeEnv { get; } = new("--config-before-env")
+    {
+        Description = "Load the --config files right after the appsettings files, below user secrets, the environment variables and the command line, for an app that adds the variables again after its file.",
     };
 
     public Option<string[]> Env { get; } = new("--env")
@@ -98,6 +103,7 @@ internal sealed class AppOptions
         command.Options.Add(App);
         command.Options.Add(Environment);
         command.Options.Add(Config);
+        command.Options.Add(ConfigBeforeEnv);
         command.Options.Add(Env);
         command.Options.Add(EnvFile);
         command.Options.Add(EnvPrefix);

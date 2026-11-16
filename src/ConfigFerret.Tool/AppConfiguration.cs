@@ -10,6 +10,7 @@ internal sealed record AppInputs(
     string AppDirectory,
     string? EnvironmentName,
     IReadOnlyList<string> ConfigFiles,
+    bool ConfigFilesBeforeEnvironment,
     IReadOnlyList<string> EnvironmentPrefixes,
     IReadOnlyDictionary<string, string?> Environment,
     IReadOnlyList<string> CommandLine,
@@ -19,11 +20,15 @@ internal sealed record AppInputs(
 /// <summary>
 /// Builds configuration the way <c>WebApplication.CreateBuilder</c> and <c>Host.CreateApplicationBuilder</c> do,
 /// from files on disk instead of a running app: <c>appsettings.json</c>, <c>appsettings.{Environment}.json</c>, user
-/// secrets in Development, environment variables, then the command line.
+/// secrets in Development, environment variables, the command line, then the settings files the app adds itself.
 /// </summary>
 internal static partial class AppConfiguration
 {
     public const string DefaultEnvironment = "Production";
+
+    // Paths that differ only in case name the same file on Windows and macOS.
+    private static readonly StringComparer PathComparer =
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     public static string PickEnvironment(AppInputs inputs) =>
         inputs.EnvironmentName
@@ -40,27 +45,41 @@ internal static partial class AppConfiguration
             throw new UsageException($"'{environmentName}' is not a valid environment name.");
         }
 
+        var configFiles = inputs.ConfigFiles.Select(file => Path.GetFullPath(InputReader.RequireFile(file))).ToList();
+        var configTargets = configFiles.Select(f => Kustomization.RealPath(f)).OfType<string>().ToHashSet(PathComparer);
+
         var builder = new ConfigurationBuilder();
         var baseFile = Path.Join(directory, "appsettings.json");
         var environmentFile = Path.Join(directory, $"appsettings.{environmentName}.json");
         var foundAny = false;
         foreach (var file in new[] { baseFile, environmentFile }.Distinct(StringComparer.Ordinal).Where(File.Exists))
         {
-            RequireInFolder(file, directory);
+            // A settings file the tool finds by itself may be a link, as in a mounted ConfigMap, but only to a file in
+            // the app folder: the checkout may come from someone else, and a link is a few bytes in Git.
+            if (!Kustomization.IsInFolder(file, directory))
+            {
+                // A --config file that names the same file reads it once, where the --config files load.
+                if (Kustomization.RealPath(file) is { } target && configTargets.Contains(target))
+                {
+                    continue;
+                }
+
+                throw new UsageException($"{file} links to a file outside the app folder. Pass that file with --config to read it anyway; it then loads where the --config files do.");
+            }
+
             InputReader.RequireFoundFileSize(file);
             builder.AddJsonFile(file, optional: false);
             foundAny = true;
         }
 
-        foreach (var file in inputs.ConfigFiles)
-        {
-            builder.AddJsonFile(Path.GetFullPath(InputReader.RequireFile(file)), optional: false);
-            foundAny = true;
-        }
-
-        if (!foundAny)
+        if (!foundAny && configFiles.Count == 0)
         {
             throw new UsageException(NoSettingsMessage(directory));
+        }
+
+        if (inputs.ConfigFilesBeforeEnvironment)
+        {
+            AddJsonFiles(builder, configFiles);
         }
 
         var secretsId = inputs.UserSecretsId ?? FindUserSecretsId(directory);
@@ -86,7 +105,21 @@ internal static partial class AppConfiguration
             builder.AddCommandLine([.. inputs.CommandLine]);
         }
 
+        // A file the app adds itself comes after everything the host set up.
+        if (!inputs.ConfigFilesBeforeEnvironment)
+        {
+            AddJsonFiles(builder, configFiles);
+        }
+
         return builder.Build();
+    }
+
+    private static void AddJsonFiles(ConfigurationBuilder builder, List<string> files)
+    {
+        foreach (var file in files)
+        {
+            builder.AddJsonFile(file, optional: false);
+        }
     }
 
     /// <summary>Reads <c>UserSecretsId</c> from the one project file in <paramref name="directory"/>, if there is one.</summary>
@@ -178,15 +211,6 @@ internal static partial class AppConfiguration
         }
     }
 
-    // A settings file the tool finds by itself may be a link, as in a mounted ConfigMap, but only to a file in the app
-    // folder: the checkout may come from someone else, and a link is a few bytes in Git.
-    private static void RequireInFolder(string file, string directory)
-    {
-        if (!Kustomization.IsInFolder(file, directory))
-        {
-            throw new UsageException($"{file} links to a file outside the app folder. Pass it with --config to read it anyway.");
-        }
-    }
 
     private static string? Get(IReadOnlyDictionary<string, string?> environment, string name) =>
         environment.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
