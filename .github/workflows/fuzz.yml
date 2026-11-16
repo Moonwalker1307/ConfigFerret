@@ -66,18 +66,22 @@ jobs:
           path: fuzz/work/${{ matrix.target }}/corpus
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
 
+      # Upload before the replay, so the input is kept whatever the replay does, and also when the job is cancelled.
+      - name: Upload the findings
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-findings-${{ matrix.target }}
+          path: fuzz/findings/${{ matrix.target }}
+          if-no-files-found: ignore
+
+      # The replay has no time limit of its own, so an input that hangs (timeout-<hash>) is stopped after two minutes.
+      # The Fuzz step has already failed the job.
       - name: Replay the findings for a readable stack trace
         if: failure()
         env:
           TARGET: ${{ matrix.target }}
         run: |
           dotnet build fuzz/ConfigFerret.Fuzz -c Release -p:TargetFrameworks=net10.0 -v quiet
-          fuzz/ConfigFerret.Fuzz/bin/Release/net10.0/ConfigFerret.Fuzz "$TARGET" "fuzz/findings/$TARGET" || true
-
-      - name: Upload the findings
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: fuzz-findings-${{ matrix.target }}
-          path: fuzz/findings/${{ matrix.target }}
-          if-no-files-found: ignore
+          timeout 120 fuzz/ConfigFerret.Fuzz/bin/Release/net10.0/ConfigFerret.Fuzz "$TARGET" "fuzz/findings/$TARGET" ||
+            echo "The replay exited with code $? (124 means it was stopped after 120 seconds)."

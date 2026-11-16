@@ -65,6 +65,7 @@ dotnet build fuzz/ConfigFerret.Fuzz -c Release -p:TargetFrameworks=net10.0
 fuzz/ConfigFerret.Fuzz/bin/Release/net10.0/ConfigFerret.Fuzz kubernetes fuzz/findings/kubernetes/crash-<hash>
 ```
 
-When the nightly run fails, the workflow replays the crash in its log and uploads it as the
-`fuzz-findings-<target>` artifact. After fixing it, add the input to `tests/ConfigFerret.Tests/TestData/fuzz/`
-with a test in `FuzzRegressionTests.cs`.
+When the nightly run fails, the workflow uploads the failing input (`crash-<hash>`, or `timeout-<hash>` for one
+that took longer than 10 seconds) as the `fuzz-findings-<target>` artifact, then replays it in its log. The replay is
+stopped after two minutes, so an input that hangs shows no stack trace there. After fixing it, add the input to
+`tests/ConfigFerret.Tests/TestData/fuzz/` with a test in `FuzzRegressionTests.cs`.
