@@ -112,8 +112,9 @@ public sealed partial class RepositoryAnalyzer
         var profile = new Profile { Name = Path.GetFileName(scan.Root) };
         var app = scan.Apps.FirstOrDefault(a => a.RelativePath == choices.App);
 
-        // Rendered manifests: a Helm release, else a Kustomize overlay, else plain manifests in the repository.
-        string? manifestsFile = null;
+        // Rendered manifests: a Helm release, else a Kustomize overlay, else plain manifests in the repository. Rendered
+        // ones stay in memory and are never written to disk: they can hold secrets from the chart's values.
+        (string Name, string Text)? rendered = null;
         HelmChartInfo? chart = scan.HelmCharts.FirstOrDefault(c => c.RelativePath == choices.HelmChart);
         if (chart is not null)
         {
@@ -125,10 +126,9 @@ public sealed partial class RepositoryAnalyzer
                 arguments.AddRange(["-f", scan.Full(choices.HelmValues)]);
             }
 
-            var rendered = _render("helm", arguments);
-            if (rendered is not null)
+            if (_render("helm", arguments) is { } output)
             {
-                manifestsFile = WriteTemp("helm-template.yaml", rendered);
+                rendered = ("helm-template.yaml", output);
             }
             else
             {
@@ -141,12 +141,11 @@ public sealed partial class RepositoryAnalyzer
         var kustomization = choices.Kustomization;
         if (kustomization is not null)
         {
-            if (manifestsFile is null)
+            if (rendered is null)
             {
-                var rendered = _render("kubectl", ["kustomize", scan.Full(kustomization)]) ?? _render("kustomize", ["build", scan.Full(kustomization)]);
-                if (rendered is not null)
+                if ((_render("kubectl", ["kustomize", scan.Full(kustomization)]) ?? _render("kustomize", ["build", scan.Full(kustomization)])) is { } output)
                 {
-                    manifestsFile = WriteTemp("kustomize-build.yaml", rendered);
+                    rendered = ("kustomize-build.yaml", output);
                 }
                 else
                 {
@@ -157,11 +156,12 @@ public sealed partial class RepositoryAnalyzer
             profile.Sources.Add(new KustomizeSource { Name = $"Kustomize {kustomization}", Folder = scan.Full(kustomization) });
         }
 
-        var manifestPaths = manifestsFile is not null ? [manifestsFile] : scan.Manifests.Select(scan.Full).ToList();
+        var manifestPaths = rendered is not null ? [] : scan.Manifests.Select(scan.Full).ToList();
         var prefixes = new List<string>();
-        if (manifestPaths.Count > 0)
+        var hasManifests = rendered is not null || manifestPaths.Count > 0;
+        if (hasManifests)
         {
-            var kubernetes = new KubernetesSource { Name = manifestsFile is null ? "Kubernetes manifests" : "Rendered manifests", Paths = manifestPaths };
+            var kubernetes = new KubernetesSource { Name = rendered is null ? "Kubernetes manifests" : "Rendered manifests", Paths = manifestPaths, Rendered = rendered };
             PickContainer(kubernetes, scan, app, prefixes, notes);
             profile.Sources.Insert(0, kubernetes);
         }
@@ -183,7 +183,7 @@ public sealed partial class RepositoryAnalyzer
                 EnvironmentPrefixes = prefixes,
             });
         }
-        else if (manifestPaths.Count > 0)
+        else if (hasManifests)
         {
             profile.Mode = TraceMode.Container;
             notes.Add("No appsettings.json was found, so the container's environment variables and files are traced from the manifests.");
@@ -225,7 +225,7 @@ public sealed partial class RepositoryAnalyzer
         KubernetesManifests manifests;
         try
         {
-            manifests = KubernetesManifests.LoadFiles([.. source.Paths]);
+            manifests = source.Rendered is { } rendered ? KubernetesManifests.Parse(rendered.Text, rendered.Name) : KubernetesManifests.LoadFiles([.. source.Paths]);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or InvalidOperationException or YamlDotNet.Core.YamlException)
         {
@@ -344,15 +344,6 @@ public sealed partial class RepositoryAnalyzer
         ("GIT_ALLOW_PROTOCOL", "file"),
         ("GIT_TERMINAL_PROMPT", "0"),
     ];
-
-    private static string WriteTemp(string name, string text)
-    {
-        // A new folder only this user can open: rendered manifests can hold secrets from the chart's values.
-        var folder = Directory.CreateTempSubdirectory("configferret-render-").FullName;
-        var path = Path.Join(folder, name);
-        File.WriteAllText(path, text);
-        return path;
-    }
 
     /// <summary>
     /// Runs <paramref name="tool"/> with no shell and returns its output, or null when it is missing, fails or takes over

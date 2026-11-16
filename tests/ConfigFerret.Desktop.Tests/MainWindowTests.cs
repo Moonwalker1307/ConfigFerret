@@ -4,6 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using ConfigFerret.Desktop.Credentials;
+using ConfigFerret.Desktop.Model;
 using ConfigFerret.Desktop.Services;
 using ConfigFerret.Desktop.ViewModels;
 using ConfigFerret.Desktop.Views;
@@ -192,6 +193,30 @@ public sealed class MainWindowTests : IDisposable
         Dispatcher.UIThread.RunJobs();
         await Screenshots.SaveAsync(window, "welcome");
         window.Close();
+    }
+
+    [AvaloniaFact]
+    public async Task The_result_on_show_does_not_keep_the_rendered_manifests()
+    {
+        var repo = Path.Join(_temp.FullName, "shop");
+        Directory.CreateDirectory(Path.Join(repo, "src", "Api"));
+        File.WriteAllText(Path.Join(repo, "src", "Api", "appsettings.json"), """{ "Mode": "dev" }""");
+        Directory.CreateDirectory(Path.Join(repo, "chart"));
+        File.WriteAllText(Path.Join(repo, "chart", "Chart.yaml"), "name: api\n");
+        const string rendered = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  template:\n    spec:\n      containers:\n        - name: api\n          image: api:1\n          env:\n            - name: Mode\n              value: rendered\n";
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((tool, _) => tool == "helm" ? rendered : null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+
+        // The trace used the rendered text, and the result shown for the life of the tab no longer holds it.
+        Assert.Contains(viewModel.Rows, r => r.Key == "Mode" && r.Value == "rendered");
+        var kubernetes = Assert.Single(Assert.IsType<TraceResult>(viewModel.LastResult).Sources.Select(s => s.Source).OfType<KubernetesSource>());
+        Assert.Null(kubernetes.Rendered);
     }
 
     [AvaloniaFact]

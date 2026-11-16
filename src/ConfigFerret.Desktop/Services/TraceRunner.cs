@@ -378,13 +378,18 @@ public sealed class TraceRunner
 
     private static KubernetesManifests LoadManifests(KubernetesSource source)
     {
-        if (source.Paths.Count == 0)
+        if (source.Paths.Count == 0 && source.Rendered is null)
         {
             throw new TraceSetupException($"{source.Name}: add at least one manifest file or folder.");
         }
 
         try
         {
+            if (source.Rendered is { } rendered)
+            {
+                return KubernetesManifests.Parse(rendered.Text, rendered.Name);
+            }
+
             foreach (var path in source.Paths.Where(p => !File.Exists(p) && !Directory.Exists(p)))
             {
                 throw new FileNotFoundException($"{path} does not exist.");
@@ -752,10 +757,10 @@ public sealed class TraceRunner
 
     private static string? Blank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
-    // Which tool rendered the manifests, so the audit doesn't point at its output. Only a source the analyzer made from
-    // what it rendered counts (it names those "Rendered manifests"), so a committed file named like the output stays a file.
+    // Which tool rendered the manifests, so the audit doesn't point at its output. Only text the analyzer rendered counts
+    // (it hands that over in memory, never as a path), so a committed file named like the output stays a file.
     private static RenderedManifests RenderedBy(KubernetesSource? source) =>
-        (source is { Name: "Rendered manifests", Paths: [var only] } ? Path.GetFileName(only) : null) switch
+        source?.Rendered?.Name switch
         {
             "helm-template.yaml" => RenderedManifests.Helm,
             "kustomize-build.yaml" => RenderedManifests.Kustomize,

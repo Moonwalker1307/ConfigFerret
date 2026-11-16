@@ -1,3 +1,4 @@
+using ConfigFerret.Desktop.Credentials;
 using ConfigFerret.Desktop.Model;
 using ConfigFerret.Desktop.Services;
 
@@ -132,9 +133,8 @@ public class RepositoryAnalyzerTests : IDisposable
 
         var kubernetes = Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource));
         Assert.Equal("Rendered manifests", kubernetes.Name);
-        var rendered = Assert.Single(kubernetes.Paths);
-        Assert.NotEqual(OrdersRepo.Full("deploy/rendered.yaml"), rendered);
-        Assert.Equal(yaml, File.ReadAllText(rendered));
+        Assert.Empty(kubernetes.Paths);
+        Assert.Equal(("helm-template.yaml", yaml), kubernetes.Rendered);
         Assert.Equal("orders", kubernetes.Container);
         Assert.DoesNotContain(notes, n => n.Contains("Install helm", StringComparison.Ordinal));
         Assert.Equal(["ORDERS_"], Assert.IsType<AppSettingsSource>(profile.Sources[0]).EnvironmentPrefixes);
@@ -187,27 +187,17 @@ public class RepositoryAnalyzerTests : IDisposable
     }
 
     [Fact]
-    public void Writes_the_rendered_manifests_into_a_folder_only_the_user_can_open()
+    public async Task Traces_the_rendered_manifests_without_writing_them_to_disk()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        var yaml = File.ReadAllText(OrdersRepo.Full("deploy/rendered.yaml"));
-
+        // Rendered manifests can hold secrets from the chart's values, so no copy of them may be left behind.
+        var yaml = File.ReadAllText(OrdersRepo.Full("deploy/rendered.yaml")).Replace("orders-db.prod.svc", "orders-db.rendered.svc", StringComparison.Ordinal);
         var (profile, _) = Build(new RepositoryAnalyzer((tool, _) => tool == "helm" ? yaml : null), NoConnections);
 
-        var rendered = Assert.Single(Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource)).Paths);
-        var folder = Path.GetDirectoryName(rendered)!;
-        try
-        {
-            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(folder));
-        }
-        finally
-        {
-            Directory.Delete(folder, recursive: true);
-        }
+        var result = await new TraceRunner(new InMemoryCredentialStore(), _ => null).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal("orders-db.rendered.svc", result.Report.Find("Db:Host")?.Value);
+        var repository = OrdersRepo.Full(".") + Path.DirectorySeparatorChar;
+        Assert.All(profile.Sources.OfType<KubernetesSource>().SelectMany(k => k.Paths), p => Assert.StartsWith(repository, p, StringComparison.Ordinal));
     }
 
     [Fact]

@@ -1157,8 +1157,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>The result on show, or null. For tests.</summary>
+    internal TraceResult? LastResult => _lastResult;
+
     internal void ShowResult(TraceResult result, IReadOnlyList<string> notes)
     {
+        // The result keeps its sources for the life of the tab, and nothing reads the rendered manifests after the trace.
+        foreach (var kubernetes in result.Sources.Select(s => s.Source).OfType<KubernetesSource>())
+        {
+            kubernetes.Rendered = null;
+        }
+
         _lastResult = result;
         var previousKey = SelectedRow?.Key;
         var dead = result.DeadSettings.ToDictionary(d => d.Key, d => d.Reason, StringComparer.OrdinalIgnoreCase);
