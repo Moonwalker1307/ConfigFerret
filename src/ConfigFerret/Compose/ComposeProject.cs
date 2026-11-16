@@ -15,7 +15,8 @@ namespace ConfigFerret.Compose;
 /// <remarks>
 /// <para>
 /// A service's environment is each <c>env_file</c> in order, then its <c>environment</c> entries, which win. A later
-/// compose file's <c>environment</c> entry wins over an earlier one's; <c>env_file</c> lists are appended.
+/// compose file's <c>environment</c> entry wins over an earlier one's; <c>env_file</c> lists are appended, and a path
+/// listed again keeps its first place.
 /// <c>!reset</c> and <c>!override</c> tags and YAML merge keys (<c>&lt;&lt;: *anchor</c>) are applied.
 /// </para>
 /// <para>
@@ -559,8 +560,16 @@ public sealed class ComposeProject
             var raw = string.Equals(item.Str("format"), "raw", StringComparison.Ordinal);
             var full = FullPath(part.File.Base, path);
             var declaration = new EnvFileDeclaration(full is null ? path : Display(full), full, required, raw, at);
-            envFiles.RemoveAll(e => string.Equals(e.Display, declaration.Display, StringComparison.Ordinal));
-            envFiles.Add(declaration);
+            // Like compose, a path listed again keeps its first place, with what its last entry says.
+            var index = envFiles.FindIndex(e => string.Equals(e.Display, declaration.Display, StringComparison.Ordinal));
+            if (index >= 0)
+            {
+                envFiles[index] = declaration;
+            }
+            else
+            {
+                envFiles.Add(declaration);
+            }
         }
     }
 
