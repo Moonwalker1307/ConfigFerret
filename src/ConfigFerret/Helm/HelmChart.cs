@@ -14,6 +14,7 @@ public sealed partial class HelmChart
 {
     private readonly Dictionary<string, List<HelmValueStep>> _history = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<HelmTemplateUse>> _uses = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _named = new(StringComparer.Ordinal); // every .Values path a template names
 
     private HelmChart(string? chartDirectory) => ChartDirectory = chartDirectory;
 
@@ -247,6 +248,7 @@ public sealed partial class HelmChart
             foreach (Match m in ValuesReference().Matches(line))
             {
                 var valuesPath = m.Groups[1].Value;
+                _named.Add(valuesPath);
                 var keyMatch = YamlKey().Match(line);
                 if (!keyMatch.Success)
                 {

@@ -143,6 +143,11 @@ public sealed class GitOpsResolverTests : IDisposable
         var steps = resolver.Resolve(new ProvenanceStep { Kind = LayerKind.Helm, Source = "t", Reference = new HelmValueRef("db.password") }, new TraceDiagnostics());
         Assert.Equal([false, true], steps.Select(s => s.IsSensitive));
         Assert.Equal([LayerKind.Helm, LayerKind.GitOps], steps.Select(s => s.Kind));
+
+        // A template names db.password, so it is used even with no step that links to it, and it stays a secret entry.
+        var loaded = new LoadedConfigSource("flux", resolver, resolver.Entries());
+        Assert.DoesNotContain(loaded.FindUnused(new ProvenanceReport([], [])), e => e.Name == "db.password");
+        Assert.Contains(password, loaded.Entries);
     }
 
     [Fact]
@@ -276,6 +281,58 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.DoesNotContain("fake-helm-route-s3cr3t", output, StringComparison.Ordinal);
         Assert.True(Assert.Single(report.Settings, s => s.Key == "Db__Route").IsSensitive);
         Assert.Equal("db.local", Assert.Single(report.Settings, s => s.Key == "Db__Host").Value);
+    }
+
+    [Fact]
+    public void Values_that_a_template_names_outside_config_keys_are_not_unused()
+    {
+        Write("chart/Chart.yaml", "name: orders\n");
+        Write("chart/values.yaml", "replicaCount: 1\nimage: {repository: orders, tag: latest}\ndb: {timeout: 30}\n");
+        Write("chart/values-prod.yaml", "replicaCount: 3\ndb: {timeout: 40}\nresources: {limits: {cpu: 500m}}\nnobody: {reads: this}\n");
+        Write("chart/templates/deployment.yaml", """
+            spec:
+              replicas: {{ .Values.replicaCount }}
+              template:
+                spec:
+                  containers:
+                    - name: orders
+                      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                      resources:
+                        {{- toYaml .Values.resources | nindent 12 }}
+                      env:
+                        - name: Db__Timeout
+                          value: "{{ .Values.db.timeout }}"
+            """);
+        var app = GitOpsApplication.Parse("""
+            apiVersion: argoproj.io/v1alpha1
+            kind: Application
+            metadata: {name: orders}
+            spec:
+              source:
+                path: chart
+                helm:
+                  valueFiles: [values-prod.yaml]
+                  parameters:
+                    - {name: image.tag, value: 1.4.2}
+            """, "orders.yaml");
+        var resolver = new GitOpsResolver(app, new GitOpsOptions { RepositoryRoot = _root });
+        var tracer = ConfigTracer.ForContainer(KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: orders}
+            spec:
+              containers:
+                - name: orders
+                  env:
+                    - {name: Db__Timeout, value: "40"}
+            """));
+        var loaded = new LoadedConfigSource("argo", resolver, resolver.Entries());
+        tracer.WithSource(loaded);
+
+        Assert.Equal([new SourceEntry("nobody.reads", new HelmValueRef("nobody.reads"), false, "values-prod.yaml", "Argo CD Application orders")], loaded.FindUnused(tracer.Trace()));
+
+        // Entries still lists every value the Application sets.
+        Assert.Equal(["db.timeout", "image.tag", "nobody.reads", "replicaCount", "resources.limits.cpu"], loaded.Entries.Select(e => e.Name));
     }
 
     [Fact]

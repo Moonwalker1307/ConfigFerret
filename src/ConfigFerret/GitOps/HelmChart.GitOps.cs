@@ -111,7 +111,7 @@ public sealed partial class HelmChart
     internal bool IsSensitivePath(string path) =>
         _history.TryGetValue(path, out var steps) && steps.Count > 0 && IsSensitiveSource(steps[^1].Source);
 
-    /// <summary>The values paths whose effective value comes from a Secret, sorted for <see cref="HoldsSensitive"/>.</summary>
+    /// <summary>The values paths whose effective value comes from a Secret, sorted for <see cref="HoldsPathOrBelow"/>.</summary>
     internal string[] SensitivePaths()
     {
         var paths = _history.Keys.Where(IsSensitivePath).ToArray();
@@ -120,22 +120,60 @@ public sealed partial class HelmChart
     }
 
     /// <summary>
-    /// True when <paramref name="path"/>, or a path below it, is in <paramref name="sensitivePaths"/>. A template that
+    /// True when <paramref name="path"/>, or a path below it, is in <paramref name="sortedPaths"/>. A template that
     /// renders a parent, for example with <c>toJson</c>, renders every value below it. The paths below sort right
     /// after <c>path.</c>, so one search finds them. Parents are never written out: that would cost the square of a
     /// path's length.
     /// </summary>
-    internal static bool HoldsSensitive(string[] sensitivePaths, string path)
+    internal static bool HoldsPathOrBelow(string[] sortedPaths, string path)
     {
-        if (Array.BinarySearch(sensitivePaths, path, StringComparer.Ordinal) >= 0)
+        if (Array.BinarySearch(sortedPaths, path, StringComparer.Ordinal) >= 0)
         {
             return true;
         }
 
         var prefix = path + ".";
-        var next = Array.BinarySearch(sensitivePaths, prefix, StringComparer.Ordinal);
-        next = next < 0 ? ~next : next;
-        return next < sensitivePaths.Length && sensitivePaths[next].StartsWith(prefix, StringComparison.Ordinal);
+        var next = LowerBound(sortedPaths, prefix);
+        return next < sortedPaths.Length && sortedPaths[next].StartsWith(prefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The values paths of <paramref name="paths"/> that a template names: the path itself, a parent such as
+    /// <c>.Values.resources</c> in <c>toYaml</c>, or a value below it. A template that names a path reads it, whatever it
+    /// renders it into.
+    /// </summary>
+    internal HashSet<string> NamedByTemplates(IEnumerable<string> paths)
+    {
+        var sorted = paths.Order(StringComparer.Ordinal).ToArray();
+        var named = _named.Order(StringComparer.Ordinal).ToArray();
+
+        // The paths below a named one sort from "name." up to "name/", as '/' follows '.'. Each named path marks that
+        // range once, so nothing costs more than a search per path.
+        var marks = new int[sorted.Length + 1];
+        foreach (var name in named)
+        {
+            marks[LowerBound(sorted, name + ".")]++;
+            marks[LowerBound(sorted, name + "/")]--;
+        }
+
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        var below = 0;
+        for (var i = 0; i < sorted.Length; i++)
+        {
+            below += marks[i];
+            if (below > 0 || HoldsPathOrBelow(named, sorted[i]))
+            {
+                result.Add(sorted[i]);
+            }
+        }
+
+        return result;
+    }
+
+    private static int LowerBound(string[] sorted, string value)
+    {
+        var index = Array.BinarySearch(sorted, value, StringComparer.Ordinal);
+        return index < 0 ? ~index : index;
     }
 
     /// <summary>
