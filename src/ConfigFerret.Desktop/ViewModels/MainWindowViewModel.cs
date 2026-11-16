@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using ConfigFerret.Desktop.Credentials;
 using ConfigFerret.Desktop.Model;
 using ConfigFerret.Desktop.Services;
+using ConfigFerret.Kustomize;
 
 namespace ConfigFerret.Desktop.ViewModels;
 
@@ -858,11 +859,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             Fill(Apps, scan.Apps.Select(a => a.RelativePath));
             SelectedApp = choices.App;
             RefreshEnvironmentChoices();
-            SelectedEnvironment = choices.Environment;
+            SelectedEnvironment = Environments.FirstOrDefault(e => string.Equals(e, choices.Environment, StringComparison.OrdinalIgnoreCase)) ?? SelectedEnvironment;
             var chart = scan.HelmCharts.FirstOrDefault(c => c.RelativePath == choices.HelmChart);
             HasHelm = chart is not null;
             Fill(ValuesFiles, [None, .. chart?.ValuesFiles ?? []]);
-            SelectedValuesFile = choices.HelmValues ?? None;
+            SelectedValuesFile = choices.HelmValues is { } values && ValuesFiles.Contains(values) ? values : None;
             Fill(GitHubEnvironments, [None, .. gitHubEnvironments]);
             SelectedGitHubEnvironment = choices.GitHubEnvironment ?? None;
         }
@@ -934,10 +935,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (RefuseChoices(scan, out var environment, out var valuesFile) is { } refusal)
+        {
+            ClearResult();
+            ShowDiscoveries(scan, null);
+            StatusText = refusal;
+            Problems.Add(new ProblemRow("error", refusal));
+            ProblemCount = Problems.Count;
+            return;
+        }
+
         var choices = _workspace.Repositories[_currentKey];
         choices.App = SelectedApp;
-        choices.Environment = string.IsNullOrWhiteSpace(SelectedEnvironment) ? "Production" : SelectedEnvironment;
-        choices.HelmValues = SelectedValuesFile is null or None ? null : SelectedValuesFile;
+        choices.Environment = environment;
+        choices.HelmValues = valuesFile;
         choices.GitHubEnvironment = SelectedGitHubEnvironment is null or None ? null : SelectedGitHubEnvironment;
         choices.OctopusProject = SelectedOctopusProject is null or None ? null : SelectedOctopusProject;
         choices.OctopusEnvironment = SelectedOctopusEnvironment is null or AnyEnvironment ? null : SelectedOctopusEnvironment;
@@ -1365,7 +1376,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private void RefreshEnvironmentChoices()
     {
         var app = _scan?.Apps.FirstOrDefault(a => a.RelativePath == SelectedApp);
-        var environments = (app?.Environments ?? []).ToList();
+        // A name with spaces around it (appsettings. Staging.json) would be read as another file, so it is not offered.
+        var environments = (app?.Environments ?? []).Where(e => string.Equals(e, e.Trim(), StringComparison.Ordinal)).ToList();
         foreach (var standard in new[] { "Production", "Staging", "Development" })
         {
             if (!environments.Contains(standard, StringComparer.OrdinalIgnoreCase))
@@ -1380,6 +1392,32 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         Fill(Environments, environments);
         SelectedEnvironment = environments.FirstOrDefault(e => string.Equals(e, current, StringComparison.OrdinalIgnoreCase)) ?? environments[0];
         _populating = populating;
+    }
+
+    // The environment and values file picked, as this repository offers them. Both name a file to read, and in the web
+    // app a pick is whatever the browser sends, so one that was not offered, or whose file leads out of the repository,
+    // is refused with the reason.
+    private string? RefuseChoices(RepositoryScan scan, out string environment, out string? valuesFile)
+    {
+        var picked = string.IsNullOrWhiteSpace(SelectedEnvironment) ? "Production" : SelectedEnvironment;
+        environment = Environments.FirstOrDefault(e => string.Equals(e, picked, StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+        valuesFile = SelectedValuesFile is null or None ? null : ValuesFiles.FirstOrDefault(v => v != None && string.Equals(v, SelectedValuesFile, StringComparison.Ordinal));
+        var app = scan.Apps.FirstOrDefault(a => a.RelativePath == SelectedApp);
+        // The trace reads appsettings.{the name, trimmed}.json, so a name with spaces around it would be checked as one
+        // file and read as another.
+        if (environment.Length == 0
+            || !string.Equals(environment, environment.Trim(), StringComparison.Ordinal)
+            || (app is not null && !Kustomization.IsInFolder(Path.Join(app.Folder, $"appsettings.{environment}.json"), scan.Root)))
+        {
+            return "Pick an environment from the list. The one picked is not one of this app's, or its settings file is outside the repository.";
+        }
+
+        if (SelectedValuesFile is not (null or None) && (valuesFile is null || !Kustomization.IsInFolder(scan.Full(valuesFile), scan.Root)))
+        {
+            return "Pick a Helm values file from the list. The one picked is not one of this chart's, or it is outside the repository.";
+        }
+
+        return null;
     }
 
     private async Task ExportAsync(string suggestedName, Func<ProvenanceReport, string> render)
