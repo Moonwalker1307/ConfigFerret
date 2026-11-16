@@ -21,7 +21,7 @@ public static class TextRenderer
             sb.AppendLine("Warnings:");
             foreach (var warning in report.Warnings)
             {
-                sb.Append("  - ").AppendLine(warning);
+                sb.Append("  - ").AppendLine(Escape(warning));
             }
         }
 
@@ -39,8 +39,8 @@ public static class TextRenderer
 
     private static void Write(StringBuilder sb, TracedSetting setting)
     {
-        sb.Append(setting.Key).Append(" = ").AppendLine(ShowValue(setting));
-        sb.Append("  ").AppendLine(setting.Story);
+        sb.Append(Escape(setting.Key)).Append(" = ").AppendLine(ShowValue(setting));
+        sb.Append("  ").AppendLine(Escape(setting.Story));
         foreach (var step in setting.Steps)
         {
             WriteStep(sb, step, 1);
@@ -52,10 +52,10 @@ public static class TextRenderer
         sb.Append(' ', depth * 2);
         sb.Append(depth == 1 ? "" : "<- ");
         sb.Append(step.IsRemoval ? "[removed]    " : step.IsEffective ? "[effective]  " : "[overridden] ");
-        sb.Append(step.Source);
+        sb.Append(Escape(step.Source));
         if (step.Location is not null)
         {
-            sb.Append(" (").Append(step.Location).Append(')');
+            sb.Append(" (").Append(Escape(step.Location)).Append(')');
         }
 
         if (!step.IsRemoval && step.Value is not null)
@@ -71,7 +71,7 @@ public static class TextRenderer
         sb.AppendLine();
         if (step.Note is not null)
         {
-            sb.Append(' ', (depth * 2) + (depth == 1 ? 13 : 16)).Append(step.Note).AppendLine();
+            sb.Append(' ', (depth * 2) + (depth == 1 ? 13 : 16)).Append(Escape(step.Note)).AppendLine();
         }
 
         foreach (var origin in step.Origins)
@@ -103,7 +103,64 @@ public static class TextRenderer
             return "(null)";
         }
 
-        var oneLine = value.Replace("\r", "", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal);
+        // A Windows line ending reads as one line break; any other carriage return is escaped like the rest.
+        var oneLine = Escape(value.Replace("\r\n", "\n", StringComparison.Ordinal));
         return oneLine.Length > 120 ? $"\"{oneLine[..117]}...\"" : $"\"{oneLine}\"";
     }
+
+    /// <summary>
+    /// Makes text from the input safe to print on one line: control characters (including ESC, line breaks, tab and
+    /// DEL), the Unicode line and paragraph separators and the bidirectional formatting controls are written as
+    /// <c>\n</c>, <c>\r</c>, <c>\t</c> or <c>\uXXXX</c>. Every other character, quotes and backslashes included, is kept.
+    /// </summary>
+    internal static string Escape(string text)
+    {
+        var first = -1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (NeedsEscape(text[i]))
+            {
+                first = i;
+                break;
+            }
+        }
+
+        if (first < 0)
+        {
+            return text;
+        }
+
+        var sb = new StringBuilder(text.Length + 16);
+        sb.Append(text, 0, first);
+        for (var i = first; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (!NeedsEscape(c))
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            switch (c)
+            {
+                case '\n':
+                    sb.Append("\\n");
+                    break;
+                case '\r':
+                    sb.Append("\\r");
+                    break;
+                case '\t':
+                    sb.Append("\\t");
+                    break;
+                default:
+                    sb.Append("\\u").Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool NeedsEscape(char c) =>
+        char.IsControl(c) || c is '\u2028' or '\u2029' or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069');
 }

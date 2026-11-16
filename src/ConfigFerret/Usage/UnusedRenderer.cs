@@ -23,7 +23,7 @@ internal static class UnusedRenderer
         {
             if (!string.Equals(item.Key, lastKey, StringComparison.Ordinal))
             {
-                sb.Append("  ").AppendLine(item.Key);
+                sb.Append("  ").AppendLine(TextRenderer.Escape(item.Key));
                 lastKey = item.Key;
             }
 
@@ -31,7 +31,7 @@ internal static class UnusedRenderer
             sb.Append("      ").Append(item.WonBy.IsRemoval ? "removed by " : "overridden by ").AppendLine(Where(item.WonBy));
             if (item.Upstream.Count > 0)
             {
-                sb.Append("      upstream of ").AppendLine(string.Join(" <- ", item.Upstream.Select(s => s.Source)));
+                sb.Append("      upstream of ").AppendLine(string.Join(" <- ", item.Upstream.Select(s => TextRenderer.Escape(s.Source))));
             }
 
             if (item.SameValueAsWinner)
@@ -78,7 +78,9 @@ internal static class UnusedRenderer
     }
 
     private static string Where(ProvenanceStep step) =>
-        step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
+        step.Location is null
+            ? TextRenderer.Escape(step.Source)
+            : $"{TextRenderer.Escape(step.Source)} ({TextRenderer.Escape(step.Location)})";
 
     public static string RenderJson(UnusedReport report)
     {
