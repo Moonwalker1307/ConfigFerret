@@ -88,6 +88,96 @@ public class JsonApiTests
         Assert.Equal(TimeSpan.FromSeconds(100), client.Timeout);
     }
 
+    // A query and a credential header, neither of which may show up in an error message.
+    private static readonly Uri Paged = new("https://api.example.com/v1/items?page=2&per_page=30");
+
+    private const string FakeToken = "fake-token-never-printed";
+
+    private static Task<System.Text.Json.JsonDocument> Get(HttpClient client, CancellationToken cancellationToken) =>
+        JsonApi.GetAsync(client, Paged, h => h.Add("X-Test-Token", FakeToken), "Example", cancellationToken);
+
+    [Fact]
+    public async Task Fails_with_the_client_timeout_when_the_body_stops_arriving()
+    {
+        using var handler = new ScriptedHandler(_ => Respond(HttpStatusCode.OK, new StalledStream()));
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(300) };
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(
+            () => Get(client, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example did not send a complete response for /v1/items within 0.3 seconds.", ex.Message);
+        Assert.IsType<OperationCanceledException>(ex.InnerException, exactMatch: false);
+    }
+
+    [Fact]
+    public async Task Fails_with_the_client_timeout_when_the_headers_do_not_arrive()
+    {
+        using var handler = new ScriptedHandler(NeverAnswer);
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(300) };
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(
+            () => Get(client, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example did not send a complete response for /v1/items within 0.3 seconds.", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_a_cancellation_by_the_caller_as_a_cancellation(bool headersArrive)
+    {
+        using var handler = new ScriptedHandler(headersArrive ? _ => Respond(HttpStatusCode.OK, new StalledStream()) : NeverAnswer);
+        using var client = new HttpClient(handler);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancel.CancelAfter(TimeSpan.FromMilliseconds(200));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Get(client, cancel.Token));
+    }
+
+    [Fact]
+    public async Task Refuses_a_body_declared_larger_than_the_limit_without_reading_it()
+    {
+        var body = new SpacesStream(JsonApi.MaxResponseBytes + 1L);
+        using var handler = new ScriptedHandler(_ => Respond(HttpStatusCode.OK, body, JsonApi.MaxResponseBytes + 1L));
+        using var client = new HttpClient(handler);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Get(client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example returned a response for /v1/items that is larger than 64 MB.", ex.Message);
+        Assert.Equal(0, body.BytesRead);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task Stops_reading_a_body_without_a_length_at_the_limit(HttpStatusCode status)
+    {
+        const long length = JsonApi.MaxResponseBytes + (1024L * 1024);
+        var body = new SpacesStream(length);
+        using var handler = new ScriptedHandler(_ => Respond(status, body));
+        using var client = new HttpClient(handler);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Get(client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example returned a response for /v1/items that is larger than 64 MB.", ex.Message);
+        Assert.InRange(body.BytesRead, JsonApi.MaxResponseBytes, length - 1);
+    }
+
+    [Fact]
+    public async Task Reads_the_body_in_the_charset_the_server_names()
+    {
+        // UTF-16 with no byte order mark, so only the charset says how to read it.
+        using var handler = new ScriptedHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"name\":\"caf\u00e9\"}", System.Text.Encoding.Unicode, "application/json"),
+        }));
+        using var client = new HttpClient(handler);
+
+        using var doc = await Get(client, TestContext.Current.CancellationToken);
+
+        Assert.Equal("caf\u00e9", doc.RootElement.GetProperty("name").GetString());
+    }
+
     [Fact]
     public async Task Sends_a_user_agent_and_the_callers_headers()
     {
@@ -258,5 +348,101 @@ public class JsonApiTests
         using var okClient = ok.Client();
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => JsonApi.GetAsync(okClient, Api, _ => { }, "Example", _ => throw new HttpRequestException("rejected"), TestContext.Current.CancellationToken));
         Assert.Equal("rejected", ex.Message);
+    }
+
+    private static Task<HttpResponseMessage> Respond(HttpStatusCode status, Stream body, long? declaredLength = null)
+    {
+        var content = new StreamContent(body);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        content.Headers.ContentLength = declaredLength;
+        return Task.FromResult(new HttpResponseMessage(status) { Content = content });
+    }
+
+    // A server that accepts the request and never sends the headers, so only a timeout or a cancellation ends it.
+    private static async Task<HttpResponseMessage> NeverAnswer(CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.Infinite, cancellationToken);
+        throw new InvalidOperationException("Unreachable: the delay only ends by cancellation.");
+    }
+
+    private sealed class ScriptedHandler(Func<CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => respond(cancellationToken);
+    }
+
+    // A body whose bytes stop coming after the headers: a read ends only by cancellation.
+    private sealed class StalledStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    // A body of spaces made as it is read, with no length the client can see, that counts the bytes read.
+    private sealed class SpacesStream(long length) : Stream
+    {
+        public long BytesRead { get; private set; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(Span<byte> buffer)
+        {
+            var count = (int)Math.Min(buffer.Length, length - BytesRead);
+            buffer[..count].Fill((byte)' ');
+            BytesRead += count;
+            return count;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer.AsSpan(offset, count)));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
