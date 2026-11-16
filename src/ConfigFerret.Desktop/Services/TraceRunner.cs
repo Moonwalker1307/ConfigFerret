@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using ConfigFerret.Desktop.Credentials;
@@ -60,11 +61,17 @@ public sealed record DeadSetting(string Key, string Reason, IReadOnlyList<string
 /// <param name="Detail">Its scope or variable set, and whether it is secret.</param>
 public sealed record UnusedVariable(string Tool, string Name, string Detail)
 {
-    /// <summary>The value, when the tool returns it and it is not secret (or secrets are revealed); otherwise null.</summary>
+    /// <summary>The value, when the tool returns it and neither the variable nor its name is secret (or secrets are revealed); otherwise null.</summary>
     public string? Value { get; init; }
 
     /// <summary>True for a secret or sensitive variable.</summary>
     public bool IsSecret { get; init; }
+
+    /// <summary>
+    /// True when the name looks secret, such as <c>SMTP_PASSWORD</c>: it matches the trace's
+    /// <see cref="TraceOptions.SensitiveKeyPattern"/>. The value is then null unless secrets are revealed, as for a setting with that key.
+    /// </summary>
+    public bool NameLooksSecret { get; init; }
 }
 
 /// <summary>A GitHub variable that a workflow uses directly, while no configuration setting picks it up.</summary>
@@ -73,11 +80,17 @@ public sealed record UnusedVariable(string Tool, string Name, string Detail)
 /// <param name="UsedBy">Where a workflow first uses it, for example <c>deploy.yml line 12</c>.</param>
 public sealed record WorkflowVariable(string Name, string Detail, string UsedBy)
 {
-    /// <summary>The value, when GitHub returns it (variables, never secrets); otherwise null.</summary>
+    /// <summary>The value, when GitHub returns it (variables, never secrets) and the name does not look secret (or secrets are revealed); otherwise null.</summary>
     public string? Value { get; init; }
 
     /// <summary>True for a GitHub secret.</summary>
     public bool IsSecret { get; init; }
+
+    /// <summary>
+    /// True when the name looks secret, such as <c>DEPLOY_TOKEN</c>: it matches the trace's
+    /// <see cref="TraceOptions.SensitiveKeyPattern"/>. The value is then null unless secrets are revealed, as for a setting with that key.
+    /// </summary>
+    public bool NameLooksSecret { get; init; }
 }
 
 /// <summary>The profile cannot be traced as set up, for example because it has no app settings source.</summary>
@@ -249,7 +262,7 @@ public sealed class TraceRunner
         }
 
         var workflowVariables = new List<WorkflowVariable>();
-        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, github, octopusVariables, workflowVariables, revealSecrets))
+        return new TraceResult(report, unused, sourceResults, notes, secrets, FindUnusedVariables(report, github, octopusVariables, workflowVariables, tracer.Options.SensitiveKeyPattern, revealSecrets))
         {
             WorkflowVariables = workflowVariables,
             DeadSettings = dead,
@@ -266,6 +279,7 @@ public sealed class TraceRunner
         Dictionary<GitHubSource, GitHubVariables> github,
         List<OctopusVariables> octopus,
         List<WorkflowVariable> workflowOnly,
+        Regex? sensitiveKeyPattern,
         bool revealSecrets)
     {
         var used = new HashSet<SourceRef>();
@@ -288,14 +302,16 @@ public sealed class TraceRunner
                 }
 
                 var isSecret = variable.Kind == GitHubVariableKind.Secret;
+                var looksSecret = LooksSecret(variable.Name);
+                var value = isSecret || (looksSecret && !revealSecrets) ? null : variable.Value;
                 var detail = $"{variable.Scope.ToString().ToLowerInvariant()} {(variable.Kind == GitHubVariableKind.Secret ? "secret" : "variable")} ({variable.Owner})";
                 if (workflows.FirstUse(variable.Kind, variable.Name) is { } usedBy)
                 {
-                    workflowOnly.Add(new WorkflowVariable(variable.Name, detail, usedBy) { Value = isSecret ? null : variable.Value, IsSecret = isSecret });
+                    workflowOnly.Add(new WorkflowVariable(variable.Name, detail, usedBy) { Value = value, IsSecret = isSecret, NameLooksSecret = looksSecret });
                 }
                 else
                 {
-                    unused.Add(new UnusedVariable("GitHub Actions", variable.Name, detail) { Value = isSecret ? null : variable.Value, IsSecret = isSecret });
+                    unused.Add(new UnusedVariable("GitHub Actions", variable.Name, detail) { Value = value, IsSecret = isSecret, NameLooksSecret = looksSecret });
                 }
             }
         }
@@ -304,15 +320,20 @@ public sealed class TraceRunner
         {
             if (!used.Contains(new OctopusVariableRef(variable.SetName, variable.Name)))
             {
+                var looksSecret = LooksSecret(variable.Name);
                 unused.Add(new UnusedVariable("Octopus Deploy", variable.Name, $"{variable.SetName}{(variable.IsSensitive ? ", sensitive" : string.Empty)}")
                 {
-                    Value = variable.IsSensitive && !revealSecrets ? null : variable.Value,
+                    Value = (variable.IsSensitive || looksSecret) && !revealSecrets ? null : variable.Value,
                     IsSecret = variable.IsSensitive,
+                    NameLooksSecret = looksSecret,
                 });
             }
         }
 
         return unused;
+
+        // These variables are not traced, so the trace's rule that a key that looks secret hides its value is applied here.
+        bool LooksSecret(string name) => sensitiveKeyPattern?.IsMatch(name) ?? false;
 
         static void Collect(ProvenanceStep step, HashSet<SourceRef> used)
         {
