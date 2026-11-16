@@ -1,5 +1,8 @@
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using ConfigFerret.Compose;
+using ConfigFerret.Internal;
 
 namespace ConfigFerret.Kubernetes;
 
@@ -8,6 +11,13 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
 {
     // How many $(VAR) hops are shown below a step. Deeper chains still pass on their sensitivity, but not their origins.
     private const int MaxReferenceDepth = 8;
+
+    // The most characters the expanded env values of one container may hold together. A value can repeat earlier
+    // values many times, so a few lines of manifest can ask for gigabytes, and the kubelet sets no limit of its own.
+    // Linux does: a process cannot start with an environment over a quarter of its stack limit (2 MiB by default) or
+    // with one variable over 128 KiB, so no container that runs gets near this. It is the same limit the YAML reader
+    // puts on what aliases expand to.
+    private const long MaxExpandedLength = Yaml.MaxExpandedSize;
 
     private (Workload Workload, Container Container)? _target;
     private bool _selected;
@@ -335,8 +345,11 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
     // entry in list order, a later entry overriding an earlier one. Only an env entry's literal value is expanded, never
     // a value from envFrom or valueFrom. A $(NAME) in the value of an entry sees NAME as it is at that point: from
     // envFrom, or from an env entry before it, whose own value was already expanded, so references chain. An entry later
-    // in the list, or the entry itself, is not seen, unless envFrom sets the same name. The kubelet also sees the
-    // service link variables (such as DB_SERVICE_HOST); they are not in the manifests, so they are not looked up here.
+    // in the list, or the entry itself, is not seen, unless envFrom sets the same name. A reference to a name that is not
+    // set stays as written, and $$ becomes $, so $$(NAME) gives a literal $(NAME). The value put in is not expanded
+    // again. The kubelet also sees the service link variables (such as DB_SERVICE_HOST); they are not in the manifests,
+    // so references to them stay as written here. When a variable that is referred to has a value the manifests don't
+    // hold (a downward API field, a Secret that was not loaded), the expanded value is not known either.
     // Each variable a value refers to is an origin of that value, and when any of them may be secret, so is the value.
     private List<ProvenanceStep> EntrySteps(Workload workload, Container container)
     {
@@ -348,12 +361,13 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
         var where = $"{workload.DisplayName}, container {container.Name}";
         var steps = new List<ProvenanceStep>(container.Env.Count);
         var depths = new List<int>(container.Env.Count);
+        var expandedLength = 0L;
         foreach (var entry in container.Env)
         {
             var depth = 0;
             steps.Add(entry.Source switch
             {
-                EnvValueSource.Literal literal => LiteralStep(workload, container, entry, literal.Value, steps, depths, out depth),
+                EnvValueSource.Literal literal => LiteralStep(workload, container, entry, literal.Value, steps, depths, out depth, ref expandedLength),
                 EnvValueSource.FromConfigMap cm => KeyRefStep(isSecret: false, cm.Name, cm.Key, $"configMapKeyRef on {where}"),
                 EnvValueSource.FromSecret s => KeyRefStep(isSecret: true, s.Name, s.Key, $"secretKeyRef on {where}"),
                 EnvValueSource.FromField f => new ProvenanceStep
@@ -372,38 +386,139 @@ internal sealed partial class KubernetesResolver(KubernetesManifests manifests, 
         return steps;
     }
 
-    // A literal env entry, with the variables its $(VAR) references see as origins. earlier and depths hold the
-    // entries before it; depth is how many reference hops are below the step.
-    private ProvenanceStep LiteralStep(Workload workload, Container container, EnvEntry entry, string value, List<ProvenanceStep> earlier, List<int> depths, out int depth)
+    // A literal env entry with its $(VAR) references expanded, and the variables they see as origins. earlier and depths
+    // hold the entries before it; depth is how many reference hops are below the step. expandedLength is how many
+    // characters the values expanded so far for the container hold; a value that would take it past
+    // MaxExpandedLength is not built and has no value. The notes name only the variables the container is known to
+    // have: the text of a reference nothing sets is part of the value, which may be secret, so it is only counted.
+    private ProvenanceStep LiteralStep(Workload workload, Container container, EnvEntry entry, string value, List<ProvenanceStep> earlier, List<int> depths, out int depth, ref long expandedLength)
     {
         var origins = new List<ProvenanceStep>();
-        depth = 0;
-        var names = EnvReference().Matches(value)
-            .Where(m => m.Groups["name"].Success)
-            .Select(m => m.Groups["name"].Value)
-            .Distinct(StringComparer.Ordinal);
-        foreach (var name in names)
+        var seen = new Dictionary<string, ProvenanceStep?>(StringComparer.Ordinal);
+        var (replaced, unknown) = (new List<string>(), new List<string>());
+        var (guessed, unset) = (0, 0);
+        var (escaped, expands, tooLong) = (false, false, false);
+        var hops = 0;
+        var room = MaxExpandedLength - expandedLength;
+        var expanded = new StringBuilder();
+        var end = 0;
+
+        // Every reference is looked up, even once the value is too long to build, so that all of them stay origins.
+        for (var match = EnvReference().Match(value); match.Success; match = match.NextMatch())
         {
-            if (ReferencedStep(workload, container, entry, name, earlier, depths) is (var origin, var originDepth))
+            expands = true;
+            string text;
+            if (!match.Groups["name"].Success)
             {
-                origins.Add(origin);
-                depth = Math.Max(depth, originDepth + 1);
+                escaped = true;
+                text = "$";
             }
+            else
+            {
+                var name = match.Groups["name"].Value;
+                if (!seen.TryGetValue(name, out var origin))
+                {
+                    var found = ReferencedStep(workload, container, entry, name, earlier, depths);
+                    origin = found?.Step;
+                    seen[name] = origin;
+                    if (found is (var step, var stepDepth))
+                    {
+                        origins.Add(step);
+                        hops = Math.Max(hops, stepDepth + 1);
+                    }
+
+                    if (origin is { IsInferred: false })
+                    {
+                        (origin.Value is null ? unknown : replaced).Add(name);
+                    }
+                }
+
+                if (origin is null)
+                {
+                    unset++;
+                }
+                else if (origin.IsInferred)
+                {
+                    guessed++;
+                }
+
+                text = origin?.Value ?? match.Value;
+            }
+
+            tooLong = tooLong || !TryAppend(expanded, value.AsSpan(end, match.Index - end), room) || !TryAppend(expanded, text, room);
+            end = match.Index + match.Length;
         }
 
+        tooLong = expands && (tooLong || !TryAppend(expanded, value.AsSpan(end), room));
+        var known = unknown.Count == 0 && guessed == 0 && !tooLong;
+        if (expands && known)
+        {
+            expandedLength += expanded.Length;
+        }
+
+        var notes = new List<string> { $"container {container.Name}" };
+        if (replaced.Count > 0)
+        {
+            notes.Add($"Kubernetes replaces {References(replaced)} with {(replaced.Count == 1 ? "its value" : "their values")}");
+        }
+
+        if (unknown.Count > 0)
+        {
+            notes.Add($"the {(unknown.Count == 1 ? "value" : "values")} of {References(unknown)} {(unknown.Count == 1 ? "is" : "are")} not known here, so this value is not known either");
+        }
+
+        if (guessed > 0)
+        {
+            notes.Add($"{Count(guessed)} may take {(guessed == 1 ? "its value" : "their values")} from a source that was not loaded, so this value is not known");
+        }
+
+        if (unset > 0)
+        {
+            notes.Add($"{Count(unset)} {(unset == 1 ? "is" : "are")} left as written, because no variable of {(unset == 1 ? "that name is" : "those names are")} set before this entry");
+        }
+
+        if (escaped)
+        {
+            notes.Add("Kubernetes turns $$ into $");
+        }
+
+        if (tooLong)
+        {
+            notes.Add(string.Create(CultureInfo.InvariantCulture, $"expanding it would take the values expanded for this container past {MaxExpandedLength:N0} characters, so it is not worked out here"));
+        }
+
+        depth = hops;
         return new ProvenanceStep
         {
             Kind = LayerKind.KubernetesWorkload,
             Source = $"{workload.DisplayName} env {entry.Name}",
             Location = $"{workload.SourceName}:{entry.Line}",
-            Value = value,
+            Value = !expands ? value : known ? expanded.ToString() : null,
             IsSensitive = origins.Exists(o => o.IsSensitive),
-            Note = value.Contains("$(", StringComparison.Ordinal)
-                ? $"container {container.Name}; Kubernetes expands $(VAR) references in this value"
-                : $"container {container.Name}",
+            Note = string.Join("; ", notes),
             Reference = new WorkloadEnvRef(workload.Name, container.Name, entry.Name),
             Origins = origins,
         };
+
+        static string References(List<string> names)
+        {
+            var written = names.Select(n => $"$({n})").ToList();
+            return written.Count == 1 ? written[0] : string.Join(", ", written[..^1]) + " and " + written[^1];
+        }
+
+        static string Count(int references) => references == 1 ? "1 reference" : string.Create(CultureInfo.InvariantCulture, $"{references} references");
+    }
+
+    // Appends text unless that would make builder longer than room, so an oversized value is never built.
+    private static bool TryAppend(StringBuilder builder, ReadOnlySpan<char> text, long room)
+    {
+        if (builder.Length + (long)text.Length > room)
+        {
+            return false;
+        }
+
+        builder.Append(text);
+        return true;
     }
 
     // The step that sets the variable a $(NAME) reference in entry sees, with how many reference hops are below it, or

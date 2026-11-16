@@ -91,7 +91,7 @@ public class KubernetesResolverTests
         Assert.Equal(LayerKind.KubernetesWorkload, lit.Kind);
         Assert.Equal("Deployment/api env LIT", lit.Source);
         Assert.Equal("a $(B)", lit.Value);
-        Assert.Equal("container main; Kubernetes expands $(VAR) references in this value", lit.Note);
+        Assert.Equal("container main; 1 reference is left as written, because no variable of that name is set before this entry", lit.Note);
         Assert.Equal(new WorkloadEnvRef("api", "main", "LIT"), lit.Reference);
         Assert.Matches(@"^m\.yaml:\d+$", lit.Location);
         Assert.Equal("container main", plain.Note);
