@@ -117,9 +117,9 @@ When a reference pins a version, the note says whether that version is disabled 
 enabled one. Everything that is read as `latest` (a reference with no version or with `latest`, a match by name, an
 explicit link, and a provider matched by its configuration key) gets a note and a trace warning when the newest version
 is disabled or destroyed, because `latest` is the most recently created version and reading it fails. The value of an
-older version is never compared as the latest: only the newest version's value counts,
-whatever its state. When a value is read and differs from the layer's value, the note says so without showing
-either.
+older version is never compared as the latest: only the newest version's value counts, and not even that one when the
+version is disabled or destroyed. When a value is read and differs from the layer's value, the note says so without
+showing either.
 
 ## Permissions
 

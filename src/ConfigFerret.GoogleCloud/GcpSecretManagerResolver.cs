@@ -216,8 +216,8 @@ internal sealed class GcpSecretManagerResolver : IOriginResolver
             diagnostics.Warn($"Google Cloud secret {secret.Id}: {failure}.");
         }
 
-        // A value counts for latest only when it is the newest version's, whatever that version's state.
-        var applies = secret.ValueVersion is not null && (pinned is null ? newest is null || newest.Id == secret.ValueVersion : pinned == secret.ValueVersion);
+        // A value counts for latest only when it is the newest version's and that version is not disabled or destroyed.
+        var applies = secret.ValueVersion is not null && (pinned is null ? newest is null || (newest.Id == secret.ValueVersion && newest.State is not (GcpSecretVersionState.Disabled or GcpSecretVersionState.Destroyed)) : pinned == secret.ValueVersion);
         string? value = null;
         if (property is not null)
         {
@@ -227,7 +227,10 @@ internal sealed class GcpSecretManagerResolver : IOriginResolver
             }
             else if (!applies)
             {
-                notes.Add($"property {property} was not checked, because only version {secret.ValueVersion} was read");
+                // The newest version itself was read, and it is disabled or destroyed: say why it does not count, not that it is not the newest.
+                notes.Add(newest?.Id == secret.ValueVersion
+                    ? $"property {property} was not checked, because reading latest fails"
+                    : $"property {property} was not checked, because only version {secret.ValueVersion} was read");
             }
             else if (secret.Value is null)
             {
