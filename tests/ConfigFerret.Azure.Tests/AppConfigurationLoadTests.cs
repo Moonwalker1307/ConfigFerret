@@ -105,6 +105,23 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Trims_the_longest_matching_prefix_and_ignores_case_like_the_provider()
+    {
+        var handler = Handler().Respond(KeysPath(), Page(null, Kv("Orders:Db:Timeout", "30"), Kv("Shop:Db:Timeout", "5")));
+
+        var settings = await Load(handler, o =>
+        {
+            o.TrimKeyPrefixes.Add("orders:");
+            o.TrimKeyPrefixes.Add("Shop:");
+            o.TrimKeyPrefixes.Add("Shop:Db:");
+            o.IncludeFeatureFlags = false;
+        });
+
+        Assert.Equal("Orders:Db:Timeout", Assert.Single(settings.FindByConfigurationKey("Db:Timeout")).Key);
+        Assert.Equal("Shop:Db:Timeout", Assert.Single(settings.FindByConfigurationKey("Timeout")).Key);
+    }
+
+    [Fact]
     public async Task Reads_Key_Vault_references_as_secret_URIs()
     {
         var handler = Handler().Respond(KeysPath(), Page(

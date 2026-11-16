@@ -119,13 +119,17 @@ public sealed class AzureAppConfigurationSettings
         var labels = options.Labels.Count == 0 ? [null] : options.Labels.Select(l => string.IsNullOrEmpty(l) || l == "\0" ? null : l).Distinct().ToList();
         var settings = new List<AzureAppConfigurationSetting>();
         var warnings = new List<string>();
+
+        // The provider keeps the prefixes sorted in descending order with case ignored, so of two nested prefixes the
+        // longer one is tried first, and it compares them with case ignored.
+        var prefixes = options.TrimKeyPrefixes.Where(p => !string.IsNullOrEmpty(p)).OrderDescending(StringComparer.OrdinalIgnoreCase).ToList();
         foreach (var label in labels)
         {
             var keyFilter = string.IsNullOrWhiteSpace(options.KeyFilter) ? SettingSelector.Any : options.KeyFilter.Trim();
-            await ReadAsync(client, store, keyFilter, label, options, settings, warnings, cancellationToken).ConfigureAwait(false);
+            await ReadAsync(client, store, keyFilter, label, options, prefixes, settings, warnings, cancellationToken).ConfigureAwait(false);
             if (options.IncludeFeatureFlags)
             {
-                await ReadAsync(client, store, FeatureFlagPrefix + "*", label, options, settings, warnings, cancellationToken).ConfigureAwait(false);
+                await ReadAsync(client, store, FeatureFlagPrefix + "*", label, options, prefixes, settings, warnings, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -196,6 +200,7 @@ public sealed class AzureAppConfigurationSettings
         string keyFilter,
         string? label,
         AzureAppConfigurationOptions options,
+        IReadOnlyList<string> prefixes,
         List<AzureAppConfigurationSetting> into,
         List<string> warnings,
         CancellationToken cancellationToken)
@@ -215,7 +220,7 @@ public sealed class AzureAppConfigurationSettings
                         continue;
                     }
 
-                    if (Convert(setting, store, options, warnings) is { } converted)
+                    if (Convert(setting, store, options, prefixes, warnings) is { } converted)
                     {
                         into.Add(converted);
                     }
@@ -242,7 +247,7 @@ public sealed class AzureAppConfigurationSettings
         }
     }
 
-    private static AzureAppConfigurationSetting? Convert(ConfigurationSetting setting, string store, AzureAppConfigurationOptions options, List<string> warnings)
+    private static AzureAppConfigurationSetting? Convert(ConfigurationSetting setting, string store, AzureAppConfigurationOptions options, IReadOnlyList<string> prefixes, List<string> warnings)
     {
         var label = string.IsNullOrEmpty(setting.Label) ? null : setting.Label;
         var contentType = setting.ContentType;
@@ -273,10 +278,10 @@ public sealed class AzureAppConfigurationSettings
                 warnings.Add($"Azure App Configuration Key Vault reference {setting.Key} ({basic.LabelText}) in {store} has no valid secret URI.");
             }
 
-            return basic with { Kind = AzureAppConfigurationSettingKind.KeyVaultReference, SecretId = secretId, ConfigurationKey = Trim(setting.Key, options) };
+            return basic with { Kind = AzureAppConfigurationSettingKind.KeyVaultReference, SecretId = secretId, ConfigurationKey = Trim(setting.Key, prefixes) };
         }
 
-        return basic with { Value = raw, ConfigurationKey = Trim(setting.Key, options) };
+        return basic with { Value = raw, ConfigurationKey = Trim(setting.Key, prefixes) };
     }
 
     // The SDK turns Key Vault references and feature flags into typed settings; reading Value gives their JSON back.
@@ -369,11 +374,11 @@ public sealed class AzureAppConfigurationSettings
         contentType is not null && (string.Equals(contentType.Trim(), expected, StringComparison.OrdinalIgnoreCase)
             || contentType.TrimStart().StartsWith(expected + ";", StringComparison.OrdinalIgnoreCase));
 
-    private static string Trim(string key, AzureAppConfigurationOptions options)
+    private static string Trim(string key, IReadOnlyList<string> prefixes)
     {
-        foreach (var prefix in options.TrimKeyPrefixes)
+        foreach (var prefix in prefixes)
         {
-            if (!string.IsNullOrEmpty(prefix) && key.StartsWith(prefix, StringComparison.Ordinal) && key.Length > prefix.Length)
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && key.Length > prefix.Length)
             {
                 return key[prefix.Length..];
             }
