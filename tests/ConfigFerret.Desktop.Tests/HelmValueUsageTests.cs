@@ -170,6 +170,231 @@ public class HelmValueUsageTests
     }
 
     [Fact]
+    public void Reads_dependency_names_from_a_Chart_yaml_with_Windows_line_endings()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "kafka:\n  z: 1\ncache:\n  w: 1\nquoted:\n  q: 1\nother:\n  o: 1\n");
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("Chart.yaml", "apiVersion: v2\r\ndependencies:\r\n  - name: kafka \r\n  -   name: kafka-ui\r\n      alias: cache\r\n  - name: \"quoted\"\r\n");
+
+        Assert.Equal(["other.o"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void A_Chart_yaml_over_two_megabytes_gives_no_dead_values()
+    {
+        // Without its dependencies the scan can't tell a subchart's values from the chart's own.
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("Chart.yaml", "apiVersion: v2\n#" + new string('x', 2 * 1024 * 1024));
+
+        Assert.Empty(HelmValueUsage.FindDead(temp.Path, []));
+    }
+
+    [Fact]
+    public void Skips_a_values_file_over_two_megabytes()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("values-big.yaml", "b: 1\n#" + new string('x', 2 * 1024 * 1024));
+
+        Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, [temp.Full("values-big.yaml")]).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void More_than_100000_values_are_a_YamlException()
+    {
+        Assert.Equal(100_000, HelmValueUsage.Leaves(Aliases(99)).Count());
+        Assert.ThrowsAny<YamlDotNet.Core.YamlException>(() => HelmValueUsage.Leaves(Aliases(100)).ToList());
+    }
+
+    [Fact]
+    public void Reads_dependency_names_quoted_with_a_comment_and_from_requirements_yaml()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "redis:\n  x: 1\nkafka:\n  y: 1\npostgres:\n  z: 1\nother:\n  o: 1\n");
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("Chart.yaml", "apiVersion: v2\ndependencies:\n  - name: 'redis' # the cache\n  - name: kafka\t# the queue\n");
+        temp.Write("requirements.yaml", "dependencies:\n- name: postgres\n");
+
+        Assert.Equal(["other.o"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Theory]
+    [InlineData("dependencies: [{name: redis, version: 1.0.0}]\n", "redis")]
+    [InlineData("dependencies:\n  - name:\n      redis\n", "redis")]
+    [InlineData("dependencies:\n  - name: redis-ha\n    alias: redis\n", "redis")]
+    [InlineData("dependencies:\n- {name: \"redis\"}\n", "redis")]
+    public void Reads_dependency_names_in_any_YAML_form(string chart, string subchart)
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", $"{subchart}:\n  auth:\n    password: not-a-real-secret\nother: 1\n");
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("Chart.yaml", "apiVersion: v2\nname: app\n" + chart);
+
+        Assert.Equal(["other"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+    }
+
+    [Theory]
+    [InlineData("dependencies: [{name: redis\n")]
+    [InlineData("dependencies: redis\n")]
+    [InlineData("dependencies:\n  - redis\n")]
+    public void A_Chart_yaml_whose_dependencies_can_t_be_read_gives_no_dead_values(string chart)
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "redis:\n  x: 1\nother: 1\n");
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("Chart.yaml", "apiVersion: v2\nname: app\n" + chart);
+
+        Assert.Empty(HelmValueUsage.FindDead(temp.Path, []));
+    }
+
+    [Fact]
+    public void Does_not_read_values_files_or_Chart_yaml_through_links()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var outside = new TempFolder();
+        outside.Write("values.yaml", "outside: 1\n");
+        outside.Write("Chart.yaml", "apiVersion: v2\nname: x\n");
+        using var temp = new TempFolder();
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("values-prod.yaml", "a: 1\n");
+        File.CreateSymbolicLink(temp.Full("values.yaml"), outside.Full("values.yaml"));
+        File.CreateSymbolicLink(temp.Full("values-eu.yaml"), outside.Full("values.yaml"));
+
+        Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, [temp.Full("values-prod.yaml"), temp.Full("values-eu.yaml")]).Select(d => d.Path));
+
+        // Without the dependencies a subchart's values can't be told from the chart's own.
+        File.CreateSymbolicLink(temp.Full("Chart.yaml"), outside.Full("Chart.yaml"));
+        Assert.Empty(HelmValueUsage.FindDead(temp.Path, [temp.Full("values-prod.yaml")]));
+    }
+
+    [Theory]
+    [InlineData("templates")]
+    [InlineData("charts")]
+    public void A_templates_or_charts_folder_that_is_a_link_gives_no_dead_values(string folder)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var outside = new TempFolder();
+        outside.Write("cm.yaml", "kind: ConfigMap");
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        if (folder != "templates")
+        {
+            temp.Write("templates/own.yaml", "kind: ConfigMap");
+        }
+
+        Directory.CreateSymbolicLink(temp.Full(folder), outside.Path);
+
+        Assert.Empty(HelmValueUsage.FindDead(temp.Path, []));
+    }
+
+    [Fact]
+    public async Task Does_not_open_a_device_that_reports_no_length()
+    {
+        if (!File.Exists("/dev/zero"))
+        {
+            return;
+        }
+
+        using var temp = new TempFolder();
+        temp.Write("templates/cm.yaml", "kind: ConfigMap");
+        temp.Write("values-prod.yaml", "a: 1\n");
+        var scan = Task.Factory.StartNew(() => HelmValueUsage.FindDead(temp.Path, ["/dev/zero", temp.Full("values-prod.yaml")]), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == scan;
+
+        Assert.True(finished, "Reading /dev/zero as a values file did not end.");
+        Assert.Equal(["a"], (await scan).Select(d => d.Path));
+    }
+
+    [Fact]
+    public void Leaves_out_a_value_whose_path_is_longer_than_256_characters()
+    {
+        var key = new string('k', 200);
+
+        Assert.Equal(["a", key + ".b"], HelmValueUsage.Leaves($"a: 1\n{new string('l', 257)}: 1\n{key}:\n  b: 1\n  {new string('c', 56)}: 1\n"));
+    }
+
+    // Blank lines in Chart.yaml took hours with the dependency pattern that let blanks run across lines, a long key above
+    // many values or values that aliases repeat took minutes and gigabytes before long paths were left out and the
+    // values counted. The other Chart.yaml shapes guard the YAML read of the dependencies (they aren't YAML, so they give
+    // no dead values), and the template shapes guard the patterns that were already linear, so a change can't make them
+    // try a long text in many ways. Each takes well under a second now, so the limit leaves room for a slow, busy
+    // machine. The scan runs on a thread of its own, so a thread pool kept busy by other tests doesn't delay its start.
+    [Theory]
+    [InlineData("blank lines in Chart.yaml", "b")]
+    [InlineData("a long line of dashes and blanks in Chart.yaml", "")]
+    [InlineData("blanks after name: in Chart.yaml", "")]
+    [InlineData("index calls that never get a key", "")]
+    [InlineData("an index key that never closes", "")]
+    [InlineData("a long index path that never gets a key", "b")]
+    [InlineData("a long .Values path", "b")]
+    [InlineData("a long key above many values", "b")]
+    [InlineData("values that aliases repeat", "")]
+    public async Task A_hostile_chart_is_scanned_in_linear_time(string shape, string dead)
+    {
+        using var temp = new TempFolder();
+        temp.Write("Chart.yaml", "apiVersion: v2\nname: x\nversion: 1.0.0\n");
+        temp.Write("values.yaml", "a: 1\nb: 2\n");
+        temp.Write("templates/a.yaml", "{{ .Values.a }}");
+        var (file, text) = HostileFile(shape);
+        temp.Write(file, file == "values.yaml" ? "a: 1\nb: 2\n" + text : text);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var scan = Task.Factory.StartNew(() => HelmValueUsage.FindDead(temp.Path, []), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == scan;
+
+        Assert.True(finished, $"Scanning {text.Length} characters of {shape} took longer than {watch.Elapsed.TotalSeconds:0}s.");
+        string[] expected = dead.Length == 0 ? [] : [dead];
+        Assert.Equal(expected, (await scan).Select(d => d.Path));
+    }
+
+    private static (string File, string Text) HostileFile(string shape) => shape switch
+    {
+        "blank lines in Chart.yaml" => ("Chart.yaml", "apiVersion: v2\nname: x\nversion: 1.0.0\n" + new string('\n', 20_000)),
+        "a long line of dashes and blanks in Chart.yaml" => ("Chart.yaml", Repeat(" - \t", 2_000_000)),
+        "blanks after name: in Chart.yaml" => ("Chart.yaml", Repeat("name:" + new string(' ', 100) + "\n", 2_000_000)),
+        "index calls that never get a key" => ("templates/hostile.yaml", Repeat("index .Values ", 2_000_000)),
+        "an index key that never closes" => ("templates/hostile.yaml", "index .Values \"" + new string('a', 2_000_000)),
+        "a long index path that never gets a key" => ("templates/hostile.yaml", "index .Values" + Repeat(".a", 2_000_000)),
+        "a long .Values path" => ("templates/hostile.yaml", ".Values" + Repeat(".a", 2_000_000)),
+        "a long key above many values" => ("values.yaml", "? " + new string('k', 5_000) + "\n:\n" + string.Concat(Enumerable.Range(0, 20_000).Select(i => $"  v{i}: 1\n"))),
+        "values that aliases repeat" => ("values.yaml", Aliases(1_300)),
+        _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+    };
+
+    // A thousand values, then a mapping that repeats them under a long key through an alias, times times.
+    private static string Aliases(int times) =>
+        "base: &b {" + string.Join(", ", Enumerable.Range(0, 1_000).Select(i => $"k{i:000}: 1")) + "}\n"
+        + new string('k', 240) + ": {" + string.Join(", ", Enumerable.Range(0, times).Select(i => $"a{i}: *b")) + "}\n";
+
+    private static string Repeat(string unit, int length) => string.Concat(Enumerable.Repeat(unit, length / unit.Length));
+
+    [Fact]
+    public void Every_pattern_has_a_match_timeout()
+    {
+        var patterns = typeof(HelmValueUsage)
+            .GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            .Where(m => m.ReturnType == typeof(System.Text.RegularExpressions.Regex) && m.GetParameters().Length == 0)
+            .Select(m => (m.Name, Regex: (System.Text.RegularExpressions.Regex)m.Invoke(null, null)!))
+            .ToList();
+
+        Assert.True(patterns.Count >= 3, $"Found only {patterns.Count} patterns.");
+        Assert.All(patterns, p => Assert.True(p.Regex.MatchTimeout != System.Text.RegularExpressions.Regex.InfiniteMatchTimeout, p.Name));
+    }
+
+    [Fact]
     public void Malformed_values_YAML_is_a_YamlException_whatever_YamlDotNet_throws()
     {
         // Found by fuzzing: this made YamlDotNet's scanner throw InvalidOperationException.
