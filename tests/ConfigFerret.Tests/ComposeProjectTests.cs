@@ -1013,6 +1013,20 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void Reads_files_when_the_project_directory_is_a_root_folder()
+    {
+        using var folder = new TempFolder();
+        var envFile = folder.Write("app.envfile", "A=1\n");
+        var root = Path.GetPathRoot(Path.GetFullPath(envFile))!;
+        var compose = folder.Write("compose.yaml", $"services:\n  app:\n    env_file: \"{Path.GetRelativePath(root, envFile).Replace('\\', '/')}\"\n");
+
+        var service = Service(ComposeProject.Load([compose], new ComposeOptions { ProjectDirectory = root }));
+
+        Assert.Equal("1", service.Environment["A"]);
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
     public void Reports_a_link_whose_target_is_missing_as_a_missing_file()
     {
         if (OperatingSystem.IsWindows())

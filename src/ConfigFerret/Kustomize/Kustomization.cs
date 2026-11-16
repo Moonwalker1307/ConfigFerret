@@ -350,8 +350,10 @@ public sealed class Kustomization
             return false;
         }
 
+        // A root such as / or C:\ already ends in a separator, which trimming keeps.
         var trimmed = Path.TrimEndingDirectorySeparator(realFolder);
-        return realPath.StartsWith(trimmed + Path.DirectorySeparatorChar, comparison)
+        var prefix = Path.EndsInDirectorySeparator(trimmed) ? trimmed : trimmed + Path.DirectorySeparatorChar;
+        return (realPath.Length > prefix.Length && realPath.StartsWith(prefix, comparison))
             || (orFolder && string.Equals(Path.TrimEndingDirectorySeparator(realPath), trimmed, comparison));
     }
 
