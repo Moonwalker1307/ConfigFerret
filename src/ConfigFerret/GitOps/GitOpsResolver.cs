@@ -44,6 +44,10 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             _chart = HelmChart.Build(application, options, _data);
             _helm = new HelmResolver(_chart);
             _warnings.AddRange(_chart.Warnings);
+            if (_chart.TemplatesNotRead && GitOpsValues().Any())
+            {
+                _warnings.Add($"{application.DisplayName}: the chart's templates were not read, so no Helm value is listed as unused.");
+            }
         }
 
         if (application.Kind == GitOpsKind.FluxKustomization)
@@ -91,12 +95,13 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     /// True for a values path that a chart template names, itself, a parent or a value below it, and for a variable that
     /// a manifest under the Kustomization path names: a template reads a value for replicas or an image too, and Flux
     /// substitutes a variable anywhere, in an Ingress host or an image tag too, where no trace step can show the use.
-    /// When a file or folder under the path could not be read, every variable is taken as used.
+    /// When the path, or a part of it, was not read, every variable is taken as used, and when the chart's templates were
+    /// not read, every value.
     /// </summary>
     public bool IsUsed(SourceRef reference) => reference switch
     {
         GitOpsVariableRef v => v.Kustomization == _app.Name && (_partlyRead || _usedVariables.Contains(v.Name)),
-        HelmValueRef h when _chart is not null => (_namedValues ??= _chart.NamedByTemplates(GitOpsValues().Select(v => v.Key))).Contains(h.Path),
+        HelmValueRef h when _chart is not null => _chart.TemplatesNotRead || (_namedValues ??= _chart.NamedByTemplates(GitOpsValues().Select(v => v.Key))).Contains(h.Path),
         _ => false,
     };
 

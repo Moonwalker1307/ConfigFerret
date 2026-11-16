@@ -107,7 +107,10 @@ public class GitOpsSourceTests
 
             Assert.Equal(["a", "b"], loaded.Entries.Select(e => e.Name));
             Assert.Equal(Path.Join(dir, "data.yaml"), source.DataFile);
-            Assert.Single(loaded.Warnings);
+
+            // The chart is remote, so its templates were not read.
+            Assert.Equal(2, loaded.Warnings.Count);
+            Assert.Equal("Flux HelmRelease rel: the chart's templates were not read, so no Helm value is listed as unused.", loaded.Warnings[1]);
         }
         finally
         {
@@ -188,7 +191,10 @@ public class GitOpsSourceTests
         var report = ConfigTracer.ForContainer(manifests).WithGitOps(app).Trace();
 
         Assert.Equal(
-            ["Argo CD Application remote deploys chart orders from oci://registry.example.test/charts, which ConfigFerret cannot fetch. Pull it (helm pull --untar) and pass its folder as the chart folder to trace the chart's templates and defaults."],
+            [
+                "Argo CD Application remote deploys chart orders from oci://registry.example.test/charts, which ConfigFerret cannot fetch. Pull it (helm pull --untar) and pass its folder as the chart folder to trace the chart's templates and defaults.",
+                "Argo CD Application remote: the chart's templates were not read, so no Helm value is listed as unused.",
+            ],
             report.Warnings);
         Assert.Empty(report.Find("TIMEOUT")!.Steps[0].Origins);
         Assert.Throws<ArgumentNullException>(() => ConfigTracer.ForContainer(manifests).WithGitOps(null!));

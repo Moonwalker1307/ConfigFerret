@@ -604,7 +604,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   yet. For an Argo CD or Flux chart, `FindUnused` never lists a values path that a file under `templates/` names,
   `templates/NOTES.txt` included, for example `replicaCount` or a parent such as `.Values.resources`, since a template
   that names a value reads it. The path stays in `Entries`. `index .Values "a" "b"`, a whole `.Values` and subchart
-  templates are not seen, so values read only that way are still listed as unused.
+  templates are not seen, so values read only that way are still listed as unused. When the templates were not read,
+  for a remote chart, a templates folder outside the checkout or one that cannot be read, a warning says so and no
+  value is listed as unused; a chart without a templates folder still lists its values.
 - Helm links match env entries and data keys by name, so an env entry that overrides a templated ConfigMap key of
   the same name is linked to that ConfigMap's template too. The note then says the values and the manifest disagree.
 - `Kustomization.Load` throws when bases and components nest more than 100 deep, when it would read more than 10,000

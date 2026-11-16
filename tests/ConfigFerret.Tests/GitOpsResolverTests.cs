@@ -284,6 +284,68 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal("db.local", Assert.Single(report.Settings, s => s.Key == "Db__Host").Value);
     }
 
+    // An Application that sets the value nobody.reads, which no template names.
+    private static GitOpsApplication ArgoChart(string source) => GitOpsApplication.Parse($$"""
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata: {name: orders}
+        spec:
+          source: { {{source}}, helm: { values: "nobody: {reads: this}" } }
+        """, "orders.yaml");
+
+    [Fact]
+    public void A_chart_whose_templates_were_not_read_lists_no_value_as_unused()
+    {
+        var resolver = new GitOpsResolver(ArgoChart("chart: orders, repoURL: https://charts.example.test"));
+
+        Assert.Equal(
+            [
+                "Argo CD Application orders deploys chart orders from https://charts.example.test, which ConfigFerret cannot fetch. Pull it (helm pull --untar) and pass its folder as the chart folder to trace the chart's templates and defaults.",
+                "Argo CD Application orders: the chart's templates were not read, so no Helm value is listed as unused.",
+            ],
+            resolver.Warnings);
+        var loaded = new LoadedConfigSource("argo", resolver, resolver.Entries());
+        Assert.Empty(loaded.FindUnused(new ProvenanceReport([], [])));
+        Assert.Equal(["nobody.reads"], loaded.Entries.Select(e => e.Name));
+    }
+
+    [Fact]
+    public void A_chart_with_no_templates_still_lists_its_values_as_unused()
+    {
+        Write("chart/Chart.yaml", "name: orders\n");
+
+        var resolver = new GitOpsResolver(ArgoChart("path: chart"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Empty(resolver.Warnings);
+        Assert.Equal(["nobody.reads"], new LoadedConfigSource("argo", resolver, resolver.Entries()).FindUnused(new ProvenanceReport([], [])).Select(e => e.Name));
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public void A_chart_whose_templates_cannot_be_read_lists_no_value_as_unused()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
+        Write("chart/Chart.yaml", "name: orders\n");
+        Write("chart/templates/private/cm.yaml", "data:\n  K: {{ .Values.nobody.reads }}\n");
+        var locked = Path.Join(_root, "chart", "templates", "private");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanRead(locked), "The process may read any folder, for example as root.");
+
+            var resolver = new GitOpsResolver(ArgoChart("path: chart"), new GitOpsOptions { RepositoryRoot = _root });
+
+            Assert.Equal(2, resolver.Warnings.Count);
+            Assert.StartsWith("Could not read the chart's templates for Argo CD Application orders: ", resolver.Warnings[0], StringComparison.Ordinal);
+            Assert.Equal("Argo CD Application orders: the chart's templates were not read, so no Helm value is listed as unused.", resolver.Warnings[1]);
+            Assert.Empty(new LoadedConfigSource("argo", resolver, resolver.Entries()).FindUnused(new ProvenanceReport([], [])));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     [Fact]
     public void Values_that_a_template_names_outside_config_keys_are_not_unused()
     {

@@ -83,15 +83,27 @@ public sealed partial class HelmChart
             chart.AddGitOpsLayer(application, layer, data);
         }
 
-        if (chartFolder is not null)
+        // A chart folder that is not known, a templates folder that is refused, and templates that cannot be read all
+        // leave the templates unread. A chart without a templates folder has none, which is not the same.
+        if (chartFolder is null)
         {
-            if (checkout is not null && !Kustomization.IsInFolder(Path.Join(chartFolder, "templates"), checkout))
-            {
-                chart._warnings.Add($"The chart's templates folder for {application.DisplayName} is outside {checkout}, so it was not read.");
-            }
-            else
+            chart.TemplatesNotRead = true;
+        }
+        else if (checkout is not null && !Kustomization.IsInFolder(Path.Join(chartFolder, "templates"), checkout))
+        {
+            chart.TemplatesNotRead = true;
+            chart._warnings.Add($"The chart's templates folder for {application.DisplayName} is outside {checkout}, so it was not read.");
+        }
+        else
+        {
+            try
             {
                 chart.AddTemplates(chartFolder);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                chart.TemplatesNotRead = true;
+                chart._warnings.Add($"Could not read the chart's templates for {application.DisplayName}: {ex.Message}");
             }
         }
 
@@ -136,6 +148,9 @@ public sealed partial class HelmChart
         var next = LowerBound(sortedPaths, prefix);
         return next < sortedPaths.Length && sortedPaths[next].StartsWith(prefix, StringComparison.Ordinal);
     }
+
+    /// <summary>True when the chart's templates, or some of them, were not read, so any value may be named in them.</summary>
+    internal bool TemplatesNotRead { get; private set; }
 
     /// <summary>
     /// The values paths of <paramref name="paths"/> that a template names: the path itself, a parent such as
