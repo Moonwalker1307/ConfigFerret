@@ -47,7 +47,10 @@ public sealed record AzureDevOpsVariable(
     AzureDevOpsGroupType GroupType = AzureDevOpsGroupType.Vsts,
     string? KeyVaultName = null)
 {
-    /// <summary>True when the value is secret: a secret variable, or any variable of a group linked to a key vault.</summary>
+    /// <summary>
+    /// True when Azure DevOps treats the value as secret: a secret variable, or any variable of a group linked to a key
+    /// vault. A trace also redacts a variable whose name looks like a secret's.
+    /// </summary>
     public bool IsSensitive => IsSecret || GroupType == AzureDevOpsGroupType.AzureKeyVault;
 
     /// <summary>
