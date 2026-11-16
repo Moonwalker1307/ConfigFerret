@@ -40,19 +40,48 @@ internal static partial class AppConfiguration
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    public static string PickEnvironment(AppInputs inputs) =>
-        inputs.EnvironmentName
-        ?? Get(inputs.Environment, "ASPNETCORE_ENVIRONMENT")
-        ?? Get(inputs.Environment, "DOTNET_ENVIRONMENT")
-        ?? DefaultEnvironment;
+    /// <summary>
+    /// Picks the environment as <c>WebApplication.CreateBuilder</c> does, from its own configuration: the
+    /// <c>ASPNETCORE_</c> variables, then the <c>DOTNET_</c> variables, then the command line, each winning over the one
+    /// before. <c>Host.CreateApplicationBuilder</c> reads the same without the <c>ASPNETCORE_</c> variables.
+    /// </summary>
+    public static string PickEnvironment(AppInputs inputs, out string source)
+    {
+        if (inputs.EnvironmentName is not null)
+        {
+            source = "--environment";
+            return inputs.EnvironmentName;
+        }
+
+        (string Prefix, string Source)[] variables = [("ASPNETCORE_", "ASPNETCORE_ENVIRONMENT"), ("DOTNET_", "DOTNET_ENVIRONMENT")];
+        var builder = new ConfigurationBuilder();
+        foreach (var (prefix, _) in variables)
+        {
+            builder.Add(new SimulatedEnvironmentVariablesSource(inputs.Environment, prefix));
+        }
+
+        var hostConfiguration = builder.AddCommandLine([.. inputs.CommandLine]).Build();
+        var name = hostConfiguration["environment"];
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            source = "the default";
+            return DefaultEnvironment;
+        }
+
+        // The last provider that sets the name is the one it came from.
+        var from = hostConfiguration.Providers.ToList().FindLastIndex(p => p.TryGet("environment", out _));
+        source = from < variables.Length ? variables[from].Source : "the app's command line";
+        return name;
+    }
 
     public static IConfigurationRoot Build(AppInputs inputs, CliHost host, out string environmentName)
     {
         var directory = Path.GetFullPath(InputReader.RequireDirectory(inputs.AppDirectory, "The app folder"));
-        environmentName = PickEnvironment(inputs);
+        environmentName = PickEnvironment(inputs, out var source);
         if (!IsFileNamePart(environmentName))
         {
-            throw new UsageException($"'{environmentName}' is not a valid environment name.");
+            // The name can come from any app argument or variable, so the message leaves it out.
+            throw new UsageException($"The environment name from {source} holds a slash or a character a file name can't have. Pass --environment with a plain name.");
         }
 
         var configFiles = inputs.ConfigFiles.Select(file => Path.GetFullPath(InputReader.RequireFile(file))).ToList();
@@ -280,10 +309,6 @@ internal static partial class AppConfiguration
             }
         }
     }
-
-
-    private static string? Get(IReadOnlyDictionary<string, string?> environment, string name) =>
-        environment.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
 
     // The environment name becomes part of a file name in the app folder, so a name that holds a folder is refused.
     private static bool IsFileNamePart(string name) =>

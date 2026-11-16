@@ -531,9 +531,62 @@ public class TraceCommandTests
     }
 
     [Theory]
+    [InlineData("Staging", "ASPNETCORE_ENVIRONMENT=Staging")]
+    [InlineData("Development", "ASPNETCORE_ENVIRONMENT=Staging", "DOTNET_ENVIRONMENT=Development")]
+    [InlineData("Testing", "ASPNETCORE_ENVIRONMENT=Staging", "DOTNET_ENVIRONMENT=Development", "--", "--environment", "Testing")]
+    public async Task Picks_the_environment_as_the_web_host_does(string expected, params string[] input)
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Picked": "Production" }""", ct);
+            foreach (var name in new[] { "Staging", "Development", "Testing" })
+            {
+                await File.WriteAllTextAsync(Path.Join(app.FullName, $"appsettings.{name}.json"), $$"""{ "Picked": "{{name}}" }""", ct);
+            }
+
+            var split = Array.IndexOf(input, "--");
+            var variables = split < 0 ? input : input[..split];
+            var appArgs = split < 0 ? [] : input[split..];
+            var result = await new ToolRunner().RunAsync(
+                ["trace", "-a", app.FullName, "--no-user-secrets", .. variables.SelectMany(v => new[] { "--env", v }), "Picked", .. appArgs]);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains($"""Picked = "{expected}""", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Leaves_the_value_out_of_the_error_for_an_environment_name_taken_from_an_app_argument()
+    {
+        var app = Directory.CreateTempSubdirectory("configferret-app-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Join(app.FullName, "appsettings.json"), """{ "Db": { "Host": "localhost" } }""", TestContext.Current.CancellationToken);
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", app.FullName, "--no-user-secrets", "--", "--environment", "--Jwt:Key=fake/jwt-key");
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("The environment name from the app's command line", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake/jwt-key", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake/jwt-key", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            app.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
     [InlineData("--env")]
     [InlineData("--manifests")]
     [InlineData("--environment")]
+    [InlineData("--")]
     public async Task Refuses_an_environment_name_that_leaves_the_app_folder(string how)
     {
         var root = Directory.CreateTempSubdirectory("configferret-tool-");
@@ -551,13 +604,15 @@ public class TraceCommandTests
             {
                 "--env" => ["--env", "ASPNETCORE_ENVIRONMENT=" + Name],
                 "--manifests" => ["--manifests", manifest],
+                "--" => ["--", "--environment", Name],
                 _ => ["--environment", Name],
             };
 
             var result = await new ToolRunner().RunAsync(["trace", "-a", app, "--no-user-secrets", .. input]);
 
             Assert.Equal(2, result.ExitCode);
-            Assert.Contains("is not a valid environment name", result.Error, StringComparison.Ordinal);
+            Assert.Contains("holds a slash or a character a file name can't have", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(Name, result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("Outside", result.Output, StringComparison.Ordinal);
             Assert.DoesNotContain("fake-outside-value", result.Output, StringComparison.Ordinal);
         }
