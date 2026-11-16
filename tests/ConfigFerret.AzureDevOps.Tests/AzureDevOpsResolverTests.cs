@@ -169,7 +169,9 @@ public class AzureDevOpsResolverTests
         // quadratic in its length. Such a scan of the same name pattern took 20 seconds for 80,000 characters of "a ",
         // and about four times as long for twice as many, so the 400,000 characters here would take several minutes and
         // the 2,000,000 of the key and name lines far longer. Read in one pass, each line takes milliseconds.
-        var names = string.Concat(Enumerable.Repeat("a ", 200_000));
+        // The words have two letters so that a nested repeat such as (?:[A-Za-z0-9_.-]+ ?)* can split each of them two
+        // ways and take time exponential in their number; a word of one letter can be split only one way.
+        var names = string.Concat(Enumerable.Repeat("ab ", 133_334));
         var keys = "a" + string.Concat(Enumerable.Repeat("a-", 500_000)) + new string(' ', 1_000_000) + "b";
         var pipeline = shape switch
         {
