@@ -147,20 +147,49 @@ public class JsonApiTests
         Assert.Equal(0, body.BytesRead);
     }
 
-    [Theory]
-    [InlineData(HttpStatusCode.OK)]
-    [InlineData(HttpStatusCode.InternalServerError)]
-    public async Task Stops_reading_a_body_without_a_length_at_the_limit(HttpStatusCode status)
+    [Fact]
+    public async Task Stops_reading_a_body_without_a_length_at_the_limit()
     {
         const long length = JsonApi.MaxResponseBytes + (1024L * 1024);
         var body = new SpacesStream(length);
-        using var handler = new ScriptedHandler(_ => Respond(status, body));
+        using var handler = new ScriptedHandler(_ => Respond(HttpStatusCode.OK, body));
         using var client = new HttpClient(handler);
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Get(client, TestContext.Current.CancellationToken));
 
         Assert.Equal("Example returned a response for /v1/items that is larger than 64 MB.", ex.Message);
         Assert.InRange(body.BytesRead, JsonApi.MaxResponseBytes, length - 1);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(JsonApi.MaxResponseBytes + 1L)]
+    public async Task Reads_only_the_start_of_an_error_body(long? declaredLength)
+    {
+        // An error answer is read only for its reason, so a large one is not read to the end, whatever it declares.
+        var body = new SpacesStream(JsonApi.MaxResponseBytes + (1024L * 1024));
+        using var handler = new ScriptedHandler(_ => Respond(HttpStatusCode.InternalServerError, body, declaredLength));
+        using var client = new HttpClient(handler);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Get(client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example returned 500 InternalServerError for /v1/items.", ex.Message);
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+        Assert.InRange(body.BytesRead, 1, 1024 * 1024);
+    }
+
+    [Theory]
+    [InlineData("the credential cf-fake-credential-0042 was revoked")]
+    [InlineData("credential ending fake-cre is not valid")]
+    [InlineData("CF-FAKE is not a known prefix")]
+    public async Task Leaves_out_a_reason_that_repeats_part_of_the_credential(string reason)
+    {
+        var handler = new FakeHttpHandler().Respond("/v1/items", System.Text.Json.JsonSerializer.Serialize(new { message = reason }), HttpStatusCode.Unauthorized);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => JsonApi.GetAsync(
+            handler.Client(), Api, h => h.Add("X-Test", "1"), "Example", null, "cf-fake-credential-0042", TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example returned 401 Unauthorized for /v1/items.", ex.Message);
     }
 
     [Fact]
@@ -241,7 +270,11 @@ public class JsonApiTests
     [InlineData("""{"errors":"x"}""", "Example returned 401 Unauthorized for /v1/items.")]
     [InlineData("""{"error":{"code":403,"message":"Permission denied.","status":"PERMISSION_DENIED"}}""", "Example returned 401 Unauthorized for /v1/items. Permission denied.")]
     [InlineData("""{"error":{"message":7}}""", "Example returned 401 Unauthorized for /v1/items.")]
-    [InlineData("""{"error":"x"}""", "Example returned 401 Unauthorized for /v1/items.")]
+    [InlineData("""{"error":"x"}""", "Example returned 401 Unauthorized for /v1/items. x")]
+    [InlineData("""{"error":"invalid_token","error_description":"Token is expired. You can either do re-authorization or token refresh."}""", "Example returned 401 Unauthorized for /v1/items. invalid_token: Token is expired. You can either do re-authorization or token refresh.")]
+    [InlineData("""{"error_description":"d","error":7}""", "Example returned 401 Unauthorized for /v1/items. d")]
+    [InlineData("""{"message":"a\u001b[2Jb\u202ec\r\nd\u0000e\u2028f"}""", "Example returned 401 Unauthorized for /v1/items. a[2Jbcdef")]
+    [InlineData("""{"message":"\u001b\r\n\u200b"}""", "Example returned 401 Unauthorized for /v1/items.")]
     [InlineData("""{"message":"\ud800"}""", "Example returned 401 Unauthorized for /v1/items.")]
     public async Task Adds_the_servers_error_message_when_there_is_one(string body, string expected)
     {

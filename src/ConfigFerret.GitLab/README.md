@@ -145,6 +145,10 @@ out, every step listed is marked inferred and sensitive, and a warning says that
   GitLab shows CI/CD variables only to maintainers. A job's `CI_JOB_TOKEN` cannot read variables.
 - The token is sent only in the `PRIVATE-TOKEN` header, only over HTTPS, and redirects are not followed. It never
   appears in a report or an exception message.
+- When GitLab refuses a request, the error gives the reason GitLab sends (for an OAuth-style answer, its `error` and
+  `error_description`), cut short and without control characters, and leaves it out when it repeats the token or
+  four of its characters in a row. Without a token GitLab answers a private project as if it did not exist, so the
+  error says that no token was sent.
 - Masked and hidden variables are marked sensitive. GitLab never returns hidden values. It does return masked values,
   but ConfigFerret drops them unless `IncludeMaskedValues` is on; then they are only compared to say whether they
   differ, and are redacted like any other secret.

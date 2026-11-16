@@ -294,6 +294,48 @@ public sealed class GitLabVariablesTests : IDisposable
         Assert.DoesNotContain(Token, ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task Says_that_no_token_was_sent_when_gitlab_refuses_the_request(string? token)
+    {
+        // GitLab answers a request without a token for a private project as if the project did not exist.
+        var options = Options();
+        options.Token = token;
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Load(options));
+
+        Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
+        Assert.Equal($"GitLab returned 404 NotFound for {ProjectPath}. 404 Not Found. No token was sent; set Token.", ex.Message);
+    }
+
+    [Fact]
+    public async Task Gives_the_reason_gitlab_sends_in_an_oauth_style_error()
+    {
+        Full(_handler).Respond(
+            "/api/v4/groups/contoso/variables" + Page(1),
+            """{"error":"insufficient_scope","error_description":"The request requires higher privileges than provided by the access token.","scope":"api"}""",
+            HttpStatusCode.Forbidden);
+
+        var gitlab = await Load(Options());
+
+        Assert.Equal(
+            "Skipped GitLab group variables of contoso: GitLab returned 403 Forbidden for /api/v4/groups/contoso/variables. insufficient_scope: The request requires higher privileges than provided by the access token.",
+            Assert.Single(gitlab.Warnings));
+    }
+
+    [Theory]
+    [InlineData("the token glpat-never_printed_4d2 was revoked")]
+    [InlineData("a token that ends in printed_4d2 has expired")]
+    public async Task Leaves_out_a_reason_that_repeats_part_of_the_token(string reason)
+    {
+        Full(_handler).Respond("/api/v4/groups/contoso/variables" + Page(1), JsonSerializer.Serialize(new { error = "invalid_token", error_description = reason }), HttpStatusCode.Unauthorized);
+
+        var gitlab = await Load(Options());
+
+        Assert.Equal("Skipped GitLab group variables of contoso: GitLab returned 401 Unauthorized for /api/v4/groups/contoso/variables.", Assert.Single(gitlab.Warnings));
+    }
+
     [Fact]
     public async Task Fails_when_the_project_is_not_found_or_a_group_error_is_not_access()
     {

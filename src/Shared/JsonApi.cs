@@ -21,6 +21,12 @@ internal static class JsonApi
 
     private const int MaxErrorMessageLength = 200;
 
+    // An error answer is read only for the reason it gives, which is short, so only its start is read.
+    private const int MaxErrorBodyBytes = 64 * 1024;
+
+    // A reason that repeats this many characters of the credential in a row, or all of a shorter one, is not shown.
+    private const int CredentialPartLength = 4;
+
     private static readonly string[] ErrorMessageFields = ["message", "ErrorMessage"];
 
     /// <summary>Checks that <paramref name="uri"/> is absolute and uses HTTPS, or plain HTTP only when allowed or on loopback.</summary>
@@ -69,12 +75,26 @@ internal static class JsonApi
     /// <paramref name="onSuccess"/> with a successful response before its body is parsed, for example to read a paging
     /// header or to reject a sign-in page sent with a success status. It may throw <see cref="HttpRequestException"/>.
     /// </summary>
+    public static Task<JsonDocument> GetAsync(
+        HttpClient client,
+        Uri uri,
+        Action<HttpRequestHeaders> addHeaders,
+        string service,
+        Action<HttpResponseMessage>? onSuccess,
+        CancellationToken cancellationToken) =>
+        GetAsync(client, uri, addHeaders, service, onSuccess, null, cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="GetAsync(HttpClient, Uri, Action{HttpRequestHeaders}, string, Action{HttpResponseMessage}, CancellationToken)"/>,
+    /// and leaves the server's reason out of an error when it repeats <paramref name="credential"/> or a part of it.
+    /// </summary>
     public static async Task<JsonDocument> GetAsync(
         HttpClient client,
         Uri uri,
         Action<HttpRequestHeaders> addHeaders,
         string service,
         Action<HttpResponseMessage>? onSuccess,
+        string? credential,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -87,12 +107,13 @@ internal static class JsonApi
         try
         {
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-            var body = await ReadBodyAsync(response.Content, uri, service, timeout.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, body), null, response.StatusCode);
+                var start = await ReadStartAsync(response.Content, MaxErrorBodyBytes, timeout.Token).ConfigureAwait(false);
+                throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, start, credential), null, response.StatusCode);
             }
 
+            var body = await ReadBodyAsync(response.Content, uri, service, timeout.Token).ConfigureAwait(false);
             onSuccess?.Invoke(response);
             return Parse(body, uri, service);
         }
@@ -160,6 +181,25 @@ internal static class JsonApi
         return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    // At most the first maxBytes of content, whatever length it declares, read as ReadBodyAsync reads it.
+    private static async Task<string> ReadStartAsync(HttpContent content, int maxBytes, CancellationToken cancellationToken)
+    {
+        var start = new byte[maxBytes];
+        var length = 0;
+        var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using (stream.ConfigureAwait(false))
+        {
+            int read;
+            while (length < maxBytes && (read = await stream.ReadAsync(start.AsMemory(length), cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                length += read;
+            }
+        }
+
+        using var reader = new StreamReader(new MemoryStream(start, 0, length), EncodingOf(content), detectEncodingFromByteOrderMarks: true);
+        return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     // The charset of the Content-Type, else UTF-8, as in ReadAsStringAsync. A byte order mark is honoured too.
     private static Encoding EncodingOf(HttpContent content)
     {
@@ -219,7 +259,7 @@ internal static class JsonApi
         }
     }
 
-    private static string DescribeFailure(HttpStatusCode status, Uri uri, string service, string body)
+    private static string DescribeFailure(HttpStatusCode status, Uri uri, string service, string body, string? credential)
     {
         var message = $"{service} returned {(int)status} {status} for {uri.AbsolutePath}.";
         if ((int)status is >= 300 and < 400)
@@ -228,10 +268,27 @@ internal static class JsonApi
         }
 
         var detail = ReadErrorMessage(body);
-        return detail is null ? message : $"{message} {detail}";
+        return detail is null || (!string.IsNullOrEmpty(credential) && HoldsPartOf(detail, credential)) ? message : $"{message} {detail}";
     }
 
-    // GitHub returns {"message": ...}, Octopus returns {"ErrorMessage": ...}, Google Cloud {"error": {"message": ...}}. None echoes the credential back.
+    // Whether text repeats credential, or a run of CredentialPartLength of its characters, in any case.
+    private static bool HoldsPartOf(string text, string credential)
+    {
+        var length = Math.Min(CredentialPartLength, credential.Length);
+        for (var i = 0; i + length <= credential.Length; i++)
+        {
+            if (text.AsSpan().Contains(credential.AsSpan(i, length), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // GitHub returns {"message": ...}, Octopus returns {"ErrorMessage": ...}, Google Cloud {"error": {"message": ...}},
+    // GitLab and other OAuth servers {"error": "invalid_token", "error_description": ...}. The body comes from the server,
+    // so what is shown is cut short and has no control or format characters.
     private static string? ReadErrorMessage(string body)
     {
         try
@@ -246,7 +303,7 @@ internal static class JsonApi
             {
                 if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
                 {
-                    return Shorten(value.GetString() ?? string.Empty);
+                    return Shown(value.GetString());
                 }
             }
 
@@ -254,7 +311,7 @@ internal static class JsonApi
             if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
             {
                 var texts = errors.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()).Take(3).ToList();
-                return texts.Count == 0 ? null : Shorten(string.Join("; ", texts));
+                return texts.Count == 0 ? null : Shown(string.Join("; ", texts));
             }
 
             // Google Cloud APIs return {"error": {"code": 403, "message": "...", "status": "PERMISSION_DENIED"}}.
@@ -263,7 +320,15 @@ internal static class JsonApi
                 && error.TryGetProperty("message", out var errorMessage)
                 && errorMessage.ValueKind == JsonValueKind.String)
             {
-                return Shorten(errorMessage.GetString() ?? string.Empty);
+                return Shown(errorMessage.GetString());
+            }
+
+            // OAuth servers, GitLab among them, return {"error": "insufficient_scope", "error_description": "..."}.
+            var code = doc.RootElement.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? Shown(e.GetString()) : null;
+            var description = doc.RootElement.TryGetProperty("error_description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+            if (code is not null || description is not null)
+            {
+                return code is null ? Shown(description) : Shown(Shown(description) is null ? code : $"{code}: {description}");
             }
         }
         catch (InvalidOperationException)
@@ -280,5 +345,23 @@ internal static class JsonApi
         return null;
     }
 
-    private static string Shorten(string text) => text.Length > MaxErrorMessageLength ? text[..MaxErrorMessageLength] + "..." : text;
+    // The text without control or format characters (which could rewrite or hide what a terminal or log shows), cut
+    // short without splitting a surrogate pair, or null when nothing is left.
+    private static string? Shown(string? text)
+    {
+        var clean = string.Concat((text ?? string.Empty).Where(c => !char.IsControl(c)
+            && CharUnicodeInfo.GetUnicodeCategory(c) is not (UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator))).Trim();
+        if (clean.Length == 0)
+        {
+            return null;
+        }
+
+        if (clean.Length <= MaxErrorMessageLength)
+        {
+            return clean;
+        }
+
+        var cut = char.IsHighSurrogate(clean[MaxErrorMessageLength - 1]) ? MaxErrorMessageLength - 1 : MaxErrorMessageLength;
+        return clean[..cut] + "...";
+    }
 }
