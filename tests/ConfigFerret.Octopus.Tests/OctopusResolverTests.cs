@@ -177,6 +177,106 @@ public class OctopusResolverTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Redacts_the_value_when_a_sensitive_value_is_scoped_equally_whatever_the_order(bool sensitiveFirst)
+    {
+        OctopusVariable[] rows =
+        [
+            Var("Queue:Endpoint", null, sensitive: true, scope: ("Environment", "Production")),
+            Var("Queue:Endpoint", "amqp://dev", scope: ("Environment", "Development")),
+        ];
+
+        AssertSecretHidden(TraceQueueEndpoint(new OctopusVariables(sensitiveFirst ? rows : [.. rows.Reverse()])));
+    }
+
+    [Fact]
+    public void Redacts_the_value_when_a_sensitive_value_applies_unless_a_more_specific_one_does()
+    {
+        // The plain project value applies only on targets tagged worker, which was not given; elsewhere the sensitive one does.
+        var variables = new OctopusVariables(
+        [
+            Var("Queue:Endpoint", null, set: "library variable set Shared", project: false, sensitive: true),
+            Var("Queue:Endpoint", "amqp://worker", scope: ("Role", "worker")),
+        ]);
+
+        AssertSecretHidden(TraceQueueEndpoint(variables, o => o.Environment = "Production"));
+    }
+
+    [Fact]
+    public void Marks_the_last_value_sensitive_only_when_a_sensitive_value_could_win()
+    {
+        var variables = new OctopusVariables(
+        [
+            Var("A", null, sensitive: true, scope: ("Environment", "Production")),
+            Var("A", "tie", scope: ("Environment", "Development")),
+            Var("B", null, sensitive: true),
+            Var("B", "maybe", scope: ("Machine", "worker-01")),
+            Var("C", null, sensitive: true),
+            Var("C", "certain", scope: ("Environment", "Production")),
+            Var("D", null, sensitive: true),
+            Var("D", "certain", scope: ("Environment", "Production")),
+            Var("D", "maybe", scope: [("Environment", "Production"), ("Machine", "worker-01")]),
+            Var("E", null, sensitive: true, scope: ("Role", "worker")),
+            Var("E", "certain", scope: [("Environment", "Production"), ("Role", "web")]),
+        ]);
+        var options = new OctopusTraceOptions();
+        var resolver = new OctopusResolver(variables, options);
+        var diagnostics = new TraceDiagnostics();
+
+        var tie = resolver.Resolve(EnvStep("A", null), diagnostics)[^1];
+        options.Environment = "Production";
+        options.Roles.Add("web");
+        var maybe = resolver.Resolve(EnvStep("B", null), diagnostics)[^1];
+        var overridden = resolver.Resolve(EnvStep("C", null), diagnostics)[^1];
+        var behindCertain = resolver.Resolve(EnvStep("D", null), diagnostics)[^1];
+        var ruledOut = resolver.Resolve(EnvStep("E", null), diagnostics)[^1];
+
+        Assert.True(tie.IsSensitive);
+        Assert.Equal("matched by name; scoped to environment Development; applies only if the deployment matches environment Development, which was not given; another value that may apply instead is sensitive", tie.Note);
+        Assert.True(maybe.IsSensitive);
+        Assert.EndsWith("; another value that may apply instead is sensitive", maybe.Note, StringComparison.Ordinal);
+        Assert.False(overridden.IsSensitive);
+        Assert.False(behindCertain.IsSensitive);
+        Assert.False(ruledOut.IsSensitive);
+        Assert.DoesNotContain("sensitive", overridden.Note + behindCertain.Note + ruledOut.Note, StringComparison.Ordinal);
+    }
+
+    private static ProvenanceReport TraceQueueEndpoint(OctopusVariables variables, Action<OctopusTraceOptions>? configure = null)
+    {
+        var dir = Directory.CreateTempSubdirectory("configferret-octopus-");
+        try
+        {
+            var file = Path.Join(dir.FullName, "appsettings.json");
+            File.WriteAllText(file, """{ "Queue": { "Endpoint": "amqps://app:hunter2@mq.prod" } }""");
+            var configuration = new ConfigurationBuilder().AddJsonFile(file).Build();
+            return ConfigTracer.For(configuration).WithOctopus(variables, configure).Trace();
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
+    private static void AssertSecretHidden(ProvenanceReport report)
+    {
+        Assert.DoesNotContain("hunter2", report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", report.ToJson(), StringComparison.Ordinal);
+        var setting = report.Find("Queue:Endpoint")!;
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        Assert.All(Flatten(setting.Steps), s =>
+        {
+            Assert.DoesNotContain("hunter2", s.Value ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("hunter2", s.Note ?? string.Empty, StringComparison.Ordinal);
+        });
+        Assert.All(report.Warnings, w => Assert.DoesNotContain("hunter2", w, StringComparison.Ordinal));
+
+        static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
+            steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
+    }
+
     [Fact]
     public void Checks_its_arguments()
     {

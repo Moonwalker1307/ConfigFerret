@@ -105,5 +105,7 @@ produce a warning.
   `AllowUnencryptedHttp`), and redirects are not followed. It never appears in a report or an exception message.
 - Octopus never returns sensitive values, so sensitive variables show up by name only and are marked sensitive. The
   usual ConfigFerret redaction then hides the value of every layer in that chain, and values of keys that look secret
-  are hidden even when Octopus does not mark them sensitive.
+  are hidden even when Octopus does not mark them sensitive. When the scope does not settle which value applies (two
+  equally scoped values, or a more specific one scoped on something that was not given) and one that may apply is
+  sensitive, the last value is marked sensitive too.
 - Values that reference other variables (`#{Name}`) are shown as written, not expanded.
