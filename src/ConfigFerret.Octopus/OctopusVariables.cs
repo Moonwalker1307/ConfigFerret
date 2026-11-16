@@ -304,7 +304,7 @@ public sealed partial class OctopusVariables
         public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken)
         {
             var uri = new Uri(baseAddress, path);
-            var doc = await JsonApi.GetAsync(client, uri, h => h.Add("X-Octopus-ApiKey", apiKey), "Octopus", cancellationToken).ConfigureAwait(false);
+            var doc = await JsonApi.GetAsync(client, uri, h => h.Add("X-Octopus-ApiKey", apiKey), "Octopus", null, apiKey, cancellationToken).ConfigureAwait(false);
             try
             {
                 JsonApi.RequireValidText(doc, "Octopus", uri);

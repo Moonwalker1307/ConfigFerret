@@ -137,6 +137,10 @@ Groups that no pipeline file read links come first and say so. Without pipeline 
   service account can read the groups.
 - The token is sent only in the `Authorization` header, only over HTTPS, and redirects are not followed. A token that
   Azure DevOps does not accept fails with a clear message (Azure DevOps answers it with a 203 sign-in page).
+- When Azure DevOps refuses a request, the error gives the reason Azure DevOps sends, cut short and without control
+  characters, and leaves it out when it repeats the token or four of its characters in a row. A personal access
+  token is sent as the base64 text of `:` and the token, so a reason that repeats that text, or four of its
+  characters in a row, is left out too.
 - Azure DevOps never returns secret values, so secret variables show up by name only and are marked sensitive.
 - Variables whose name looks like a secret's (`Smtp.Password`, by `TraceOptions.DefaultSensitiveKeyPattern`, whatever
   `SensitiveKeyPattern` is set to) are marked sensitive even when they are not secret, both in variable groups and in

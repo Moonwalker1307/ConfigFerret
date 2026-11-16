@@ -167,6 +167,21 @@ public class OctopusVariablesTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_out_a_reason_that_repeats_the_API_key(bool fourCharacters)
+    {
+        // A proxy or server that echoes the request's headers back must not put the API key into the message.
+        var echoed = fourCharacters ? ApiKey[^4..] : ApiKey;
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", $$"""{"ErrorMessage":"Invalid API key {{echoed}}"}""", HttpStatusCode.Unauthorized);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => OctopusVariables.LoadAsync(Options(), client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Octopus returned 401 Unauthorized for /api/spaces/all.", ex.Message);
+    }
+
+    [Theory]
     [InlineData("http://octopus.example.com/", false)]
     [InlineData("https://admin:pw@octopus.example.com/", false)]
     [InlineData("http://localhost:8065/", true)]
