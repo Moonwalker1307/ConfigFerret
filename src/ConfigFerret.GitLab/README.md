@@ -144,7 +144,9 @@ out, every step listed is marked inferred and sensitive, and a warning says that
 - Use a personal, group or project access token with the `read_api` scope from a user with the **Maintainer** role:
   GitLab shows CI/CD variables only to maintainers. A job's `CI_JOB_TOKEN` cannot read variables.
 - The token is sent only in the `PRIVATE-TOKEN` header, only over HTTPS, and redirects are not followed. It never
-  appears in a report or an exception message.
+  appears in a report or an exception message. White space around it is left out. A token with a control character or
+  a character outside ASCII in it (a zero-width space or byte order mark from a paste) cannot be sent in a header, so
+  loading refuses it with an `ArgumentException` before any request.
 - When GitLab refuses a request, the error gives the reason GitLab sends (for an OAuth-style answer, its `error` and
   `error_description`), cut short and without control characters, and leaves it out when it repeats the token or
   four of its characters in a row. Without a token GitLab answers a private project as if it did not exist, so the

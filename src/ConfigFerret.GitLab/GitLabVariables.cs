@@ -158,8 +158,10 @@ public sealed class GitLabVariables
     private static string? Token(GitLabOptions options)
     {
         var token = string.IsNullOrWhiteSpace(options.Token) ? null : options.Token.Trim();
-        return token is not null && token.Any(char.IsControl)
-            ? throw new ArgumentException("Token holds a line break or another control character, so it cannot be sent in a request header.", nameof(options))
+        // A request header holds printable ASCII only: a control character breaks the request, and anything past "~"
+        // fails the send. Never include the token in the message.
+        return token is not null && token.Any(c => char.IsControl(c) || c > '\x7e')
+            ? throw new ArgumentException("Token holds a line break, another control character or a character outside ASCII, so it cannot be sent in a request header.", nameof(options))
             : token;
     }
 
