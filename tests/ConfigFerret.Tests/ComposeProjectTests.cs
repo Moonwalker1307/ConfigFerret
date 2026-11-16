@@ -334,9 +334,25 @@ public class ComposeProjectTests
         Assert.Equal(new ComposeEnvironmentRef("api", "HOST"), origin.Reference);
         Assert.Equal("interpolated as ${HOST} in app.env line 1", origin.Note);
         Assert.Equal("5432", service.Layers("PORT")[0].Value);
+        Assert.Equal("env_file of service api (compose.yaml:8); a bare key, so the value comes from the environment entry at compose.yaml:6", service.Layers("PORT")[0].Note);
         var port = Assert.Single(service.Layers("PORT")[0].Origins);
         Assert.Equal((LayerKind.DockerCompose, "compose.yaml:6"), (port.Kind, port.Location));
         Assert.Equal(new ComposeEnvironmentRef("api", "PORT"), port.Reference);
+    }
+
+    [Fact]
+    public void A_bare_env_file_key_names_the_dotenv_it_takes_its_value_from()
+    {
+        using var folder = new TempFolder();
+        folder.Write("app.env", "REGION\n");
+        folder.Write(".env", "REGION=fake-region\n");
+        var compose = folder.Write("compose.yaml", "services:\n  api:\n    image: x\n    env_file: app.env\n");
+
+        var project = ComposeProject.Load(compose);
+
+        var step = Assert.Single(Service(project, "api").Layers("REGION"));
+        Assert.Equal("fake-region", step.Value);
+        Assert.Equal("env_file of service api (compose.yaml:4); a bare key, so the value comes from .env", step.Note);
     }
 
     [Fact]
