@@ -303,7 +303,7 @@ public sealed partial class TraceRunner
         var one = total == 1;
         return $"The search for the keys the app reads skipped {string.Join(", ", files.Take(5))}{(total > 5 ? $" and {total - 5} more" : string.Empty)}, "
             + $"because {(one ? "it is" : "they are")} over 1 MB, {(one ? "doesn't" : "don't")} fit in the 64 MB of code the scan holds, "
-            + $"{(one ? "comes" : "come")} past the first 5000 files, or took too long to read. A setting marked dead may still be read there."
+            + $"{(one ? "comes" : "come")} past the first 5000 files, couldn't be read, or took too long to read. A setting marked dead may still be read there."
             + (allClassesOpen ? $" The scan didn't look for the classes {(one ? "it declares" : "they declare")}, so every class counts as having any property." : string.Empty);
     }
 

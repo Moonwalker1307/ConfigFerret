@@ -1073,6 +1073,69 @@ public class CodeReadScannerTests
         }
     }
 
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void A_small_file_that_cannot_be_read_is_listed_and_leaves_every_class_open()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has no Unix file mode.");
+        using var temp = new TempFolder();
+        temp.Write("Program.cs", """services.Configure<AppOptions>(cfg.GetSection("App")); public partial class AppOptions { public int Port { get; set; } }""");
+        temp.Write("Locked.cs", """public partial class AppOptions { public string Region { get; set; } = ""; }""");
+        File.SetUnixFileMode(temp.Full("Locked.cs"), UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanOpen(temp.Full("Locked.cs")), "A user who may read any file, such as root, can't see the failure.");
+
+            var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+            Assert.Equal(["Locked.cs"], scanner.SkippedFiles);
+            Assert.True(scanner.AllClassesOpen);
+            Assert.True(scanner.Check("App:Region").IsRead);
+        }
+        finally
+        {
+            File.SetUnixFileMode(temp.Full("Locked.cs"), UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void A_folder_that_cannot_be_opened_is_listed_and_leaves_every_class_open()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has no Unix file mode.");
+        using var temp = new TempFolder();
+        temp.Write("Program.cs", """services.Configure<AppOptions>(cfg.GetSection("App")); public partial class AppOptions { public int Port { get; set; } }""");
+        temp.Write("Locked/Options.cs", """public partial class AppOptions { public string Region { get; set; } = ""; }""");
+        File.SetUnixFileMode(temp.Full("Locked"), UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanList(temp.Full("Locked")), "A user who may read any folder, such as root, can't see the failure.");
+
+            var scanner = CodeReadScanner.Scan(temp.Path, TestContext.Current.CancellationToken);
+
+            Assert.Equal(["Locked/"], scanner.SkippedFiles);
+            Assert.True(scanner.AllClassesOpen);
+            Assert.True(scanner.Check("App:Region").IsRead);
+        }
+        finally
+        {
+            File.SetUnixFileMode(temp.Full("Locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static bool CanList(string folder)
+    {
+        try
+        {
+            Directory.GetFiles(folder);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private static bool CanOpen(string file)
     {
         try

@@ -74,14 +74,15 @@ sections, counts as read. Keys the host reads itself, such as `Logging`, `Allowe
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are listed
 under the scan, and a dead setting may still be read there. So is a file the scan skipped because it is over 1 MB,
-doesn't fit in the 64 MB of code the scan holds, comes past the first 5000 files, or reading it took too long. A file
-over 1 MB is still searched for the classes it declares, and those count as having any property; when a skipped file
-isn't searched, every class does. The scan follows at most 50 projects. A reference it doesn't follow, such as one
-outside the repository, one written with an MSBuild property or one past those 50, and a project file it can't read, is
-named in the notes with why. The repository is the folder or GitHub repository you opened, so open the root of a
-checkout, not the app's own folder, for its references to other projects in it to be followed. A class whose declaration
-or one of whose properties the scan can't take apart, or whose bases go more than 16 levels up, counts as having any
-property too. Check other environments and apps before deleting.
+doesn't fit in the 64 MB of code the scan holds, comes past the first 5000 files, can't be read, or reading it took too
+long. So is a folder the scan may not open, since its files can't be listed. A file over 1 MB is still searched for the
+classes it declares, and those count as having any property; when a skipped file isn't searched, every class does. The
+scan follows at most 50 projects. A reference it doesn't follow, such as one outside the repository, one written with an
+MSBuild property or one past those 50, and a project file it can't read, is named in the notes with why. The repository
+is the folder or GitHub repository you opened, so open the root of a checkout, not the app's own folder, for its
+references to other projects in it to be followed. A class whose declaration or one of whose properties the scan can't
+take apart, or whose bases go more than 16 levels up, counts as having any property too. Check other environments and
+apps before deleting.
 
 ## Download
 

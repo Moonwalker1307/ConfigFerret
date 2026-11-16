@@ -93,8 +93,8 @@ public sealed partial class CodeReadScanner
 
     /// <summary>
     /// C# files the scan skipped because they are over 1 MB, don't fit in the 64 MB of code the scan holds, come past the
-    /// first 5000 files, or reading them took too long, so a key only they read counts as not read: the first 1000 of
-    /// them. <see cref="SkippedFileCount"/> counts them all.
+    /// first 5000 files, could not be read, or reading them took too long, so a key only they read counts as not read:
+    /// the first 1000 of them. <see cref="SkippedFileCount"/> counts them all.
     /// </summary>
     public IReadOnlyList<string> SkippedFiles => _skipped;
 
@@ -204,11 +204,11 @@ public sealed partial class CodeReadScanner
             }
             catch (IOException)
             {
-                AllClassesOpen |= listed;
+                Unread(name, listed);
             }
             catch (UnauthorizedAccessException)
             {
-                AllClassesOpen |= listed;
+                Unread(name, listed);
             }
 
             if (text is not null)
@@ -224,6 +224,19 @@ public sealed partial class CodeReadScanner
         {
             _skipped.Add(name);
         }
+    }
+
+    // A file that could not be read, or not to its end, such as one that may not be read or was deleted during the scan,
+    // is listed once, and since the classes it declares are unknown, every class is left open. So is a folder the scan
+    // may not open, as its name and a separator.
+    private void Unread(string name, bool listed)
+    {
+        if (!listed)
+        {
+            SkipFile(name);
+        }
+
+        AllClassesOpen = true;
     }
 
     /// <summary>Reads C# sources given as text, for tests and callers that already have the files.</summary>
@@ -1253,7 +1266,7 @@ public sealed partial class CodeReadScanner
         var count = 0;
         foreach (var root in folders.Where(f => !walked.Contains(f)))
         {
-            foreach (var file in CodeFiles(root, walked))
+            foreach (var file in CodeFiles(folder, root, walked))
             {
                 yield return (file, ++count <= MaxFiles);
             }
@@ -1275,9 +1288,10 @@ public sealed partial class CodeReadScanner
 
     // The C# files below a folder, in ordinal order within each folder, then the folders below it in ordinal order.
     // bin, obj, node_modules, .git, links and folders already walked are not entered. Each folder walked goes into walked.
-    private static IEnumerable<string> CodeFiles(string root, HashSet<string> walked)
+    // A folder the scan may not open is listed by its path below the scanned folder, since its files can't be listed.
+    private IEnumerable<string> CodeFiles(string scanned, string root, HashSet<string> walked)
     {
-        var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
+        var options = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
         var stack = new Stack<string>();
         stack.Push(root);
         while (stack.Count > 0)
@@ -1301,6 +1315,7 @@ public sealed partial class CodeReadScanner
             }
             catch (UnauthorizedAccessException)
             {
+                Unread(Path.GetRelativePath(scanned, current) + Path.DirectorySeparatorChar, listed: false);
                 continue;
             }
 
