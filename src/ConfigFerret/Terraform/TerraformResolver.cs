@@ -1,9 +1,10 @@
+using System.Text.RegularExpressions;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.Terraform;
 
 /// <summary>Links environment variables, Kubernetes env entries and ConfigMap/Secret keys to Terraform outputs.</summary>
-internal sealed class TerraformResolver(TerraformOutputs outputs, TerraformTraceOptions options) : IOriginResolver
+internal sealed partial class TerraformResolver(TerraformOutputs outputs, TerraformTraceOptions options) : IOriginResolver
 {
     private bool _warned;
 
@@ -67,7 +68,9 @@ internal sealed class TerraformResolver(TerraformOutputs outputs, TerraformTrace
         }
 
         var definition = outputs.Definitions.GetValueOrDefault(output.Output);
-        if (definition?.Expression is { } expression && !output.IsSensitive)
+        // Notes are not redacted, and whether the key is secret by its name is only decided after the resolvers ran,
+        // so the expression is shown only when it holds no literal, which could be the value itself.
+        if (definition?.Expression is { } expression && !output.IsSensitive && !Literal().IsMatch(expression))
         {
             notes.Add($"value = {expression}");
         }
@@ -95,4 +98,8 @@ internal sealed class TerraformResolver(TerraformOutputs outputs, TerraformTrace
             Reference = new TerraformOutputRef(output.Output, output.Path),
         };
     }
+
+    // A string or a number. A digit in a name or in an index such as [0] or .0 is not one.
+    [GeneratedRegex(@"[""]|(?<![\w.\[])\d", RegexOptions.CultureInvariant)]
+    private static partial Regex Literal();
 }

@@ -328,6 +328,63 @@ public sealed class TerraformTests : IDisposable
     }
 
     [Fact]
+    public void A_key_that_is_secret_by_name_never_shows_a_literal_from_its_output_expression_in_a_note()
+    {
+        // None of the outputs is marked sensitive: only the names of the variables say they are secret.
+        var outputsFile = Path.Join(_root, "outputs.json");
+        File.WriteAllText(outputsFile, """
+            {
+              "db_password": {"value": "fake-literal-pw"},
+              "db_connstr": {"value": "Host=db.internal;Password=fake-template-pw"},
+              "account_key": {"value": 13572468},
+              "api_token": {"value": "fake-resource-token"}
+            }
+            """);
+        File.WriteAllText(Path.Join(_root, "outputs.tf"), """
+            output "db_password" {
+              value = "fake-literal-pw"
+            }
+            output "db_connstr" {
+              value = "Host=${aws_db.address};Password=fake-template-pw"
+            }
+            output "account_key" {
+              value = 13572468
+            }
+            output "api_token" {
+              value = random_string.api[0].result
+            }
+            """);
+        var manifests = KubernetesManifests.Parse("""
+            apiVersion: v1
+            kind: Pod
+            metadata: {name: p}
+            spec:
+              containers:
+                - name: c
+                  env:
+                    - {name: DB_PASSWORD, value: fake-literal-pw}
+                    - {name: DB_CONNSTR, value: "Host=db.internal;Password=fake-template-pw"}
+                    - {name: ACCOUNT_KEY, value: "13572468"}
+                    - {name: API_TOKEN, value: fake-resource-token}
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).WithTerraform(TerraformOutputs.Load(outputsFile, terraformFolder: _root)).Trace();
+        var output = report.ToText() + report.ToJson() + string.Join("\n", report.Warnings);
+
+        Assert.Equal(["ACCOUNT_KEY", "API_TOKEN", "DB_CONNSTR", "DB_PASSWORD"], report.Settings.Select(s => s.Key));
+        Assert.All(report.Settings, s => Assert.True(s.IsSensitive));
+        foreach (var secret in new[] { "fake-literal-pw", "fake-template-pw", "13572468", "fake-resource-token" })
+        {
+            Assert.DoesNotContain(secret, output, StringComparison.Ordinal);
+        }
+
+        // A reference names where the value comes from without holding it, so it stays.
+        Assert.Equal(
+            ["matched by name", "matched by name; value = random_string.api[0].result", "matched by name", "matched by name"],
+            report.Settings.Select(s => Assert.Single(Assert.Single(s.Steps).Origins).Note));
+    }
+
+    [Fact]
     public void Explicit_links_win_and_warn_when_the_output_is_missing()
     {
         var outputs = TerraformOutputs.Parse("""{"db": {"value": {"host": "h"}}, "orders_db_host": {"value": "by-name"}}""");
