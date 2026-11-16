@@ -261,33 +261,76 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
         }
 
         // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files. Each
-        // folder is read on its own, so one that cannot be read is a warning and the others are still read.
+        // folder is read on its own, so one that cannot be read is a warning and the others are still read. The scan
+        // stops at the limits, since the folder may hold anything.
+        var limits = options.ScanLimits;
+        var top = Relative(root, folder);
         var enumeration = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
         var files = new List<string>();
-        var folders = new Stack<string>([folder]);
+        var entries = 0;
+        var tooDeep = false;
+        var folders = new Stack<(string Path, int Depth)>([(folder, 0)]);
         while (folders.Count > 0)
         {
-            var current = folders.Pop();
+            var (current, depth) = folders.Pop();
             try
             {
-                files.AddRange(Directory.EnumerateFiles(current, "*", enumeration)
-                    .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)));
+                foreach (var file in Directory.EnumerateFiles(current, "*", enumeration))
+                {
+                    if (++entries > limits.Entries)
+                    {
+                        break;
+                    }
+
+                    if (file.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                    {
+                        files.Add(file);
+                    }
+                }
+
                 foreach (var sub in Directory.EnumerateDirectories(current, "*", enumeration))
                 {
-                    folders.Push(sub);
+                    if (++entries > limits.Entries)
+                    {
+                        break;
+                    }
+
+                    if (depth < limits.Depth)
+                    {
+                        folders.Push((sub, depth + 1));
+                    }
+                    else if (!tooDeep)
+                    {
+                        tooDeep = true;
+                        Limit(string.Create(CultureInfo.InvariantCulture, $"{Relative(root, sub)} is more than {limits.Depth} folders below {top}, so it was not read"));
+                    }
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                NotRead($"the folder {Path.GetRelativePath(root, current).Replace('\\', '/')}", ex);
+                NotRead($"the folder {Relative(root, current)}", ex);
+            }
+
+            if (entries > limits.Entries)
+            {
+                Limit(string.Create(CultureInfo.InvariantCulture, $"{top} holds more than {limits.Entries} files and folders, so the rest were not read"));
+                break;
             }
         }
 
+        long bytes = 0;
         foreach (var file in files.Order(StringComparer.Ordinal))
         {
-            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            var relative = Relative(root, file);
             try
             {
+                bytes += new FileInfo(file).Length;
+                if (bytes > limits.Bytes)
+                {
+                    Limit(string.Create(CultureInfo.InvariantCulture, $"the YAML files under {top} hold more than {limits.Bytes} bytes, so {relative} and the files after it were not read"));
+                    break;
+                }
+
                 var text = File.ReadAllText(file);
                 _usedVariables.UnionWith(ReadVariables(text).Select(v => v.Name));
                 AddTemplates(KubernetesManifests.Parse(text, relative));
@@ -309,6 +352,15 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
         _partlyRead = true;
         _warnings.Add($"Could not read {what}, so no variable of {_app.DisplayName} is listed as unused: {ex.Message}");
     }
+
+    // Past a limit the rest may name any variable too.
+    private void Limit(string what)
+    {
+        _partlyRead = true;
+        _warnings.Add($"{_app.DisplayName}: {what} and no variable is listed as unused.");
+    }
+
+    private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
 
     /// <summary>Finds the ConfigMap, Secret and env values in source manifests that hold <c>${VAR}</c> placeholders.</summary>
     internal void AddTemplates(KubernetesManifests manifests)
