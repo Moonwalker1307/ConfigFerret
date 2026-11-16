@@ -194,6 +194,7 @@ public class RepositoryAnalyzerTests : IDisposable
         var kubernetes = Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource));
         Assert.Equal("orders", kubernetes.Workload);
         Assert.Contains(notes, n => n.Contains("2 workloads", StringComparison.Ordinal));
+        Assert.Equal(scan.Root, profile.RepositoryRoot);
     }
 
     [Fact]

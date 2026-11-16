@@ -226,6 +226,45 @@ public sealed class MainWindowTests : IDisposable
         Assert.Null(kubernetes.Rendered);
     }
 
+    // No profile is saved: the workspace keeps the folder that was opened, and opening it again after a restart builds the
+    // profile from it again, so a sibling project is followed both times.
+    [AvaloniaFact]
+    public async Task A_reference_to_a_sibling_project_is_followed_after_the_workspace_is_saved_and_loaded()
+    {
+        var repo = Path.Join(_temp.FullName, "shop");
+        Directory.CreateDirectory(Path.Join(repo, "src", "Api"));
+        Directory.CreateDirectory(Path.Join(repo, "src", "Shared"));
+        File.WriteAllText(Path.Join(repo, "src", "Api", "Api.csproj"), """<Project><ItemGroup><ProjectReference Include="../Shared/Shared.csproj" /></ItemGroup></Project>""");
+        File.WriteAllText(Path.Join(repo, "src", "Api", "appsettings.json"), """{ "Shared": { "Key": "x" }, "Unused": "y" }""");
+        File.WriteAllText(Path.Join(repo, "src", "Api", "Program.cs"), """var a = configuration["A:B"];""");
+        File.WriteAllText(Path.Join(repo, "src", "Shared", "Shared.csproj"), "<Project />");
+        File.WriteAllText(Path.Join(repo, "src", "Shared", "Reader.cs"), """var s = configuration["Shared:Key"];""");
+        var workspace = Path.Join(_temp.FullName, "workspace.json");
+
+        using (var before = CreateViewModel(new FakeGitHub(), new InMemoryCredentialStore()))
+        {
+            await before.AnalyzeFolderAsync(repo);
+            Dispatcher.UIThread.RunJobs();
+            AssertSharedIsRead(before);
+        }
+
+        var saved = new WorkspaceStore(workspace).Load();
+        Assert.Equal(Path.GetFullPath(repo), Assert.Single(saved.RecentFolders));
+        using var after = CreateViewModel(new FakeGitHub(), new InMemoryCredentialStore());
+        await after.InitializeAsync();
+        await after.AnalyzeFolderAsync(saved.RecentFolders[0]);
+        Dispatcher.UIThread.RunJobs();
+        AssertSharedIsRead(after);
+
+        static void AssertSharedIsRead(MainWindowViewModel viewModel)
+        {
+            Assert.True(viewModel.HasResult, string.Join(Environment.NewLine, viewModel.Problems.Select(p => p.Text)));
+            Assert.False(viewModel.Rows.Single(r => r.Key == "Shared:Key").IsDead);
+            Assert.True(viewModel.Rows.Single(r => r.Key == "Unused").IsDead);
+            Assert.DoesNotContain(Assert.IsType<TraceResult>(viewModel.LastResult).Notes, n => n.Contains("outside", StringComparison.Ordinal));
+        }
+    }
+
     [AvaloniaFact]
     public async Task A_refused_token_is_not_saved()
     {
