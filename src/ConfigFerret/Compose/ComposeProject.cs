@@ -47,6 +47,14 @@ public sealed class ComposeProject
 
     // The most included projects one load reads. A file included again with another environment is another project.
     private const int MaxIncludedProjects = 1_000;
+
+    // The text of the compose, env and mounted files one load reads, included projects and all, counted again each
+    // time a file is read again.
+    private const long MaxReadChars = 256L * 1024 * 1024;
+
+    // The compose YAML one load reads, within MaxReadChars: the files passed in, included files and extends files. Their
+    // parsed trees are kept for the whole load and cost several times their text, unlike env and mounted text.
+    private const long MaxYamlChars = 64L * 1024 * 1024;
     private const int MaxExtendsDepth = 16;
     private const int MaxMergeDepth = 16;
     private const int MaxMountedFileChars = 1024 * 1024;
@@ -82,6 +90,7 @@ public sealed class ComposeProject
 
     // Shared by the root project and every project it includes.
     private OriginBudget _origins = new(MaxOriginSteps);
+    private TextBudget _read = new(MaxReadChars, MaxYamlChars);
     private readonly HashSet<string> _includedWarnings = new(StringComparer.Ordinal);
 
     // Every included project loaded for the root project, by its files, project directory, env files and depth, so a
@@ -149,16 +158,26 @@ public sealed class ComposeProject
 
     /// <summary>Reads and merges compose files, like <c>docker compose -f a.yaml -f b.yaml</c>.</summary>
     /// <param name="files">The compose files, lowest priority first, for example <c>compose.yaml</c> and <c>compose.override.yaml</c>.</param>
-    /// <exception cref="FormatException">A file is not valid YAML or not a valid compose file, or a <c>${VAR:?error}</c> variable is not set.</exception>
+    /// <exception cref="FormatException">
+    /// A file is not valid YAML or not a valid compose file, a <c>${VAR:?error}</c> variable is not set, or the files
+    /// one load reads hold more than 256 MiB of text or more than 64 MiB of compose YAML.
+    /// </exception>
     /// <exception cref="IOException">A compose file or an env file passed in could not be read.</exception>
     public static ComposeProject Load(params string[] files) => Load(files, null);
 
     /// <summary>Reads and merges compose files, like <c>docker compose -f a.yaml -f b.yaml --env-file x</c>.</summary>
     /// <param name="files">The compose files, lowest priority first.</param>
     /// <param name="options">The project directory, env files and variables. The process environment is not read unless the options say so.</param>
-    /// <exception cref="FormatException">A file is not valid YAML or not a valid compose file, or a <c>${VAR:?error}</c> variable is not set.</exception>
+    /// <exception cref="FormatException">
+    /// A file is not valid YAML or not a valid compose file, a <c>${VAR:?error}</c> variable is not set, or the compose,
+    /// env and mounted files one load reads, included projects and all, hold more than 256 MiB of text, or the compose
+    /// files, with their includes and extends files, more than 64 MiB of YAML.
+    /// </exception>
     /// <exception cref="IOException">A compose file or an env file passed in could not be read.</exception>
-    public static ComposeProject Load(IEnumerable<string> files, ComposeOptions? options)
+    public static ComposeProject Load(IEnumerable<string> files, ComposeOptions? options) => Load(files, options, MaxReadChars);
+
+    // Load with lower bounds on the text and the compose YAML it reads, for tests.
+    internal static ComposeProject Load(IEnumerable<string> files, ComposeOptions? options, long maxReadChars, long maxYamlChars = MaxYamlChars)
     {
         ArgumentNullException.ThrowIfNull(files);
         var paths = files.Select(Path.GetFullPath).ToList();
@@ -169,8 +188,9 @@ public sealed class ComposeProject
 
         options ??= new ComposeOptions();
         var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : Path.GetDirectoryName(paths[0])!;
-        var texts = paths.Select(p => new ComposeText(p, File.ReadAllText(p))).ToList();
-        return Create(texts, options, directory, null, 0, paths, new(StringComparer.Ordinal), new(MaxOriginSteps));
+        var read = new TextBudget(maxReadChars, maxYamlChars);
+        var texts = paths.Select(p => new ComposeText(p, read.ReadYaml(p))).ToList();
+        return Create(texts, options, directory, null, 0, paths, new(StringComparer.Ordinal), new(MaxOriginSteps), read);
     }
 
     /// <summary>
@@ -180,19 +200,23 @@ public sealed class ComposeProject
     /// </summary>
     /// <param name="files">Each file's name as shown in reports, and its text.</param>
     /// <param name="options">The project directory, env files and variables.</param>
-    /// <exception cref="FormatException">A file is not valid YAML or not a valid compose file.</exception>
+    /// <exception cref="FormatException">
+    /// A file is not valid YAML or not a valid compose file, or the files one load reads hold more than 256 MiB of text
+    /// or more than 64 MiB of compose YAML.
+    /// </exception>
     public static ComposeProject Parse(IEnumerable<(string Name, string Text)> files, ComposeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(files);
         options ??= new ComposeOptions();
         var directory = options.ProjectDirectory is { Length: > 0 } given ? Path.GetFullPath(given) : null;
-        var texts = files.Select(f => new ComposeText(null, f.Text, f.Name)).ToList();
-        return Create(texts, options, directory, null, 0, [], new(StringComparer.Ordinal), new(MaxOriginSteps));
+        var read = new TextBudget(MaxReadChars, MaxYamlChars);
+        var texts = files.Select(f => new ComposeText(null, read.TakeYaml(read.Take(f.Text, f.Name), f.Name), f.Name)).ToList();
+        return Create(texts, options, directory, null, 0, [], new(StringComparer.Ordinal), new(MaxOriginSteps), read);
     }
 
-    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, ComposeProject? parent, int depth, IReadOnlyList<string> including, Dictionary<string, ComposeProject> loaded, OriginBudget origins)
+    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, ComposeProject? parent, int depth, IReadOnlyList<string> including, Dictionary<string, ComposeProject> loaded, OriginBudget origins, TextBudget read)
     {
-        var project = new ComposeProject(options, directory, parent) { _loaded = loaded, _origins = origins };
+        var project = new ComposeProject(options, directory, parent) { _loaded = loaded, _origins = origins, _read = read };
         project.LoadEnvironment(fromCaller: depth == 0);
         foreach (var text in texts)
         {
@@ -265,7 +289,7 @@ public sealed class ComposeProject
                 .Where(p => (_options.AllowFilesOutsideProject || (_displayRoot is not null && SharesRoot(p, _displayRoot))) && (Existing(p) is not null || (HasEntry(p) && Refusal(p) is not null)))])
             .Where(p => !named || !Refuses(p, $"The env file {Display(p)}", _warnings)).ToList();
         Environment = DotEnvLayers.Build(
-            paths.Select(p => new DotEnvSourceText(Display(p), p, () => (named ? ReadNamed(p) : ReadCapped(p)) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
+            paths.Select(p => new DotEnvSourceText(Display(p), p, () => (named ? ReadNamed(p) : Counted(ReadCapped(p), p)) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
             OuterLookup);
         _environmentKey = string.Join('\0', [_parent?._environmentKey ?? string.Empty, .. paths, string.Empty]);
         _warnings.AddRange(Environment.Warnings);
@@ -397,8 +421,8 @@ public sealed class ComposeProject
                     throw new FormatException($"{at}: stopped reading includes, because they bring in more than {MaxIncludedProjects} projects.");
                 }
 
-                var texts = full.Select(p => new ComposeText(p, ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
-                _loaded[key] = sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, this, depth + 1, [.. including, .. full], _loaded, _origins);
+                var texts = full.Select(p => new ComposeText(p, _read.TakeYaml(ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."), Display(p)))).ToList();
+                _loaded[key] = sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, this, depth + 1, [.. including, .. full], _loaded, _origins, _read);
             }
 
             // Like compose, an earlier include wins over a later one, so a later include's parts go first. A service that
@@ -621,7 +645,7 @@ public sealed class ComposeProject
             return null;
         }
 
-        var file = ParseFile(new ComposeText(full, text), Path.GetDirectoryName(full));
+        var file = ParseFile(new ComposeText(full, _read.TakeYaml(text, Display(full))), Path.GetDirectoryName(full));
         _extendsFiles[full] = file;
         return file;
     }
@@ -1073,8 +1097,11 @@ public sealed class ComposeProject
     {
         null => null,
         { Length: 0 } => string.Empty,
-        var file => ReadCapped(file.FullName),
+        var file => Counted(ReadCapped(file.FullName), fullPath),
     };
+
+    // Counts a file's text against what one load may read.
+    private string? Counted(string? text, string fullPath) => text is null ? null : _read.Take(text, Display(fullPath));
 
     // Reads a text file of at most 1 MiB, or returns null when it does not exist or is bigger. Stops early on a
     // device such as /dev/zero.
@@ -1092,6 +1119,56 @@ public sealed class ComposeProject
     }
 
     private sealed record ComposeText(string? Path, string Text, string? Name = null);
+
+    /// <summary>How much text, and how much compose YAML within it, one load may still read.</summary>
+    private sealed class TextBudget(long limit, long yamlLimit)
+    {
+        private long _read;
+        private long _yaml;
+
+        /// <summary>Counts <paramref name="text"/>, read from <paramref name="where"/>, and returns it.</summary>
+        /// <exception cref="FormatException">The load has read more than its limit, counting this text.</exception>
+        public string Take(string text, string where)
+        {
+            _read += text.Length;
+            return _read > limit
+                ? throw new FormatException($"Stopped reading at {where}: the compose, env and mounted files this load read hold more than {Size(limit)} of text.")
+                : text;
+        }
+
+        /// <summary>Counts <paramref name="text"/>, already counted by <see cref="Take"/>, as compose YAML.</summary>
+        /// <exception cref="FormatException">The load has read more compose YAML than its limit, counting this text.</exception>
+        public string TakeYaml(string text, string where)
+        {
+            _yaml += text.Length;
+            return _yaml > yamlLimit
+                ? throw new FormatException($"Stopped reading at {where}: the compose files this load read, with their includes and extends files, hold more than {Size(yamlLimit)} of YAML.")
+                : text;
+        }
+
+        /// <summary>
+        /// Reads a compose file passed in, and counts it as text and as YAML. It reads at most one character more than
+        /// both limits leave, so a file beyond them is never read in full.
+        /// </summary>
+        public string ReadYaml(string path)
+        {
+            var left = Math.Max(0, Math.Min(limit - _read, yamlLimit - _yaml));
+            using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var text = new StringBuilder();
+            var buffer = new char[(int)Math.Min(left + 1, 64 * 1024)];
+            int count;
+            while (text.Length <= left && (count = reader.ReadBlock(buffer, 0, (int)Math.Min(buffer.Length, left + 1 - text.Length))) > 0)
+            {
+                text.Append(buffer, 0, count);
+            }
+
+            return TakeYaml(Take(text.ToString(), path), path);
+        }
+
+        private static string Size(long chars) => chars % (1024 * 1024) == 0
+            ? string.Create(CultureInfo.InvariantCulture, $"{chars / 1024 / 1024} MiB")
+            : string.Create(CultureInfo.InvariantCulture, $"{chars} characters");
+    }
 
     private sealed record ComposeFile(string Id, string Display, string? Base, YamlMappingNode Root, YamlMappingNode? Services);
 
