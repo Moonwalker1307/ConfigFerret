@@ -94,8 +94,9 @@ public sealed class KubernetesManifests
                 : (IEnumerable<string>)[path];
             foreach (var file in files)
             {
-                // Folders such as base and overlays often hold files of the same name, so the path tells them apart.
-                result.Add(File.ReadAllText(file), isFolder ? Path.GetRelativePath(path, file).Replace('\\', '/') : Path.GetFileName(file));
+                // Folders such as base and overlays often hold files of the same name, so the path tells them apart. Only
+                // the system's own separator becomes "/": on Linux and macOS a "\" is part of a file name.
+                result.Add(File.ReadAllText(file), isFolder ? Path.GetRelativePath(path, file).Replace(Path.DirectorySeparatorChar, '/') : Path.GetFileName(file));
             }
         }
 
