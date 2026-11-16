@@ -464,7 +464,18 @@ public class ComposeProjectTests
         var step = Assert.Single(service.Layers("V"));
         Assert.Equal(written[(tag.Length + 1)..], step.Value);
         Assert.Null(step.Note);
-        Assert.Equal($"compose.yaml:4: the value of V in service app does not fit its tag {tag}, so docker compose refuses the file; it is shown as written.", Assert.Single(service.Warnings));
+        Assert.Equal($"compose.yaml:4: the value of V in service app does not fit its tag {tag}, so docker compose refuses the file; it is shown as written.", Assert.Single(project.Warnings));
+        Assert.Empty(service.Warnings);
+    }
+
+    [Fact]
+    public void Warns_once_about_a_value_that_does_not_fit_its_tag_in_a_base_that_several_services_extend()
+    {
+        var project = Parse("services:\n  base:\n    environment:\n      V: !!bool yes\n  a:\n    extends: base\n  b:\n    extends: base\n");
+
+        Assert.Equal(["base", "a", "b"], project.ServiceNames);
+        Assert.Equal("compose.yaml:4: the value of V in service base does not fit its tag !!bool, so docker compose refuses the file; it is shown as written.", Assert.Single(project.Warnings));
+        Assert.All(project.ServiceNames, name => Assert.Equal("yes", Service(project, name).Environment["V"]));
     }
 
     [Fact]

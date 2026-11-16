@@ -93,6 +93,9 @@ public sealed class ComposeProject
     private TextBudget _read = new(MaxReadChars, MaxYamlChars);
     private readonly HashSet<string> _includedWarnings = new(StringComparer.Ordinal);
 
+    // The warnings about a value that does not fit its tag, which is read again for each service that uses its part.
+    private readonly HashSet<string> _tagWarnings = new(StringComparer.Ordinal);
+
     // Every included project loaded for the root project, by its files, project directory, env files and depth, so a
     // file included many times, or by many files, is loaded once.
     private Dictionary<string, ComposeProject> _loaded = new(StringComparer.Ordinal);
@@ -688,7 +691,7 @@ public sealed class ComposeProject
 
         List<(string Name, string? Value, YamlNode Node, bool Typed, string? Tag)> entries = node switch
         {
-            YamlMappingNode map => [.. MergedPairs(map, 0).Values.Select(p => MapEntry(part, p.Key, p.Value, warnings))],
+            YamlMappingNode map => [.. MergedPairs(map, 0).Values.Select(p => MapEntry(part, p.Key, p.Value))],
             YamlSequenceNode seq => [.. seq.Children.Select(c => SplitListEntry(part, c)).Select(e => (e.Name, e.Value, e.Node, false, (string?)null))],
             _ when node.IsNull() => [],
             _ => throw new FormatException($"{Yaml.Location(part.File.Display, node)}: environment must be a mapping or a list."),
@@ -726,9 +729,9 @@ public sealed class ComposeProject
 
     // Like compose, a plain value that YAML reads as a number, a boolean or a date, or a value tagged !!int, !!float,
     // !!bool or !!timestamp, is passed as compose formats it. go-yaml refuses the whole file for a value that does not
-    // fit its tag; it is kept as written here, with a warning that names the tag and not the value. Tag is the value's
-    // tag, such as !reset, or null.
-    private static (string Name, string? Value, YamlNode Node, bool Typed, string? Tag) MapEntry(Part part, YamlScalarNode key, YamlNode value, List<string> warnings)
+    // fit its tag; it is kept as written here, with one project warning, however many services use the part, that
+    // names the tag and not the value. Tag is the value's tag, such as !reset, or null.
+    private (string Name, string? Value, YamlNode Node, bool Typed, string? Tag) MapEntry(Part part, YamlScalarNode key, YamlNode value)
     {
         if (!value.Tag.IsEmpty && value.Tag.Value == "!reset")
         {
@@ -751,7 +754,11 @@ public sealed class ComposeProject
             }
             else if (typedTag is not null)
             {
-                warnings.Add($"{Yaml.Location(part.File.Display, key)}: the value of {key.Value} in service {part.Service} does not fit its tag {typedTag.Replace("tag:yaml.org,2002:", "!!", StringComparison.Ordinal)}, so docker compose refuses the file; it is shown as written.");
+                var warning = $"{Yaml.Location(part.File.Display, key)}: the value of {key.Value} in service {part.Service} does not fit its tag {typedTag.Replace("tag:yaml.org,2002:", "!!", StringComparison.Ordinal)}, so docker compose refuses the file; it is shown as written.";
+                if (_tagWarnings.Add(warning))
+                {
+                    _warnings.Add(warning);
+                }
             }
         }
 
