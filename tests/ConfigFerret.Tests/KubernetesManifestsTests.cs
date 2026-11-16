@@ -335,7 +335,22 @@ public sealed class KubernetesManifestsTests : IDisposable
 
         Assert.Equal(["a", "b", "c"], manifests.ConfigMaps.Keys.Order(StringComparer.Ordinal));
         Assert.Equal("e.yaml", manifests.ConfigMaps["b"].SourceName);
-        Assert.Equal("c.json", manifests.ConfigMaps["c"].SourceName);
+        Assert.Equal("sub/c.json", manifests.ConfigMaps["c"].SourceName);
+    }
+
+    [Fact]
+    public void Names_files_in_a_folder_by_their_path_inside_it()
+    {
+        Directory.CreateDirectory(Path.Join(_dir, "api"));
+        Directory.CreateDirectory(Path.Join(_dir, "worker", "base"));
+        File.WriteAllText(Path.Join(_dir, "api", "cm.yaml"), "kind: ConfigMap\nmetadata: { name: api }\n");
+        File.WriteAllText(Path.Join(_dir, "worker", "base", "cm.yaml"), "kind: ConfigMap\nmetadata: { name: worker }\n");
+
+        var manifests = KubernetesManifests.LoadFiles(_dir);
+
+        Assert.Equal("api/cm.yaml", manifests.ConfigMaps["api"].SourceName);
+        Assert.Equal("worker/base/cm.yaml", manifests.ConfigMaps["worker"].SourceName);
+        Assert.Equal("cm.yaml", KubernetesManifests.LoadFiles(Path.Join(_dir, "api", "cm.yaml")).ConfigMaps["api"].SourceName);
     }
 
     [Fact]
