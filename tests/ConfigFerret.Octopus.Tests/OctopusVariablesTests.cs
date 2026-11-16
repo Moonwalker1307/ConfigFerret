@@ -571,9 +571,12 @@ public class OctopusVariablesTests
 
         public async ValueTask DisposeAsync()
         {
+            // The token alone ends the loop, since every wait in it takes the token. The listener is stopped only
+            // afterwards: an accept that starts on a stopped listener throws "Not listening" before it looks at the
+            // token.
             await _stop.CancelAsync();
-            _listener.Stop();
             await _serving;
+            _listener.Stop();
             _listener.Dispose();
             _stop.Dispose();
         }
