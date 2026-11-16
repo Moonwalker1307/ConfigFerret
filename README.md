@@ -591,7 +591,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   not read. `${VAR}` inside a HelmRelease's values is not linked.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
-- YAML whose aliases expand to more than 10 million characters is rejected.
+- YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest
+  more than 256 levels deep (an alias counts as the collection it stands for).
 - Docker Compose: a missing required `env_file`, `extends` file or `include` is a warning rather than an error, so
   the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
   args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret
