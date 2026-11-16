@@ -180,14 +180,16 @@ internal static partial class Targets
             {
                 foreach (var step in resolver.Resolve(layer, diagnostics))
                 {
-                    if (step.Kind != LayerKind.OctopusDeploy || step.Reference is not OctopusVariableRef)
+                    if (step.Kind != LayerKind.OctopusDeploy || step.Reference is not OctopusVariableRef reference)
                     {
                         throw new InvariantException($"Octopus step for {name} has kind {step.Kind} and reference {step.Reference}.");
                     }
 
-                    if (step.IsSensitive && step.Value is not null)
+                    // A step marked sensitive because a sensitive value may apply instead keeps its plain value, which the
+                    // tracer redacts; any value must still be one a plain variable of that set holds.
+                    if (step.Value is not null && !variables.Find(reference.Name).Any(e => !e.IsSensitive && e.SetName == reference.SetName && e.Value == step.Value))
                     {
-                        throw new InvariantException($"Sensitive Octopus step for {name} has a value.");
+                        throw new InvariantException($"Octopus step for {name} has a value no plain variable holds.");
                     }
 
                     CheckNote(step, name);
