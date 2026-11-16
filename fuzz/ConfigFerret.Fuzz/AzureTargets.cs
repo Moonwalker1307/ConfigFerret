@@ -174,7 +174,9 @@ internal static partial class Targets
 
         foreach (var setting in settings.Settings)
         {
-            if (string.IsNullOrEmpty(setting.Key) || !settings.Find(setting.Key).Contains(setting) || !settings.FindByConfigurationKey(setting.ConfigurationKey).Contains(setting))
+            // A stored key finds the stored key-value, and each configuration key it sets finds the value it sets there.
+            if (string.IsNullOrEmpty(setting.Key) || !settings.Find(setting.Key).Contains(setting)
+                || (settings.Flattened(setting) ?? [setting]).Any(value => !settings.FindByConfigurationKey(value.ConfigurationKey).Contains(value)))
             {
                 throw new InvariantException($"AzureAppConfigurationSettings cannot find key '{setting.Key}'.");
             }

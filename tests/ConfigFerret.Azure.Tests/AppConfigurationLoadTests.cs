@@ -122,6 +122,188 @@ public class AppConfigurationLoadTests
     }
 
     [Fact]
+    public async Task Flattens_JSON_key_values_like_the_provider()
+    {
+        const string retry = """{"Count":3,"Backoff":{"Seconds":1.5},"Codes":[500,503],"On":true,"None":null,"Empty":{},"List":[]}""";
+        var handler = Handler().Respond(KeysPath(), Page(
+            null,
+            Kv("Orders:Retry", retry, contentType: "application/json"),
+            Kv("Orders:Name", "\"abc\"", contentType: "Application/JSON; charset=utf-8"),
+            Kv("Orders:Custom", """{"A":1}""", contentType: "application/vnd.contoso+json"),
+            Kv("Orders:Suffixed", """{"A":1}""", contentType: "application/json+x"),
+            Kv("Orders:Middle", """{"A":1}""", contentType: "application/x+json+y"),
+            Kv("Orders:Commented", "{ // a comment\n \"A\": 1 /* another */ }", contentType: "application/json"),
+            Kv("Orders:Unnamed", """{"":7}""", contentType: "application/json"),
+            Kv("Orders:Nothing", "{}", contentType: "application/json"),
+            Kv("Orders:Bad", "{not json", contentType: "application/json"),
+            Kv("Orders:TextJson", """{"A":1}""", contentType: "text/json"),
+            Kv("Orders:Jsonx", """{"A":1}""", contentType: "application/jsonx"),
+            Kv("Orders:Plain", """{"A":1}""", contentType: "text/plain")));
+
+        var settings = await Load(handler, o =>
+        {
+            o.TrimKeyPrefixes.Add("Orders:Retry:");
+            o.IncludeFeatureFlags = false;
+        });
+
+        string? Value(string key) => Assert.Single(settings.FindByConfigurationKey(key)).Value;
+        Assert.Equal("3", Value("Count"));
+        Assert.Equal("1.5", Value("Backoff:Seconds"));
+        Assert.Equal("500", Value("Codes:0"));
+        Assert.Equal("503", Value("Codes:1"));
+        Assert.Equal("True", Value("On"));
+        Assert.Equal(string.Empty, Value("None"));
+        Assert.Empty(settings.FindByConfigurationKey("Empty"));
+        Assert.Empty(settings.FindByConfigurationKey("List"));
+        Assert.Empty(settings.FindByConfigurationKey("Orders:Retry"));
+        Assert.Equal("abc", Value("Orders:Name"));
+        Assert.Equal("1", Value("Orders:Custom:A"));
+        Assert.Equal("1", Value("Orders:Suffixed:A"));
+        Assert.Equal("1", Value("Orders:Middle:A"));
+        Assert.Equal("1", Value("Orders:Commented:A"));
+        Assert.Equal("7", Value("Orders:Unnamed:"));
+        Assert.Empty(settings.FindByConfigurationKey("Orders:Nothing"));
+        Assert.Equal("{not json", Value("Orders:Bad"));
+        Assert.Equal("""{"A":1}""", Value("Orders:TextJson"));
+        Assert.Equal("""{"A":1}""", Value("Orders:Jsonx"));
+        Assert.Equal("""{"A":1}""", Value("Orders:Plain"));
+        Assert.Empty(settings.Warnings);
+
+        // Find, Settings and the loaded source keep one setting per stored key-value, with its stored value.
+        Assert.Equal(retry, Assert.Single(settings.Find("Orders:Retry")).Value);
+        Assert.Equal(12, settings.Settings.Count);
+        Assert.Equal(settings.Settings.Select(s => s.Key), settings.ToLoadedSource().Entries.Select(e => e.Name));
+
+        var step = Assert.Single(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Provider("AzureAppConfigurationProvider", "Count", "3"), new TraceDiagnostics()));
+        Assert.Equal("Azure App Configuration key Orders:Retry (contoso)", step.Source);
+        Assert.Equal("read by the App Configuration provider (matched by key)", step.Note);
+    }
+
+    [Fact]
+    public async Task Links_a_name_to_a_JSON_key_value_with_one_step_holding_its_stored_value()
+    {
+        const string retry = """{"Count":3,"Delay":5}""";
+        var handler = Handler().Respond(KeysPath(), Page(null, Kv("Orders:Retry", retry, contentType: "application/json")));
+        var settings = await Load(handler, o => o.IncludeFeatureFlags = false);
+
+        var linked = Assert.Single(new AzureAppConfigurationResolver(settings, new AzureAppConfigurationTraceOptions().Map("RETRY", "Orders:Retry")).Resolve(TestLayers.Env("RETRY", retry), new TraceDiagnostics()));
+        var named = Assert.Single(new AzureAppConfigurationResolver(settings, new()).Resolve(new ProvenanceStep { Kind = LayerKind.KubernetesConfigMap, Source = "c", Value = retry, Reference = new ConfigMapKeyRef("cm", "Orders:Retry") }, new TraceDiagnostics()));
+        var leaf = Assert.Single(new AzureAppConfigurationResolver(settings, new()).Resolve(TestLayers.Env("Orders__Retry__Count", "3"), new TraceDiagnostics()));
+
+        Assert.Equal(retry, linked.Value);
+        Assert.Null(linked.Note);
+        Assert.Equal(retry, named.Value);
+        Assert.Equal("matched by name", named.Note);
+        Assert.Equal("3", leaf.Value);
+        Assert.Equal("matched by configuration key", leaf.Note);
+    }
+
+    [Fact]
+    public async Task Links_a_name_to_a_large_JSON_key_value_in_two_labels_without_cutting_the_trace()
+    {
+        var retry = "[" + string.Join(",", Enumerable.Repeat("1", 600)) + "]";
+        var handler = Handler()
+            .Respond(KeysPath("base"), Page(null, Kv("Orders:Retry", retry, "base", "application/json")))
+            .Respond(KeysPath("prod"), Page(null, Kv("Orders:Retry", retry, "prod", "application/json")));
+        var settings = await Load(handler, o =>
+        {
+            o.Labels.Add("base");
+            o.Labels.Add("prod");
+            o.IncludeFeatureFlags = false;
+        });
+        var variables = new Dictionary<string, string?> { ["RETRY"] = retry };
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Add(new FakeEnvironmentVariables(variables)).Build();
+
+        var report = ConfigTracer.For(configuration)
+            .WithOptions(o => o.Environment = variables)
+            .WithAzureAppConfiguration(settings, o => o.Map("RETRY", "Orders:Retry"))
+            .Trace();
+
+        Assert.Equal(["label base", "label prod"], report.Find("RETRY")!.EffectiveStep!.Origins.Select(o => o.Location));
+        Assert.DoesNotContain(report.Warnings, w => w.StartsWith("Stopped following", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Bounds_the_elements_read_from_one_JSON_key_value_and_its_depth()
+    {
+        var many = "[" + string.Join(",", Enumerable.Range(0, AzureAppConfigurationSettings.MaxJsonValues + 1)) + "]";
+        var nested = "[" + string.Join(",", Enumerable.Repeat("[]", AzureAppConfigurationSettings.MaxJsonValues + 1)) + "]";
+        var deepest = new string('[', 63) + "1" + new string(']', 63);
+        var tooDeep = new string('[', 64) + "1" + new string(']', 64);
+        var handler = Handler().Respond(KeysPath(), Page(
+            null,
+            Kv("Many", many, contentType: "application/json"),
+            Kv("Nested", nested, contentType: "application/json"),
+            Kv("Deepest", deepest, contentType: "application/json"),
+            Kv("TooDeep", tooDeep, contentType: "application/json")));
+
+        var settings = await Load(handler, o => o.IncludeFeatureFlags = false);
+
+        Assert.Single(settings.FindByConfigurationKey($"Many:{AzureAppConfigurationSettings.MaxJsonValues - 1}"));
+        Assert.Empty(settings.FindByConfigurationKey($"Many:{AzureAppConfigurationSettings.MaxJsonValues}"));
+        Assert.Empty(settings.FindByConfigurationKey("Nested"));
+        Assert.Equal(nested, Assert.Single(settings.Find("Nested")).Value);
+        Assert.Equal("1", Assert.Single(settings.FindByConfigurationKey("Deepest" + string.Concat(Enumerable.Repeat(":0", 63)))).Value);
+        Assert.Equal(tooDeep, Assert.Single(settings.FindByConfigurationKey("TooDeep")).Value);
+        Assert.Equal(
+        [
+            "Azure App Configuration key Many (no label) in contoso holds more than 1,000 JSON elements; only the first 1,000 are traced.",
+            "Azure App Configuration key Nested (no label) in contoso holds more than 1,000 JSON elements; only the first 1,000 are traced.",
+        ], settings.Warnings);
+    }
+
+    [Fact]
+    public async Task Stops_flattening_JSON_key_values_after_the_load_limit()
+    {
+        static string Array(int count) => "[" + string.Join(",", Enumerable.Repeat("1", count)) + "]";
+        var half = AzureAppConfigurationSettings.MaxJsonValues / 2;
+        var full = AzureAppConfigurationSettings.MaxJsonValuesPerLoad / AzureAppConfigurationSettings.MaxJsonValues - 1;
+        var items = Enumerable.Range(0, full).Select(i => Kv($"K{i}", Array(AzureAppConfigurationSettings.MaxJsonValues), contentType: "application/json"))
+            .Prepend(Kv("Half", Array(half), contentType: "application/json"))
+            .Append(Kv("Cut", Array(AzureAppConfigurationSettings.MaxJsonValues), contentType: "application/json"))
+            .Append(Kv("Last", """{"A":1}""", contentType: "application/json"));
+        var handler = Handler().Respond(KeysPath(), Page(null, [.. items]));
+
+        var settings = await Load(handler, o => o.IncludeFeatureFlags = false);
+
+        Assert.Single(settings.FindByConfigurationKey($"K{full - 1}:0"));
+        Assert.Single(settings.FindByConfigurationKey($"Cut:{half - 1}"));
+        Assert.Empty(settings.FindByConfigurationKey($"Cut:{half}"));
+        Assert.Equal("""{"A":1}""", Assert.Single(settings.FindByConfigurationKey("Last")).Value);
+        Assert.Equal(["Stopped flattening JSON key-values from Azure App Configuration contoso after 100,000 values; the rest are traced as they are stored."], settings.Warnings);
+    }
+
+    [Fact]
+    public async Task Stops_flattening_JSON_key_values_whose_keys_take_too_many_characters()
+    {
+        var big = $$"""{"{{new string('a', 100_000)}}":[{{string.Join(",", Enumerable.Repeat("0", 2_000))}}]}""";
+        var handler = Handler().Respond(KeysPath(), Page(null, Kv("Big", big, contentType: "application/json"), Kv("After", """{"A":1}""", contentType: "application/json")));
+
+        var settings = await Load(handler, o => o.IncludeFeatureFlags = false);
+
+        Assert.Equal(big, Assert.Single(settings.FindByConfigurationKey("Big")).Value);
+        Assert.Equal("""{"A":1}""", Assert.Single(settings.FindByConfigurationKey("After")).Value);
+        Assert.Equal(["Stopped flattening JSON key-values from Azure App Configuration contoso at key Big (no label): the flattened keys would pass 10,000,000 characters, so it and the rest are traced as they are stored."], settings.Warnings);
+    }
+
+    [Fact]
+    public void Flattening_a_long_name_over_many_items_allocates_a_bounded_amount()
+    {
+        var big = $$"""{"{{new string('a', 100_000)}}":[{{string.Join(",", Enumerable.Repeat("0", 2_000))}}]}""";
+        var whole = new AzureAppConfigurationSetting("Big", null, "contoso") { Value = big, ContentType = "application/json" };
+        var warnings = new List<string>();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var values = AzureAppConfigurationSettings.Flatten(whole, big, [], new AzureAppConfigurationSettings.JsonBudget(), warnings);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Null(values);
+        Assert.Single(warnings);
+        // The key budget is 10 million characters (20 MB); building every key would take 400 MB.
+        Assert.InRange(allocated, 0, 40_000_000);
+    }
+
+    [Fact]
     public async Task Reads_Key_Vault_references_as_secret_URIs()
     {
         var handler = Handler().Respond(KeysPath(), Page(
