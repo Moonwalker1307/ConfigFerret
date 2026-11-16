@@ -376,7 +376,7 @@ public sealed class GcpSecrets
         }
 
         private Task<JsonDocument> GetAsync(string relative, CancellationToken cancellationToken) =>
-            JsonApi.GetAsync(client, new Uri(baseAddress, relative), AddHeaders, "Google Cloud Secret Manager", cancellationToken);
+            JsonApi.GetAsync(client, new Uri(baseAddress, relative), AddHeaders, "Google Cloud Secret Manager", null, token.AccessToken, cancellationToken);
 
         private void AddHeaders(HttpRequestHeaders headers)
         {

@@ -86,7 +86,8 @@ internal static class JsonApi
 
     /// <summary>
     /// Like <see cref="GetAsync(HttpClient, Uri, Action{HttpRequestHeaders}, string, Action{HttpResponseMessage}, CancellationToken)"/>,
-    /// and leaves the server's reason out of an error when it repeats <paramref name="credential"/> or a part of it.
+    /// and leaves the server's reason out of an error when it repeats <paramref name="credential"/> or four of its
+    /// characters in a row, ignoring case.
     /// </summary>
     public static async Task<JsonDocument> GetAsync(
         HttpClient client,

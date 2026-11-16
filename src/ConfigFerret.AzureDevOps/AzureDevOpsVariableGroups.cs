@@ -97,11 +97,11 @@ public sealed class AzureDevOpsVariableGroups
         ArgumentNullException.ThrowIfNull(httpClient);
         var baseAddress = JsonApi.RequireSafeBaseAddress(options.OrganizationUrl, options.AllowUnencryptedHttp, nameof(options.OrganizationUrl));
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Project);
-        var authorization = Authorization(options);
+        var (authorization, credential) = Authorization(options);
 
         var project = options.Project.Trim();
         var projectName = $"{OrganizationName(baseAddress)}/{project}";
-        var loader = new Loader(httpClient, new Uri(baseAddress, Uri.EscapeDataString(project) + "/_apis/distributedtask/variablegroups"), authorization);
+        var loader = new Loader(httpClient, new Uri(baseAddress, Uri.EscapeDataString(project) + "/_apis/distributedtask/variablegroups"), authorization, credential);
         var names = options.GroupNames.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var groups = new List<AzureDevOpsVariableGroup>();
         var seen = new HashSet<int>();
@@ -140,7 +140,8 @@ public sealed class AzureDevOpsVariableGroups
         return dot > 0 && host.EndsWith(".visualstudio.com", StringComparison.OrdinalIgnoreCase) ? host[..dot] : host;
     }
 
-    private static AuthenticationHeaderValue Authorization(AzureDevOpsOptions options)
+    // The header, and the token itself, so that an error that repeats the token can leave it out.
+    private static (AuthenticationHeaderValue Header, string Token) Authorization(AzureDevOpsOptions options)
     {
         var pat = string.IsNullOrWhiteSpace(options.PersonalAccessToken) ? null : options.PersonalAccessToken.Trim();
         var bearer = string.IsNullOrWhiteSpace(options.AccessToken) ? null : options.AccessToken.Trim();
@@ -152,15 +153,15 @@ public sealed class AzureDevOpsVariableGroups
         if (pat is not null)
         {
             // Basic authentication with an empty user name, as Azure DevOps expects for a personal access token.
-            return new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(":" + pat)));
+            return (new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(":" + pat))), pat);
         }
 
         return bearer is not null
-            ? new AuthenticationHeaderValue("Bearer", bearer)
+            ? (new AuthenticationHeaderValue("Bearer", bearer), bearer)
             : throw new ArgumentException("Set PersonalAccessToken or AccessToken: Azure DevOps does not list variable groups without signing in.", nameof(options));
     }
 
-    private sealed class Loader(HttpClient client, Uri endpoint, AuthenticationHeaderValue authorization)
+    private sealed class Loader(HttpClient client, Uri endpoint, AuthenticationHeaderValue authorization, string credential)
     {
         public async Task<List<AzureDevOpsVariableGroup>> ReadAsync(string? groupName, CancellationToken cancellationToken)
         {
@@ -184,7 +185,7 @@ public sealed class AzureDevOpsVariableGroups
                 query.Append("&api-version=").Append(ApiVersion);
                 var uri = new Uri(endpoint + query.ToString());
                 string? next = null;
-                using var doc = await JsonApi.GetAsync(client, uri, AddHeaders, "Azure DevOps", response => next = Inspect(response, uri), cancellationToken).ConfigureAwait(false);
+                using var doc = await JsonApi.GetAsync(client, uri, AddHeaders, "Azure DevOps", response => next = Inspect(response, uri), credential, cancellationToken).ConfigureAwait(false);
                 var items = JsonRead.Property(doc.RootElement, "value") is { ValueKind: JsonValueKind.Array } value
                     ? value
                     : throw new HttpRequestException($"Azure DevOps returned an unexpected response for {uri.AbsolutePath}: no 'value' array.");

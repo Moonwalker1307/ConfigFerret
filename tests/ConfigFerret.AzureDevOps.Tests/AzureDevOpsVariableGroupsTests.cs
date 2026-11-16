@@ -248,6 +248,20 @@ public sealed class AzureDevOpsVariableGroupsTests : IDisposable
         Assert.DoesNotContain(Token, ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_out_a_reason_that_repeats_the_token(bool fourCharacters)
+    {
+        // A proxy or server that echoes the request's headers back must not put the token into the message.
+        var echoed = fourCharacters ? Token[^4..] : Token;
+        _handler.Respond(Query("a"), $$"""{"message":"TF400813: token {{echoed}} is not authorized"}""", HttpStatusCode.Unauthorized);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Load(Options("a")));
+
+        Assert.Equal("Azure DevOps returned 401 Unauthorized for /contoso/api/_apis/distributedtask/variablegroups.", ex.Message);
+    }
+
     [Fact]
     public async Task Reports_a_sign_in_page_sent_with_203_as_an_unaccepted_token()
     {

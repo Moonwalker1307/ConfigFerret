@@ -47,6 +47,8 @@ can make the auth library run a command or call any URL. Use Application Default
 
 The token is requested with the `cloud-platform` scope and sent only in the `Authorization` header, only over HTTPS,
 and redirects are not followed. It never appears in a report or an exception message, and neither does the key.
+When Secret Manager refuses a request, the error gives the reason Google Cloud sends, cut short and without control
+characters, and leaves it out when it repeats the token or four of its characters in a row.
 
 ## Configure from appsettings and dependency injection
 

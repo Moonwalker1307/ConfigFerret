@@ -45,6 +45,18 @@ public class ConsulTests
         Reference = new EnvironmentVariableRef(name),
     };
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_out_a_reason_that_repeats_the_token(bool fourCharacters)
+    {
+        // A proxy or server that echoes the request's headers back must not put the token into the message.
+        var echoed = fourCharacters ? Token[^4..] : Token;
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Load(new FakeHttpHandler().Respond(Path, $$"""{"message":"ACL not found for token {{echoed}}"}""", HttpStatusCode.Forbidden)));
+
+        Assert.Equal("Consul returned 403 Forbidden for /v1/kv/config/orders/.", ex.Message);
+    }
+
     [Fact]
     public async Task Reads_keys_under_the_prefix_and_maps_them_to_configuration_keys()
     {
