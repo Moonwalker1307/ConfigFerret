@@ -420,6 +420,10 @@ public class GitHubAccountTests
     [Theory]
     [InlineData("""{"login":5}""")]
     [InlineData("""{"login":null}""")]
+    [InlineData("[]")]
+    [InlineData("""[{"login":"ferret-fan"}]""")]
+    [InlineData("\"ferret-fan\"")]
+    [InlineData("5")]
     public async Task Says_so_when_the_login_is_not_text(string body)
     {
         var handler = new FakeHttpHandler().Respond("/user", body);
@@ -434,6 +438,9 @@ public class GitHubAccountTests
     [InlineData("""{"environments":{"name":"staging"}}""")]
     [InlineData("""{"environments":"staging"}""")]
     [InlineData("""{"environments":[]}""")]
+    [InlineData("[]")]
+    [InlineData("""[{"name":"staging"}]""")]
+    [InlineData("\"staging\"")]
     public async Task Lists_no_environments_when_the_answer_has_no_list(string body)
     {
         var handler = new FakeHttpHandler().Respond("/repos/contoso/orders/environments?per_page=100", body);

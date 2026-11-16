@@ -235,6 +235,19 @@ public class OctopusAccountTests
         Assert.Contains("no default space", ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("[1]")]
+    [InlineData("""["Default"]""")]
+    [InlineData("""[null,[{"Id":"Spaces-1","IsDefault":true}]]""")]
+    public async Task Says_so_when_the_spaces_are_not_objects(string body)
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", body);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("no default space", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_space_without_an_id_is_not_a_match()
     {

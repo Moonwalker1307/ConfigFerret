@@ -8,6 +8,7 @@ using ConfigFerret.Desktop.Model;
 using ConfigFerret.Desktop.Services;
 using ConfigFerret.Desktop.ViewModels;
 using ConfigFerret.Desktop.Views;
+using ConfigFerret.Tests.Shared;
 
 namespace ConfigFerret.Desktop.Tests;
 
@@ -18,11 +19,11 @@ public sealed class MainWindowTests : IDisposable
 
     public void Dispose() => _temp.Delete(recursive: true);
 
-    private MainWindowViewModel CreateViewModel(FakeGitHub github, InMemoryCredentialStore credentials) =>
+    private MainWindowViewModel CreateViewModel(HttpMessageHandler http, InMemoryCredentialStore credentials) =>
         new(
             new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
             credentials,
-            github,
+            http,
             new RepositoryAnalyzer(render: (_, _) => null),
             Path.Join(_temp.FullName, "downloads"));
 
@@ -303,6 +304,49 @@ public sealed class MainWindowTests : IDisposable
 
         Assert.Equal("Production", viewModel.SelectedEnvironment);
         Assert.Equal("charts/worker/values-prod.yaml", viewModel.SelectedValuesFile);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"ferret-fan\"")]
+    public async Task An_answer_that_is_not_a_user_is_shown_instead_of_ending_the_app(string body)
+    {
+        var credentials = new InMemoryCredentialStore();
+        using var viewModel = CreateViewModel(new FakeGitHub().Json("/user", body), credentials);
+        viewModel.GitHubTokenInput = FakeGitHub.Token;
+
+        await viewModel.ConnectGitHubCommand.ExecuteAsync(null);
+
+        Assert.Null(viewModel.GitHubLogin);
+        Assert.Null(credentials.Read(MainWindowViewModel.GitHubAccountName));
+        Assert.Contains("did not say who", viewModel.ConnectionError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_saved_token_whose_answer_is_not_a_user_shows_the_connections()
+    {
+        var credentials = new InMemoryCredentialStore();
+        credentials.Write(MainWindowViewModel.GitHubAccountName, FakeGitHub.Token);
+        using var viewModel = CreateViewModel(new FakeGitHub().Json("/user", "[]"), credentials);
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.ShowConnections);
+        Assert.Contains("did not say who", viewModel.ConnectionError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_octopus_answer_that_is_not_a_list_of_spaces_is_shown_instead_of_ending_the_app()
+    {
+        var octopus = new FakeHttpHandler().Respond("/api/spaces/all", "[1]");
+        using var viewModel = CreateViewModel(octopus, new InMemoryCredentialStore());
+        viewModel.OctopusServer = "https://octopus.example.test/";
+        viewModel.OctopusKeyInput = "fake-api-key";
+
+        await viewModel.ConnectOctopusCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.IsOctopusConnected);
+        Assert.Contains("no default space", viewModel.ConnectionError, StringComparison.Ordinal);
     }
 }
 
