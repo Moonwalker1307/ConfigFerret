@@ -77,6 +77,29 @@ public class HelmChartTests
     }
 
     [Fact]
+    public void A_backslash_in_a_template_file_name_stays_a_backslash()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A backslash is the separator on Windows.");
+        var chart = Directory.CreateTempSubdirectory("cf-chart-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Join(chart, "values.yaml"), "a: 1\n");
+            Directory.CreateDirectory(Path.Join(chart, "templates", "a"));
+            File.WriteAllText(Path.Join(chart, "templates", "a\\b.yaml"), "env:\n  - name: SLASH\n    value: {{ .Values.a }}\n");
+            File.WriteAllText(Path.Join(chart, "templates", "a", "b.yaml"), "env:\n  - name: NESTED\n    value: {{ .Values.a }}\n");
+
+            var loaded = HelmChart.Load(chart);
+
+            Assert.Equal("templates/a\\b.yaml", Assert.Single(loaded.FindUses("SLASH")).Template);
+            Assert.Equal("templates/a/b.yaml", Assert.Single(loaded.FindUses("NESTED")).Template);
+        }
+        finally
+        {
+            Directory.Delete(chart, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Lists_are_kept_as_one_value()
     {
         var chart = HelmChart.FromText([("values.yaml", "hosts: [a, b]\n"), ("prod.yaml", "hosts:\n  - c\n")]);

@@ -43,6 +43,19 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void A_backslash_in_a_folder_name_stays_in_the_kustomization_path()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A backslash is the separator on Windows.");
+        Write("app/kustomization.yaml", "resources: ['a\\b', a/b]\n");
+        Write("app/a\\b/kustomization.yaml", "configMapGenerator:\n  - name: slash\n    literals: [A=1]\n");
+        Write("app/a/b/kustomization.yaml", "configMapGenerator:\n  - name: nested\n    literals: [A=1]\n");
+        var k = Load();
+
+        Assert.Equal("a\\b/kustomization.yaml", k.Find("slash", isSecret: false)!.Keys["A"][^1].Kustomization);
+        Assert.Equal("a/b/kustomization.yaml", k.Find("nested", isSecret: false)!.Keys["A"][^1].Kustomization);
+    }
+
+    [Fact]
     public void A_last_word_of_ten_letters_is_not_a_hash_suffix()
     {
         Write("app/kustomization.yaml", """
