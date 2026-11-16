@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Azure;
 using Azure.Core;
@@ -22,24 +23,53 @@ public sealed class AzureAppConfigurationSettings
     // Stop after this many pages (100 key-values each) per selector so a misbehaving server cannot keep a trace looping.
     internal const int MaxPages = 400;
 
+    // A JSON key-value is flattened from at most this many elements, and one load into at most MaxJsonValuesPerLoad
+    // values whose keys hold at most MaxJsonKeyCharactersPerLoad characters.
+    internal const int MaxJsonValues = 1_000;
+    internal const int MaxJsonValuesPerLoad = 100_000;
+    internal const int MaxJsonKeyCharactersPerLoad = 10_000_000;
+
+    // The provider parses a JSON value wrapped in one more object, with JsonDocument's default depth of 64.
+    private static readonly JsonDocumentOptions JsonOptions = new() { CommentHandling = JsonCommentHandling.Skip, MaxDepth = 63 };
+
+    private static readonly Dictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> NoneFlattened = [];
+
+    private const string FeatureFlagContentType = "application/vnd.microsoft.appconfig.ff+json";
+    private const string KeyDelimiter = ":";
+
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<AzureAppConfigurationSetting>> _byStoredKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IReadOnlyDictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> _flattened;
 
-    /// <summary>Creates a snapshot from settings you already have.</summary>
+    /// <summary>Creates a snapshot from settings you already have. Each setting sets its own configuration key.</summary>
     /// <param name="store">The store name, for example <c>contoso</c>.</param>
     /// <param name="settings">The settings, lowest priority first: for one key, a later label wins over an earlier one.</param>
     /// <param name="warnings">Problems found while reading them.</param>
     public AzureAppConfigurationSettings(string store, IEnumerable<AzureAppConfigurationSetting> settings, IEnumerable<string>? warnings = null)
+        : this(store, settings, warnings, NoneFlattened)
+    {
+    }
+
+    // flattened maps a stored JSON key-value, by reference, to the values the provider flattens it to.
+    internal AzureAppConfigurationSettings(
+        string store,
+        IEnumerable<AzureAppConfigurationSetting> settings,
+        IEnumerable<string>? warnings,
+        IReadOnlyDictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> flattened)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(store);
         ArgumentNullException.ThrowIfNull(settings);
         Store = store;
         Settings = [.. settings];
+        _flattened = flattened;
         foreach (var setting in Settings)
         {
             ArgumentNullException.ThrowIfNull(setting, nameof(settings));
-            Add(_byKey, setting.ConfigurationKey, setting);
             Add(_byStoredKey, setting.Key, setting);
+            foreach (var value in Flattened(setting) ?? [setting])
+            {
+                Add(_byKey, value.ConfigurationKey, value);
+            }
         }
 
         Warnings = [.. warnings ?? []];
@@ -48,20 +78,30 @@ public sealed class AzureAppConfigurationSettings
     /// <summary>The store name, for example <c>contoso</c>.</summary>
     public string Store { get; }
 
-    /// <summary>Every setting, lowest priority first.</summary>
+    /// <summary>
+    /// Every key-value as it is stored, lowest priority first. A key-value with a JSON content type is one setting here,
+    /// holding its stored value; <see cref="FindByConfigurationKey"/> finds the values it is flattened to.
+    /// </summary>
     public IReadOnlyList<AzureAppConfigurationSetting> Settings { get; }
 
     /// <summary>Problems found while loading, such as a Key Vault reference that could not be read.</summary>
     public IReadOnlyList<string> Warnings { get; }
 
-    /// <summary>The settings that set the configuration key <paramref name="key"/> (case-insensitive), lowest priority first, so the last one wins.</summary>
+    /// <summary>
+    /// The settings that set the configuration key <paramref name="key"/> (case-insensitive), lowest priority first, so the
+    /// last one wins. A key-value with a JSON content type that was loaded gives one setting for each value in it, under
+    /// the key the provider flattens it to, such as <c>Orders:Retry:Count</c>, holding that one value.
+    /// </summary>
     public IReadOnlyList<AzureAppConfigurationSetting> FindByConfigurationKey(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
         return _byKey.TryGetValue(key, out var list) ? list : [];
     }
 
-    /// <summary>The settings stored under the key <paramref name="key"/> (case-insensitive), lowest priority first.</summary>
+    /// <summary>
+    /// The key-values stored under the key <paramref name="key"/> (case-insensitive), one for each label, lowest priority
+    /// first. Each holds its stored value: for a key-value with a JSON content type, the whole JSON text.
+    /// </summary>
     public IReadOnlyList<AzureAppConfigurationSetting> Find(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -118,23 +158,29 @@ public sealed class AzureAppConfigurationSettings
         var (client, store) = CreateClient(options, credential, clientOptions);
         var labels = options.Labels.Count == 0 ? [null] : options.Labels.Select(l => string.IsNullOrEmpty(l) || l == "\0" ? null : l).Distinct().ToList();
         var settings = new List<AzureAppConfigurationSetting>();
+        var flattened = new Dictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>>(ReferenceEqualityComparer.Instance);
         var warnings = new List<string>();
 
         // The provider keeps the prefixes sorted in descending order with case ignored, so of two nested prefixes the
         // longer one is tried first, and it compares them with case ignored.
         var prefixes = options.TrimKeyPrefixes.Where(p => !string.IsNullOrEmpty(p)).OrderDescending(StringComparer.OrdinalIgnoreCase).ToList();
+        var json = new JsonBudget();
         foreach (var label in labels)
         {
             var keyFilter = string.IsNullOrWhiteSpace(options.KeyFilter) ? SettingSelector.Any : options.KeyFilter.Trim();
-            await ReadAsync(client, store, keyFilter, label, options, prefixes, settings, warnings, cancellationToken).ConfigureAwait(false);
+            await ReadAsync(client, store, keyFilter, label, options, prefixes, json, settings, flattened, warnings, cancellationToken).ConfigureAwait(false);
             if (options.IncludeFeatureFlags)
             {
-                await ReadAsync(client, store, FeatureFlagPrefix + "*", label, options, prefixes, settings, warnings, cancellationToken).ConfigureAwait(false);
+                await ReadAsync(client, store, FeatureFlagPrefix + "*", label, options, prefixes, json, settings, flattened, warnings, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return new AzureAppConfigurationSettings(store, settings, warnings);
+        return new AzureAppConfigurationSettings(store, settings, warnings, flattened);
     }
+
+    /// <summary>The values a stored JSON key-value was flattened to, or null when it sets its own key as it is.</summary>
+    internal IReadOnlyList<AzureAppConfigurationSetting>? Flattened(AzureAppConfigurationSetting setting) =>
+        _flattened.TryGetValue(setting, out var values) ? values : null;
 
     internal static AzureAppConfigurationSettingRef Reference(AzureAppConfigurationSetting setting) =>
         new(setting.Store, setting.Key, setting.Label, setting.SecretId);
@@ -201,7 +247,9 @@ public sealed class AzureAppConfigurationSettings
         string? label,
         AzureAppConfigurationOptions options,
         IReadOnlyList<string> prefixes,
+        JsonBudget json,
         List<AzureAppConfigurationSetting> into,
+        Dictionary<AzureAppConfigurationSetting, IReadOnlyList<AzureAppConfigurationSetting>> flattened,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
@@ -220,9 +268,16 @@ public sealed class AzureAppConfigurationSettings
                         continue;
                     }
 
-                    if (Convert(setting, store, options, prefixes, warnings) is { } converted)
+                    if (Convert(setting, store, options, prefixes, warnings) is not { } converted)
                     {
-                        into.Add(converted);
+                        continue;
+                    }
+
+                    into.Add(converted);
+                    if (converted.Kind == AzureAppConfigurationSettingKind.KeyValue && IsJson(converted.ContentType) && converted.Value is not null
+                        && Flatten(converted, converted.Value, prefixes, json, warnings) is { } values)
+                    {
+                        flattened[converted] = values;
                     }
                 }
 
@@ -282,6 +337,181 @@ public sealed class AzureAppConfigurationSettings
         }
 
         return basic with { Value = raw, ConfigurationKey = Trim(setting.Key, prefixes) };
+    }
+
+    // The provider flattens a value with a JSON content type the way a JSON settings file is read: {"Count":3} under
+    // Orders:Retry sets Orders:Retry:Count to 3, and a JSON string sets the key itself. Like its JsonFlattener, a string
+    // gives its text, a number its JSON text, true and false give True and False, null gives an empty string, an empty
+    // property name gives a key that ends in ':', and an empty object or array sets nothing. The trimmed prefixes apply
+    // to the flattened keys, and comments are skipped. Null means the value sets its own key as it is stored: it is not
+    // valid JSON, it nests deeper than the provider reads, or a bound for the load was passed.
+    //
+    // The store's answer is not trusted. Each key is built only when its element is reached, from its parent's key, and
+    // the elements read from one key-value, the values from one load and the key characters for one load are bounded,
+    // with warnings that name a key, its label and the store, never a value.
+    internal static IReadOnlyList<AzureAppConfigurationSetting>? Flatten(AzureAppConfigurationSetting whole, string raw, IReadOnlyList<string> prefixes, JsonBudget budget, List<string> warnings)
+    {
+        if (budget.Stopped)
+        {
+            return null;
+        }
+
+        if (budget.ValuesLeft <= 0)
+        {
+            budget.WarnOnce(whole.Store, warnings);
+            return null;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(raw, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+            {
+                budget.ValuesLeft--;
+                return [whole with { Value = root.ToString() }];
+            }
+
+            var values = new List<AzureAppConfigurationSetting>();
+            var limit = Math.Min(MaxJsonValues, budget.ValuesLeft);
+            var pending = new Stack<JsonFrame>();
+            pending.Push(new JsonFrame(whole.Key, root));
+            var elements = 0;
+            while (pending.TryPeek(out var frame))
+            {
+                if (!frame.MoveNext(out var segment, out var child))
+                {
+                    pending.Pop();
+                    continue;
+                }
+
+                var container = child.ValueKind is JsonValueKind.Object or JsonValueKind.Array;
+                if (++elements > MaxJsonValues)
+                {
+                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Azure App Configuration key {whole.Key} ({whole.LabelText}) in {whole.Store} holds more than {MaxJsonValues:N0} JSON elements; only the first {MaxJsonValues:N0} are traced."));
+                    break;
+                }
+
+                if (!container && values.Count == limit)
+                {
+                    budget.WarnOnce(whole.Store, warnings);
+                    break;
+                }
+
+                var length = frame.Key.Length + KeyDelimiter.Length + segment.Length;
+                if (length > budget.KeyCharactersLeft)
+                {
+                    budget.Stop(whole, warnings);
+                    return null;
+                }
+
+                budget.KeyCharactersLeft -= length;
+                var key = string.Concat(frame.Key, KeyDelimiter, segment);
+                if (container)
+                {
+                    pending.Push(new JsonFrame(key, child));
+                }
+                else
+                {
+                    values.Add(whole with { ConfigurationKey = Trim(key, prefixes), Value = child.ToString() });
+                }
+            }
+
+            budget.ValuesLeft -= values.Count;
+            return values;
+        }
+    }
+
+    // A content type counts as JSON as the provider counts it: the main type is application and one of the parts of the
+    // subtype split on '+' is json, case ignored. The provider leaves out the Key Vault reference and feature flag types
+    // only when they match exactly; here case is ignored, so a reference typed in other case is still kept as a
+    // reference and its content is never shown as values.
+    private static bool IsJson(string? contentType)
+    {
+        var mediaType = contentType?.Split(';')[0].Trim();
+        if (string.IsNullOrEmpty(mediaType) || IsContentType(mediaType, KeyVaultReferenceContentType) || IsContentType(mediaType, FeatureFlagContentType))
+        {
+            return false;
+        }
+
+        var slash = mediaType.IndexOf('/', StringComparison.Ordinal);
+        return slash > 0
+            && mediaType.AsSpan(0, slash).Equals("application", StringComparison.OrdinalIgnoreCase)
+            && mediaType[(slash + 1)..].Split('+').Any(part => part.Equals("json", StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal sealed class JsonBudget
+    {
+        private bool _warned;
+
+        public int ValuesLeft { get; set; } = MaxJsonValuesPerLoad;
+
+        public int KeyCharactersLeft { get; set; } = MaxJsonKeyCharactersPerLoad;
+
+        public bool Stopped { get; private set; }
+
+        public void WarnOnce(string store, List<string> warnings)
+        {
+            if (!_warned)
+            {
+                _warned = true;
+                warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Stopped flattening JSON key-values from Azure App Configuration {store} after {MaxJsonValuesPerLoad:N0} values; the rest are traced as they are stored."));
+            }
+        }
+
+        public void Stop(AzureAppConfigurationSetting at, List<string> warnings)
+        {
+            Stopped = true;
+            warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Stopped flattening JSON key-values from Azure App Configuration {at.Store} at key {at.Key} ({at.LabelText}): the flattened keys would pass {MaxJsonKeyCharactersPerLoad:N0} characters, so it and the rest are traced as they are stored."));
+        }
+    }
+
+    // One object or array being flattened: its key, and how far its children have been read.
+    private sealed class JsonFrame
+    {
+        private readonly bool _isObject;
+        private JsonElement.ObjectEnumerator _properties;
+        private JsonElement.ArrayEnumerator _items;
+        private int _index;
+
+        public JsonFrame(string key, JsonElement element)
+        {
+            Key = key;
+            _isObject = element.ValueKind == JsonValueKind.Object;
+            if (_isObject)
+            {
+                _properties = element.EnumerateObject();
+            }
+            else
+            {
+                _items = element.EnumerateArray();
+            }
+        }
+
+        public string Key { get; }
+
+        public bool MoveNext(out string segment, out JsonElement element)
+        {
+            if (_isObject ? _properties.MoveNext() : _items.MoveNext())
+            {
+                segment = _isObject ? _properties.Current.Name : (_index++).ToString(CultureInfo.InvariantCulture);
+                element = _isObject ? _properties.Current.Value : _items.Current;
+                return true;
+            }
+
+            segment = string.Empty;
+            element = default;
+            return false;
+        }
     }
 
     // The SDK turns Key Vault references and feature flags into typed settings; reading Value gives their JSON back.

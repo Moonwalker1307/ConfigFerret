@@ -130,6 +130,18 @@ label wins, as with the provider's `Select` calls. Feature flags (`.appconfig.fe
 `application/vnd.microsoft.appconfig.keyvaultref+json`) is shown as sensitive, with the secret's URI in the note; the
 secret is never read through App Configuration.
 
+A key-value with a JSON content type (`application/json`, or an `application/` type with `json` as one of the
+`+`-separated parts of its subtype, such as `application/vnd.contoso+json`) is flattened as the provider flattens it:
+`Orders:Retry` = `{"Count":3}` sets `Orders:Retry:Count` = `3`, a JSON string sets the key to its text, `true` and
+`null` give `True` and an empty string, and an empty object or array sets nothing. Trimmed prefixes apply to the
+flattened keys, and comments in the value are skipped. A configuration key such as `Orders:Retry:Count` is traced to
+the one value it holds; a link (`Map`) or a name equal to the stored key, such as `Orders:Retry`, is traced to the
+key-value as stored. A value that is not valid JSON, or nests more than 63 levels deep (the provider wraps it in one
+more level and stops at 64), sets its own key as it is stored. Bounds keep a large store from slowing the trace: at
+most 1,000 JSON elements are read from one key-value, and one load takes at most 100,000 values whose keys hold at
+most 10 million characters. Past a bound a trace warning names the key or the store, never a value, and what is left
+is traced as it is stored or left out.
+
 ## Permissions
 
 - Key Vault: listing needs the "List" secret permission (RBAC: Key Vault Secrets User covers both list and get; for
