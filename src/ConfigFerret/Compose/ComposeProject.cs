@@ -22,6 +22,8 @@ namespace ConfigFerret.Compose;
 /// <c>${VAR}</c> references in the compose files are filled in from <see cref="ComposeOptions.Variables"/> (the
 /// shell), then the project's env files (<see cref="ComposeOptions.EnvFiles"/>, else the project directory's
 /// <c>.env</c>). The process environment is read only when <see cref="ComposeOptions.UseProcessEnvironment"/> is set.
+/// An included file sees the environment of the project that includes it first; its own env files only add variables
+/// that are not set there.
 /// </para>
 /// <para>
 /// A file that compose would need but that is missing (a required <c>env_file</c>, an <c>extends</c> file or an
@@ -33,6 +35,9 @@ namespace ConfigFerret.Compose;
 public sealed class ComposeProject
 {
     private const int MaxIncludeDepth = 8;
+
+    // The most included projects one load reads. A file included again with another environment is another project.
+    private const int MaxIncludedProjects = 1_000;
     private const int MaxExtendsDepth = 16;
     private const int MaxMergeDepth = 16;
     private const int MaxMountedFileChars = 1024 * 1024;
@@ -69,11 +74,20 @@ public sealed class ComposeProject
     // The root the project directory really lies on, after its own links, such as a checkout behind a junction.
     private readonly Lazy<string?> _realRoot;
 
-    private ComposeProject(ComposeOptions options, string? projectDirectory, string? displayRoot)
+    // For an included project, the project that includes it: like compose, an include sees that project's environment
+    // (the shell, then its env files) first, and its own env files only add what that does not set.
+    private readonly ComposeProject? _parent;
+
+    // What this project's environment is made of: the parent's, then the env files read, by path. An included file
+    // is loaded once for each of these it is included with.
+    private string _environmentKey = string.Empty;
+
+    private ComposeProject(ComposeOptions options, string? projectDirectory, ComposeProject? parent)
     {
         _options = options;
         ProjectDirectory = projectDirectory;
-        _displayRoot = displayRoot ?? projectDirectory;
+        _parent = parent;
+        _displayRoot = parent?._displayRoot ?? projectDirectory;
         _realRoot = new(() => _displayRoot is not null && Kustomization.RealPath(_displayRoot, anyRoot: true) is { } real ? Path.GetPathRoot(real) : null);
         if (options.UseProcessEnvironment)
         {
@@ -88,7 +102,7 @@ public sealed class ComposeProject
             _shell[name] = value!;
         }
 
-        Environment = DotEnvLayers.Build([], ShellLookup);
+        Environment = DotEnvLayers.Build([], OuterLookup);
     }
 
     /// <summary>The project directory, or null when the files were parsed from text without one.</summary>
@@ -161,9 +175,9 @@ public sealed class ComposeProject
         return Create(texts, options, directory, null, 0, [], new(StringComparer.Ordinal), new(MaxOriginSteps));
     }
 
-    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, string? displayRoot, int depth, IReadOnlyList<string> including, Dictionary<string, ComposeProject> loaded, OriginBudget origins)
+    private static ComposeProject Create(List<ComposeText> texts, ComposeOptions options, string? directory, ComposeProject? parent, int depth, IReadOnlyList<string> including, Dictionary<string, ComposeProject> loaded, OriginBudget origins)
     {
-        var project = new ComposeProject(options, directory, displayRoot) { _loaded = loaded, _origins = origins };
+        var project = new ComposeProject(options, directory, parent) { _loaded = loaded, _origins = origins };
         project.LoadEnvironment(fromCaller: depth == 0);
         foreach (var text in texts)
         {
@@ -218,16 +232,24 @@ public sealed class ComposeProject
             .Where(p => !named || !Refuses(p, $"The env file {Display(p)}", _warnings)).ToList();
         Environment = DotEnvLayers.Build(
             paths.Select(p => new DotEnvSourceText(Display(p), p, () => (named ? ReadNamed(p) : ReadCapped(p)) ?? throw new FileNotFoundException($"The env file {Display(p)} does not exist or is larger than 1 MiB.", p))),
-            ShellLookup);
+            OuterLookup);
+        _environmentKey = string.Join('\0', [_parent?._environmentKey ?? string.Empty, .. paths, string.Empty]);
         _warnings.AddRange(Environment.Warnings);
     }
 
     private LookupResult? ShellLookup(string name) => _shell.TryGetValue(name, out var value) ? new LookupResult(value, null) : null;
 
-    /// <summary>Looks a variable up the way compose does: the shell first, then the project's env files.</summary>
+    // What a variable is before this project's own env files: the parent project's environment for an include, which
+    // starts with the shell, else the shell.
+    private LookupResult? OuterLookup(string name) => _parent is not null ? _parent.Lookup(name) : ShellLookup(name);
+
+    /// <summary>
+    /// Looks a variable up the way compose does: the shell first, then the project's env files. An included project
+    /// asks the project that includes it before its own env files.
+    /// </summary>
     internal LookupResult? Lookup(string name)
     {
-        if (ShellLookup(name) is { } shell)
+        if (OuterLookup(name) is { } shell)
         {
             return shell;
         }
@@ -333,11 +355,16 @@ public sealed class ComposeProject
                 : Path.GetDirectoryName(full[0])!;
             var envFiles = ItemsOrSelf(item.Get("env_file")).Select(e => e.Scalar()).Where(e => e is not null)
                 .Select(e => Resolve(e!, "env_file")).ToList();
-            var key = string.Join('\0', [depth.ToString(CultureInfo.InvariantCulture), projectDirectory, .. full, string.Empty, .. envFiles]);
+            var key = string.Join('\0', [depth.ToString(CultureInfo.InvariantCulture), projectDirectory, .. full, string.Empty, .. envFiles, string.Empty, _environmentKey]);
             if (!_loaded.TryGetValue(key, out var sub))
             {
+                if (_loaded.Count >= MaxIncludedProjects)
+                {
+                    throw new FormatException($"{at}: stopped reading includes, because they bring in more than {MaxIncludedProjects} projects.");
+                }
+
                 var texts = full.Select(p => new ComposeText(p, ReadNamed(p) ?? throw new FormatException($"{at}: the included file {Display(p)} is larger than 1 MiB."))).ToList();
-                _loaded[key] = sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, _displayRoot, depth + 1, [.. including, .. full], _loaded, _origins);
+                _loaded[key] = sub = Create(texts, _options.Copy(projectDirectory, envFiles), projectDirectory, this, depth + 1, [.. including, .. full], _loaded, _origins);
             }
 
             foreach (var name in sub.ServiceNames)

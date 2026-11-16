@@ -860,6 +860,39 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void An_include_sees_the_parent_environment_before_its_own_env_files()
+    {
+        using var folder = new TempFolder();
+        folder.Write(".env", "TAG=1.2\nSHARED=parent\n");
+        folder.Write("infra/.env", "SHARED=child\nONLYCHILD=c\nFROM_PARENT=${TAG}\n");
+        folder.Write("infra/compose.yaml", """
+            services:
+              db:
+                environment:
+                  VERSION: ${TAG}
+                  SHARED: ${SHARED}
+                  ONLYCHILD: ${ONLYCHILD}
+                  FROM_PARENT: ${FROM_PARENT}
+                  TAG:
+            """);
+        var compose = folder.Write("compose.yaml", "include: [infra/compose.yaml]\n");
+
+        var project = ComposeProject.Load(compose);
+
+        var db = Service(project, "db");
+        Assert.Equal("1.2", db.Environment["VERSION"]);
+        Assert.Equal("parent", db.Environment["SHARED"]);
+        Assert.Equal("c", db.Environment["ONLYCHILD"]);
+        Assert.Equal("1.2", db.Environment["FROM_PARENT"]);
+        Assert.Equal("1.2", db.Environment["TAG"]);
+        var origin = Assert.Single(db.Layers("VERSION")[0].Origins);
+        Assert.Equal((".env", "line 1"), (origin.Source, origin.Location));
+        Assert.Equal((".env", "line 2"), (db.Layers("SHARED")[0].Origins[0].Source, db.Layers("SHARED")[0].Origins[0].Location));
+        Assert.Empty(project.Warnings);
+        Assert.Empty(db.Warnings);
+    }
+
+    [Fact]
     public void Rejects_an_include_that_redefines_a_service_or_includes_itself()
     {
         using var folder = new TempFolder();
@@ -904,6 +937,27 @@ public class ComposeProjectTests
 
         Assert.Empty(project.ServiceNames);
         Assert.Equal("l6.yaml holds 2 YAML documents; only the first is read.", Assert.Single(project.Warnings));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task Stops_at_includes_that_bring_in_more_than_1000_projects()
+    {
+        // The same file included with other env files sees another environment, so it is another project each time:
+        // 12 at the first level, 144 at the second, 1,728 at the third.
+        using var folder = new TempFolder();
+        folder.Write("a.env", "A=1\n");
+        for (var i = 0; i < 3; i++)
+        {
+            folder.Write($"l{i}.yaml", "include:\n" + string.Concat(Enumerable.Range(1, 12).Select(n =>
+                $"  - path: l{i + 1}.yaml\n    env_file: [{string.Join(", ", Enumerable.Repeat("a.env", n))}]\n")));
+        }
+
+        folder.Write("l3.yaml", "services: {}\n");
+
+        var ex = await Assert.ThrowsAsync<FormatException>(() => Task.Run(() => ComposeProject.Load(Path.Join(folder.Path, "l0.yaml")), TestContext.Current.CancellationToken));
+
+        Assert.StartsWith("l2.yaml:", ex.Message, StringComparison.Ordinal);
+        Assert.EndsWith(": stopped reading includes, because they bring in more than 1000 projects.", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
