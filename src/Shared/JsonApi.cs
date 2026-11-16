@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace ConfigFerret.Shared;
@@ -10,6 +12,13 @@ namespace ConfigFerret.Shared;
 /// </summary>
 internal static class JsonApi
 {
+    /// <summary>
+    /// The largest response body that is read. Paged lists send at most a few MB a page, but Octopus projects/all and a
+    /// recursive Consul read are not paged, and a Vault secret can be as large as Vault's 32 MB request limit, so this
+    /// leaves room for those and still keeps a broken or hostile server from filling memory.
+    /// </summary>
+    public const int MaxResponseBytes = 64 * 1024 * 1024;
+
     private const int MaxErrorMessageLength = 200;
 
     private static readonly string[] ErrorMessageFields = ["message", "ErrorMessage"];
@@ -72,22 +81,84 @@ internal static class JsonApi
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("ConfigFerret", typeof(JsonApi).Assembly.GetName().Version?.ToString(3) ?? "0"));
         addHeaders(request.Headers);
 
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, body), null, response.StatusCode);
-        }
-
-        onSuccess?.Invoke(response);
-
+        // HttpClient.Timeout stops at the headers when they are read first, so the same limit is applied to the body here.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(client.Timeout);
         try
         {
-            return JsonDocument.Parse(body);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            var body = await ReadBodyAsync(response.Content, uri, service, timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, body), null, response.StatusCode);
+            }
+
+            onSuccess?.Invoke(response);
+
+            try
+            {
+                return JsonDocument.Parse(body);
+            }
+            catch (JsonException ex)
+            {
+                throw new HttpRequestException($"{service} returned a response that is not JSON for {uri.AbsolutePath}.", ex);
+            }
         }
-        catch (JsonException ex)
+        catch (OperationCanceledException ex) when (IsTimeout(ex, timeout, cancellationToken))
         {
-            throw new HttpRequestException($"{service} returned a response that is not JSON for {uri.AbsolutePath}.", ex);
+            throw new HttpRequestException(
+                string.Create(CultureInfo.InvariantCulture, $"{service} did not send a complete response for {uri.AbsolutePath} within {client.Timeout.TotalSeconds} seconds."),
+                ex);
+        }
+    }
+
+    // Our own timer, or HttpClient's, which reports its Timeout as a cancellation with a TimeoutException inside. A
+    // cancellation by the caller's token is left as it is.
+    private static bool IsTimeout(OperationCanceledException ex, CancellationTokenSource timeout, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested && (timeout.IsCancellationRequested || ex.InnerException is TimeoutException);
+
+    // Reads the body like ReadAsStringAsync, but stops at MaxResponseBytes instead of buffering whatever the server sends.
+    private static async Task<string> ReadBodyAsync(HttpContent content, Uri uri, string service, CancellationToken cancellationToken)
+    {
+        var tooLarge = $"{service} returned a response for {uri.AbsolutePath} that is larger than {MaxResponseBytes / (1024 * 1024)} MB.";
+        if (content.Headers.ContentLength > MaxResponseBytes)
+        {
+            throw new HttpRequestException(tooLarge);
+        }
+
+        using var buffer = new MemoryStream();
+        var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using (stream.ConfigureAwait(false))
+        {
+            var chunk = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (buffer.Length + read > MaxResponseBytes)
+                {
+                    throw new HttpRequestException(tooLarge);
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+        }
+
+        buffer.Position = 0;
+        using var reader = new StreamReader(buffer, EncodingOf(content), detectEncodingFromByteOrderMarks: true);
+        return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    // The charset of the Content-Type, else UTF-8, as in ReadAsStringAsync. A byte order mark is honoured too.
+    private static Encoding EncodingOf(HttpContent content)
+    {
+        var charset = content.Headers.ContentType?.CharSet?.Trim('"');
+        try
+        {
+            return string.IsNullOrEmpty(charset) ? Encoding.UTF8 : Encoding.GetEncoding(charset);
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
         }
     }
 
