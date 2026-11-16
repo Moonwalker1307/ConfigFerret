@@ -132,8 +132,10 @@ through a whole-value reference such as `ALIAS: $TIMEOUT`. When any of them may 
 sensitive.
 
 One trace step looks at no more than 1,000 CI file variables, the most upstream steps the tracer keeps for a setting.
-Past that, the jobs not reached are left out, every step listed is marked inferred and sensitive, and a warning says
-that not all of them were followed.
+It counts only the variables the job sees, and looks at them in the order they win, as the tracer keeps the end of a
+chain: the job's own (every job's that counts, when the trace cannot tell which job), then the hidden jobs', then the
+global ones, each from the end of the file. So what it keeps includes the one that wins. Past that, the rest is left
+out, every step listed is marked inferred and sensitive, and a warning says that not all of them were followed.
 
 ## Tokens and secrets
 

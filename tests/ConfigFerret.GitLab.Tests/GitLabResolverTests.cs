@@ -582,6 +582,65 @@ public class GitLabResolverTests
         Assert.InRange(resolver.Examined, jobs, 20L * jobs);
     }
 
+    [Fact]
+    public void Keeps_the_job_own_definition_when_the_bound_cuts_the_hidden_ones()
+    {
+        // More hidden definitions of X than one step looks at, and the job's own X, which wins in that job.
+        var yaml = new StringBuilder();
+        for (var i = 0; i < 1_001; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $".t{i}:\n  variables:\n    X: default\n");
+        }
+
+        yaml.Append("job-a:\n  variables:\n    X: real\n  script:\n    - export MAIL_AUTH=$X\n");
+        var resolver = Resolver(o => o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml"), new GitLabVariables([]));
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "real"), new TraceDiagnostics());
+
+        // The tracer marks the last step effective, so the bound keeps the end, as the tracer's own bound does.
+        Assert.Equal("GitLab CI variable X (job job-a)", steps[^1].Source);
+        Assert.Equal("real", steps[^1].Value);
+        Assert.InRange(steps.Count, 2, 1_000);
+        Assert.All(steps, s => Assert.True(s.IsSensitive));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Keeps_the_job_definition_matched_by_name_when_the_bound_cuts_the_others(bool otherEnvironments)
+    {
+        // A job's X near the top, and after it more hidden definitions of X, or more jobs for other environments, than
+        // one step looks at.
+        var yaml = new StringBuilder("job-a:\n  variables:\n    X: real\n  script:\n    - ./run.sh\n");
+        for (var i = 0; i < 1_001; i++)
+        {
+            if (otherEnvironments)
+            {
+                yaml.Append(CultureInfo.InvariantCulture, $"j{i}:\n  environment: staging\n  variables:\n    X: other\n  script:\n    - ./run.sh\n");
+            }
+            else
+            {
+                yaml.Append(CultureInfo.InvariantCulture, $".t{i}:\n  variables:\n    X: default\n");
+            }
+        }
+
+        var resolver = Resolver(
+            o =>
+            {
+                o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml");
+                o.Environment = "production";
+            },
+            new GitLabVariables([]));
+
+        var steps = resolver.Resolve(EnvStep("X", "real"), new TraceDiagnostics());
+
+        // The tracer marks the last step effective. A job's own X wins over the hidden ones, and the jobs for other
+        // environments do not count, so they cannot cut it.
+        Assert.Equal("GitLab CI variable X (job job-a)", steps[^1].Source);
+        Assert.Equal("real", steps[^1].Value);
+        Assert.InRange(steps.Count, 1, 1_000);
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task Bounds_the_work_when_every_link_sees_many_hidden_definitions()
     {

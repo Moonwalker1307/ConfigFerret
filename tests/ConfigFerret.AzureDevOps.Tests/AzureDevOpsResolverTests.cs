@@ -678,6 +678,46 @@ public class AzureDevOpsResolverTests
         Assert.InRange(resolver.Examined, stages, 30L * stages);
     }
 
+    [Fact]
+    public void Keeps_the_job_own_variable_when_jobs_outside_stages_set_it_more_often_than_the_bound()
+    {
+        // Jobs outside stages: the first one sets X and links MAIL_AUTH to it, and more jobs after it than one step
+        // looks at set their own X, which that job does not see.
+        var pipeline = new StringBuilder("variables:\n  X: real\njobs:\n- job: J\n  variables:\n    X: real\n  steps:\n  - script: ./run.sh\n    env:\n      MAIL_AUTH: $(X)\n");
+        for (var i = 0; i < 1_001; i++)
+        {
+            pipeline.Append(CultureInfo.InvariantCulture, $"- job: j{i}\n  variables:\n    X: other\n  steps:\n  - script: ./run.sh\n");
+        }
+
+        var resolver = Resolver(o => o.AddPipelineText(pipeline.ToString(), "azure-pipelines.yml"));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "real"), diagnostics);
+
+        Assert.Equal(["Azure Pipelines variable X", "Azure Pipelines variable X (job J)"], steps.Select(s => s.Source));
+        Assert.Equal("real", steps[^1].Value);
+        Assert.Empty(diagnostics.Warnings);
+    }
+
+    [Fact]
+    public void Keeps_the_linked_group_when_the_bound_cuts_the_unlinked_ones()
+    {
+        // More groups with Db.X than one step looks at, and the pipeline links only the last one.
+        var groups = new AzureDevOpsVariableGroups("contoso/api", Enumerable.Range(0, 1_500)
+            .Select(i => new AzureDevOpsVariableGroup(i, $"g{i}", AzureDevOpsGroupType.Vsts, null, null, null, [new("Db.X", $"v{i}", false, $"g{i}", i)]))
+            .ToList());
+        const string pipeline = "variables:\n- group: g1499\nsteps:\n- script: ./run.sh\n  env:\n    DB_X: $(Db.X)\n";
+        var resolver = Resolver(o => o.AddPipelineText(pipeline, "azure-pipelines.yml"), groups);
+
+        var steps = resolver.Resolve(EnvStep("DB_X", "v1499"), new TraceDiagnostics());
+
+        // The tracer marks the last step effective, so the bound keeps the end, as the tracer's own bound does.
+        Assert.Equal("Azure DevOps variable group g1499 variable Db.X", steps[^1].Source);
+        Assert.DoesNotContain("no pipeline file read links this group", steps[^1].Note, StringComparison.Ordinal);
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.All(steps, s => Assert.True(s.IsSensitive));
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task Bounds_the_work_when_every_link_sees_many_pipeline_variables()
     {
