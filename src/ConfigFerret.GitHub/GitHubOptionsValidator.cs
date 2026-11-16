@@ -8,7 +8,7 @@ namespace ConfigFerret.GitHub;
 /// Checks <see cref="GitHubVariablesOptions"/> bound from configuration at startup: the required values are set, the API
 /// address is safe to send the token to, and the token is not in an appsettings file.
 /// </summary>
-internal sealed class GitHubOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<GitHubVariablesOptions>
+internal sealed class GitHubOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<GitHubVariablesOptions>
 {
     public ValidateOptionsResult Validate(string? name, GitHubVariablesOptions options)
     {
@@ -29,7 +29,7 @@ internal sealed class GitHubOptionsValidator(string sectionPath, IConfiguration?
         {
             failures.Add(CredentialGuard.Missing(tokenKey));
         }
-        else if (CredentialGuard.CheckSource(configuration, tokenKey) is { } source)
+        else if (CredentialGuard.CheckSource(configuration, tokenKey, options.Token, registered) is { } source)
         {
             failures.Add(source);
         }

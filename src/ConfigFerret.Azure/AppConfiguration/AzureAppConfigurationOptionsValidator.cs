@@ -8,7 +8,7 @@ namespace ConfigFerret.Azure;
 /// Checks <see cref="AzureAppConfigurationOptions"/> bound from configuration at startup: exactly one of the endpoint
 /// and the connection string is set, the address uses HTTPS, and no credential is in an appsettings file.
 /// </summary>
-internal sealed class AzureAppConfigurationOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<AzureAppConfigurationOptions>
+internal sealed class AzureAppConfigurationOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<AzureAppConfigurationOptions>
 {
     public ValidateOptionsResult Validate(string? name, AzureAppConfigurationOptions options)
     {
@@ -21,12 +21,12 @@ internal sealed class AzureAppConfigurationOptionsValidator(string sectionPath, 
             failures.Add(target);
         }
 
-        if (!string.IsNullOrWhiteSpace(options.ConnectionString) && CredentialGuard.CheckSource(configuration, connectionKey) is { } source)
+        if (!string.IsNullOrWhiteSpace(options.ConnectionString) && CredentialGuard.CheckSource(configuration, connectionKey, options.ConnectionString, registered) is { } source)
         {
             failures.Add(source);
         }
 
-        AzureOptionsChecks.CheckSignIn(sectionPath, configuration, options.TenantId, options.ClientId, options.ClientSecret, failures);
+        AzureOptionsChecks.CheckSignIn(sectionPath, configuration, registered, options.TenantId, options.ClientId, options.ClientSecret, failures);
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
 

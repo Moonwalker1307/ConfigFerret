@@ -153,6 +153,14 @@ Startup fails with a message naming the key when the address or token is missing
 `AllowNoToken`), the address is not HTTPS (plain http is allowed on loopback, or with `AllowUnencryptedHttp`), the
 token is in any `appsettings*.json` file, or a value such as `KvVersion` is not valid. Messages never include the token.
 
+Without a host, the same checks run the first time the options are read, on the configuration passed in: the root, or a
+section that `GetSection` made, which is checked through the root it reads from. The root of a registered
+`IConfiguration` is checked as well when it is another one. If the check finds no root in either, as for a section type
+of your own with no root registered, a token that is set fails with a message that says to register the root
+(`services.AddSingleton<IConfiguration>(configuration)`). With or without a host, a token served through a source that
+hides where its values come from, such as a chained configuration that is neither a root nor a section `GetSection`
+made, or a provider that keeps a section, fails too, with a message that names that source.
+
 `VaultSource` and `ConsulSource` are also `IConfigSource`s, and `VaultSourceProvider` (`hashicorp-vault`) and
 `ConsulSourceProvider` (`consul-kv`) describe their settings to hosts such as the desktop app and the tool. Their
 `Token` settings are read from `VAULT_TOKEN` and `CONSUL_HTTP_TOKEN`.

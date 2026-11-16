@@ -24,7 +24,7 @@ public static class GoogleCloudServiceCollectionExtensions
 
         services.AddOptions<GcpSecretManagerOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<GcpSecretManagerTraceOptions>().Bind(configuration);
-        services.AddSingleton<IValidateOptions<GcpSecretManagerOptions>>(sp => new GcpSecretManagerOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+        services.AddSingleton<IValidateOptions<GcpSecretManagerOptions>>(sp => new GcpSecretManagerOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new GcpSecretManagerSource(
             sp.GetRequiredService<IOptions<GcpSecretManagerOptions>>(),
             sp.GetRequiredService<IOptions<GcpSecretManagerTraceOptions>>()));

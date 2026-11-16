@@ -335,11 +335,11 @@ public class JsonApiTests
         var blank = folder.Write("appsettings.Development.json", """{ "A": { "Token": " " } }""");
         var configuration = new ConfigurationBuilder().AddJsonFile(other).AddJsonFile(json).AddJsonFile(blank).Build();
 
-        Assert.Null(CredentialGuard.CheckSource(configuration, "A:Token"));
+        Assert.Null(CredentialGuard.CheckSource(configuration, "A:Token", "x"));
 
         var appsettings = folder.Write("APPSETTINGS.Staging.JSON", """{ "A": { "Token": "x" } }""");
         var withFile = new ConfigurationBuilder().AddJsonFile(other).AddJsonFile(appsettings).Build();
-        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "APPSETTINGS.Staging.JSON"), CredentialGuard.CheckSource(withFile, "A:Token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "APPSETTINGS.Staging.JSON"), CredentialGuard.CheckSource(withFile, "A:Token", "x"));
     }
 
     [Fact]
@@ -351,9 +351,34 @@ public class JsonApiTests
 
         var configuration = new ConfigurationBuilder().AddConfiguration(clean).AddConfiguration(dirty).Build();
 
-        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(configuration, "A:Token"));
-        Assert.Null(CredentialGuard.CheckSource(configuration.GetSection("A"), "A:Token"));
-        Assert.Null(CredentialGuard.CheckSource(null, "A:Token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(configuration, "A:Token", "x"));
+    }
+
+    [Fact]
+    public void Checks_a_section_through_the_root_it_reads_from()
+    {
+        using var folder = new TempSettingsFolder();
+        var file = folder.Write("appsettings.json", """{ "A": { "Token": "fake-token" } }""");
+        var fromFile = new ConfigurationBuilder().AddJsonFile(file).Build();
+        using var manager = new ConfigurationManager();
+        manager.AddJsonFile(file);
+        var fromMemory = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["A:Token"] = "fake-token" }).Build();
+
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(fromFile.GetSection("A"), "A:Token", "fake-token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(manager.GetSection("A"), "A:Token", "fake-token"));
+        Assert.Null(CredentialGuard.CheckSource(fromMemory.GetSection("A"), "A:Token", "fake-token"));
+    }
+
+    [Fact]
+    public void Refuses_a_credential_that_is_set_when_there_is_no_configuration_root()
+    {
+        var lone = new LoneSection("A", new Dictionary<string, string?> { ["Token"] = "fake-token" });
+
+        Assert.Equal(CredentialGuard.NoRoot("A:Token"), CredentialGuard.CheckSource(lone, "A:Token", "fake-token"));
+        Assert.Equal(CredentialGuard.NoRoot("A:Token"), CredentialGuard.CheckSource(null, "A:Token", "fake-token"));
+        Assert.Null(CredentialGuard.CheckSource(lone, "A:Token", " "));
+        Assert.Null(CredentialGuard.CheckSource(null, "A:Token", null));
+        Assert.DoesNotContain("fake-token", CredentialGuard.NoRoot("A:Token"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -365,8 +390,8 @@ public class JsonApiTests
         var reads = recorded.RecordReads();
         var wrapped = new ConfigurationBuilder().Add(new WrappingSource(new ConfigurationBuilder().AddJsonFile(file).Sources[0]));
 
-        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(recorded.Build(), "A:Token"));
-        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(wrapped.Build(), "A:Token"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(recorded.Build(), "A:Token", "x"));
+        Assert.Equal(CredentialGuard.InAppSettings("A:Token", "appsettings.json"), CredentialGuard.CheckSource(wrapped.Build(), "A:Token", "x"));
         Assert.False(reads.WasRead("A:Token"));
     }
 
@@ -382,11 +407,11 @@ public class JsonApiTests
 
         Assert.Equal(
             CredentialGuard.InAppSettings("A:Token", "appsettings.json"),
-            CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(fromFile.GetSection("Outer")).Build(), "A:Token"));
+            CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(fromFile.GetSection("Outer")).Build(), "A:Token", "x"));
         Assert.Equal(
             CredentialGuard.InAppSettings("A:Token", "appsettings.json"),
-            CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(manager.GetSection("Outer")).Build(), "A:Token"));
-        Assert.Null(CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(fromMemory.GetSection("Outer")).Build(), "A:Token"));
+            CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(manager.GetSection("Outer")).Build(), "A:Token", "x"));
+        Assert.Null(CredentialGuard.CheckSource(new ConfigurationBuilder().AddConfiguration(fromMemory.GetSection("Outer")).Build(), "A:Token", "x"));
     }
 
     [Fact]
@@ -397,12 +422,12 @@ public class JsonApiTests
         var settings = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Own:Setting"] = "1" }).Build();
         var keeping = new ConfigurationBuilder().Add(new SettingsKeepingSource(settings.GetSection("Own"))).Build();
 
-        var message = CredentialGuard.CheckSource(chained, "A:Token");
+        var message = CredentialGuard.CheckSource(chained, "A:Token", "x");
 
         Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(ChainedConfigurationProvider)), message);
         Assert.DoesNotContain("fake-token", message, StringComparison.Ordinal);
-        Assert.Null(CredentialGuard.CheckSource(chained, "A:Other"));
-        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(SettingsKeepingProvider)), CredentialGuard.CheckSource(keeping, "A:Token"));
+        Assert.Null(CredentialGuard.CheckSource(chained, "A:Other", "x"));
+        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(SettingsKeepingProvider)), CredentialGuard.CheckSource(keeping, "A:Token", "x"));
     }
 
     [Fact]
@@ -413,7 +438,7 @@ public class JsonApiTests
         var defaults = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Unrelated"] = "1" }).Build();
         var configuration = new ConfigurationBuilder().AddConfiguration(new FallbackSection(host.GetSection("Outer"), defaults)).Build();
 
-        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(ChainedConfigurationProvider)), CredentialGuard.CheckSource(configuration, "A:Token"));
+        Assert.Equal(CredentialGuard.CannotLookInto("A:Token", nameof(ChainedConfigurationProvider)), CredentialGuard.CheckSource(configuration, "A:Token", "x"));
     }
 
     [Fact]

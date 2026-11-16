@@ -8,7 +8,7 @@ namespace ConfigFerret.HashiCorp;
 /// Checks <see cref="VaultOptions"/> bound from configuration at startup: the address and token are set, the address is
 /// safe to send the token to, and the token is not in an appsettings file.
 /// </summary>
-internal sealed class VaultOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<VaultOptions>
+internal sealed class VaultOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<VaultOptions>
 {
     public ValidateOptionsResult Validate(string? name, VaultOptions options)
     {
@@ -29,7 +29,7 @@ internal sealed class VaultOptionsValidator(string sectionPath, IConfiguration? 
         {
             failures.Add(CredentialGuard.Missing(tokenKey));
         }
-        else if (CredentialGuard.CheckSource(configuration, tokenKey) is { } source)
+        else if (CredentialGuard.CheckSource(configuration, tokenKey, options.Token, registered) is { } source)
         {
             failures.Add(source);
         }

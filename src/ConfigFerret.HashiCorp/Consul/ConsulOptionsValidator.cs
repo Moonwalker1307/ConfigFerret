@@ -8,7 +8,7 @@ namespace ConfigFerret.HashiCorp;
 /// Checks <see cref="ConsulOptions"/> bound from configuration at startup: the token is set (unless
 /// <see cref="ConsulOptions.AllowNoToken"/>), the address is safe to send it to, and it is not in an appsettings file.
 /// </summary>
-internal sealed class ConsulOptionsValidator(string sectionPath, IConfiguration? configuration) : IValidateOptions<ConsulOptions>
+internal sealed class ConsulOptionsValidator(string sectionPath, IConfiguration? configuration, IConfiguration? registered = null) : IValidateOptions<ConsulOptions>
 {
     public ValidateOptionsResult Validate(string? name, ConsulOptions options)
     {
@@ -22,7 +22,7 @@ internal sealed class ConsulOptionsValidator(string sectionPath, IConfiguration?
                 failures.Add(CredentialGuard.Missing(tokenKey) + $" If the Consul agent has no ACLs, set {CredentialGuard.Key(sectionPath, nameof(options.AllowNoToken))} to true instead.");
             }
         }
-        else if (CredentialGuard.CheckSource(configuration, tokenKey) is { } source)
+        else if (CredentialGuard.CheckSource(configuration, tokenKey, options.Token, registered) is { } source)
         {
             failures.Add(source);
         }

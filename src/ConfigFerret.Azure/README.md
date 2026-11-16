@@ -95,6 +95,14 @@ When the host starts, the options are checked, and startup fails with a message 
 
 The messages never include the secret.
 
+Without a host, the same checks run the first time the options are read, on the configuration passed in: the root, or a
+section that `GetSection` made, which is checked through the root it reads from. The root of a registered
+`IConfiguration` is checked as well when it is another one. If the check finds no root in either, as for a section type
+of your own with no root registered, a secret that is set fails with a message that says to register the root
+(`services.AddSingleton<IConfiguration>(configuration)`). With or without a host, a secret served through a source that
+hides where its values come from, such as a chained configuration that is neither a root nor a section `GetSection`
+made, or a provider that keeps a section, fails too, with a message that names that source.
+
 ## How layers are linked
 
 Key Vault (`LayerKind.AzureKeyVault`):

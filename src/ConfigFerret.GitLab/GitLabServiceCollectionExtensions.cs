@@ -24,7 +24,7 @@ public static class GitLabServiceCollectionExtensions
         services.AddOptions<GitLabOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<GitLabTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<GitLabOptions>>(
-            sp => new GitLabOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new GitLabOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton<GitLabSource>();
         return services;
     }

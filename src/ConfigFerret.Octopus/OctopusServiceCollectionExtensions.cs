@@ -25,7 +25,7 @@ public static class OctopusServiceCollectionExtensions
         services.AddOptions<OctopusVariablesOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<OctopusTraceOptions>().Bind(configuration);
         services.AddSingleton<IValidateOptions<OctopusVariablesOptions>>(
-            sp => new OctopusOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+            sp => new OctopusOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton<OctopusVariablesSource>();
         return services;
     }

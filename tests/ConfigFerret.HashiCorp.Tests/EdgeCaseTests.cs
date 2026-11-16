@@ -301,8 +301,8 @@ public class EdgeCaseTests
     [Fact]
     public void Validators_accept_the_smallest_caps()
     {
-        Assert.Same(ValidateOptionsResult.Success, new VaultOptionsValidator("", null).Validate(null, Vault(o => { o.MaxDepth = 0; o.MaxSecrets = 1; o.MaxRequests = 1; })));
-        Assert.Same(ValidateOptionsResult.Success, new ConsulOptionsValidator("", null).Validate(null, new ConsulOptions { MaxKeys = 1, Token = "t" }));
+        Assert.Same(ValidateOptionsResult.Success, new VaultOptionsValidator("", new ConfigurationBuilder().Build()).Validate(null, Vault(o => { o.MaxDepth = 0; o.MaxSecrets = 1; o.MaxRequests = 1; })));
+        Assert.Same(ValidateOptionsResult.Success, new ConsulOptionsValidator("", new ConfigurationBuilder().Build()).Validate(null, new ConsulOptions { MaxKeys = 1, Token = "t" }));
         Assert.Same(ValidateOptionsResult.Success, new ConsulOptionsValidator("", null).Validate(null, new ConsulOptions { AllowNoToken = true }));
     }
 

@@ -23,7 +23,7 @@ public static class HashiCorpServiceCollectionExtensions
 
         services.AddOptions<VaultOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<VaultTraceOptions>().Bind(configuration);
-        services.AddSingleton<IValidateOptions<VaultOptions>>(sp => new VaultOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+        services.AddSingleton<IValidateOptions<VaultOptions>>(sp => new VaultOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new VaultSource(sp.GetRequiredService<IOptions<VaultOptions>>(), sp.GetRequiredService<IOptions<VaultTraceOptions>>()));
         return services;
     }
@@ -42,7 +42,7 @@ public static class HashiCorpServiceCollectionExtensions
 
         services.AddOptions<ConsulOptions>().Bind(configuration).ValidateOnStart();
         services.AddOptions<ConsulTraceOptions>().Bind(configuration);
-        services.AddSingleton<IValidateOptions<ConsulOptions>>(sp => new ConsulOptionsValidator(sectionPath, sp.GetService<IConfiguration>()));
+        services.AddSingleton<IValidateOptions<ConsulOptions>>(sp => new ConsulOptionsValidator(sectionPath, configuration, sp.GetService<IConfiguration>()));
         services.TryAddSingleton(sp => new ConsulSource(sp.GetRequiredService<IOptions<ConsulOptions>>(), sp.GetRequiredService<IOptions<ConsulTraceOptions>>()));
         return services;
     }

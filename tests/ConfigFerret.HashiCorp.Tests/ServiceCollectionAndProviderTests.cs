@@ -201,7 +201,7 @@ public class ServiceCollectionAndProviderTests
         Assert.Throws<ArgumentNullException>(() => ConsulSource.Create(null!));
         Assert.Throws<ArgumentNullException>(() => new VaultOptionsValidator("", null).Validate(null, null!));
         Assert.Throws<ArgumentNullException>(() => new ConsulOptionsValidator("", null).Validate(null, null!));
-        Assert.Same(ValidateOptionsResult.Success, new VaultOptionsValidator("", null).Validate(null, new VaultOptions { Address = new Uri("https://v/"), Token = "t" }));
+        Assert.Same(ValidateOptionsResult.Success, new VaultOptionsValidator("", configuration).Validate(null, new VaultOptions { Address = new Uri("https://v/"), Token = "t" }));
         Assert.Equal("HashiCorp Vault (no address) secret", VaultSource.Create(new VaultOptions()).DisplayName);
         Assert.Equal("Consul KV (no address)", ConsulSource.Create(new ConsulOptions { Address = null }).DisplayName);
     }
