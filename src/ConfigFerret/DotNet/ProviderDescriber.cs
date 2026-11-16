@@ -49,6 +49,7 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
     };
 
     private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, int>> _jsonLines = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Dictionary<string, List<(string Name, string? Value)>>> _variablesByKey = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Expands chained configurations so each real provider is seen in priority order, and looks through the
@@ -142,33 +143,56 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
 
     internal string? FindEnvironmentVariable(string prefix, string key, string? value)
     {
-        string? fallback = null;
-        foreach (var (name, envValue) in environment)
+        if (!_variablesByKey.GetOrAdd(prefix, IndexVariables).TryGetValue(key, out var variables))
         {
-            if (!MapsTo(name, prefix, key))
-            {
-                continue;
-            }
+            return null;
+        }
 
+        foreach (var (name, envValue) in variables)
+        {
             if (string.Equals(envValue, value, StringComparison.Ordinal))
             {
                 return name;
             }
-
-            fallback ??= name;
         }
 
-        return fallback;
+        return variables[0].Name;
     }
 
-    private static bool MapsTo(string name, string prefix, string key)
+    /// <summary>
+    /// Maps each key a provider with <paramref name="prefix"/> can set to the variables that set it, in the order the
+    /// environment lists them, so a key is found without going through every variable again.
+    /// </summary>
+    private Dictionary<string, List<(string Name, string? Value)>> IndexVariables(string prefix)
+    {
+        var index = new Dictionary<string, List<(string Name, string? Value)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in environment)
+        {
+            foreach (var key in KeysOf(name, prefix))
+            {
+                if (!index.TryGetValue(key, out var variables))
+                {
+                    index[key] = variables = [];
+                }
+
+                // A variable can reach the same key in two ways; it is listed once.
+                if (variables.Count == 0 || !string.Equals(variables[^1].Name, name, StringComparison.Ordinal))
+                {
+                    variables.Add((name, value));
+                }
+            }
+        }
+
+        return index;
+    }
+
+    private static IEnumerable<string> KeysOf(string name, string prefix)
     {
         // .NET compares the prefix after turning "__" into ":", so a prefix of "App:" matches App__Key.
         var normalizedPrefix = Normalize(prefix);
-        var normalized = Normalize(name);
-        if (Matches(normalized, normalizedPrefix, key))
+        if (WithoutPrefix(Normalize(name), normalizedPrefix) is { } key)
         {
-            return true;
+            yield return key;
         }
 
         foreach (var (cs, _) in ConnectionStringPrefixes)
@@ -178,26 +202,27 @@ internal sealed class ProviderDescriber(IReadOnlyDictionary<string, string?> env
             if (name.StartsWith(cs, StringComparison.OrdinalIgnoreCase))
             {
                 var csKey = "ConnectionStrings:" + Normalize(name[cs.Length..]);
-                if (Matches(csKey, normalizedPrefix, key) || Matches(csKey + "_ProviderName", normalizedPrefix, key))
+                if (WithoutPrefix(csKey, normalizedPrefix) is { } connectionString)
                 {
-                    return true;
+                    yield return connectionString;
+                }
+
+                if (WithoutPrefix(csKey + "_ProviderName", normalizedPrefix) is { } providerName)
+                {
+                    yield return providerName;
                 }
             }
 
             if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                && name[prefix.Length..].StartsWith(cs, StringComparison.OrdinalIgnoreCase)
-                && string.Equals("ConnectionStrings:" + Normalize(name[(prefix.Length + cs.Length)..]), key, StringComparison.OrdinalIgnoreCase))
+                && name[prefix.Length..].StartsWith(cs, StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                yield return "ConnectionStrings:" + Normalize(name[(prefix.Length + cs.Length)..]);
             }
         }
-
-        return false;
     }
 
-    private static bool Matches(string normalizedName, string normalizedPrefix, string key) =>
-        normalizedName.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(normalizedName[normalizedPrefix.Length..], key, StringComparison.OrdinalIgnoreCase);
+    private static string? WithoutPrefix(string normalizedName, string normalizedPrefix) =>
+        normalizedName.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase) ? normalizedName[normalizedPrefix.Length..] : null;
 
     private static string Normalize(string name) => name.Replace("__", ConfigurationPath.KeyDelimiter, StringComparison.Ordinal);
 

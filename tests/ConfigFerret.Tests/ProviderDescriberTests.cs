@@ -67,6 +67,65 @@ public sealed class ProviderDescriberTests : IDisposable
         Assert.Equal(name, describer.FindEnvironmentVariable("APP_", "ConnectionStrings:Main", "Server=x"));
     }
 
+    [Theory]
+    [InlineData("APP_", "Db:Host", "b", "APP_DB__HOST")]
+    [InlineData("APP_", "Db:Host", "none", "App_Db__Host")]
+    [InlineData("APP_", "db:host", "c", "app_db__host")]
+    [InlineData("", "Db:Host", "d", "Db__Host")]
+    [InlineData("", "APP_DB:HOST", "b", "APP_DB__HOST")]
+    [InlineData("", "ConnectionStrings:Main", "Server=my", "MYSQLCONNSTR_Main")]
+    [InlineData("", "ConnectionStrings:Main", "none", "SQLCONNSTR_Main")]
+    [InlineData("", "ConnectionStrings:Main_ProviderName", "MySql.Data.MySqlClient", "SQLCONNSTR_Main")]
+    [InlineData("APP_", "ConnectionStrings:Main", "Server=app", "APP_SQLCONNSTR_Main")]
+    [InlineData("APP_", "SQLCONNSTR_Main", "Server=app", "APP_SQLCONNSTR_Main")]
+    [InlineData("ConnectionStrings:", "Main", "Server=main", "SQLCONNSTR_Main")]
+    [InlineData("ConnectionStrings:", "Cache", "redis", "REDISCACHECONNSTR_Cache")]
+    [InlineData("App:", "Nested:Key", "n", "App__Nested__Key")]
+    [InlineData("App__", "Nested:Key", "n", "App__Nested__Key")]
+    [InlineData("", "ConnectionStrings:Db:Part", "custom", "CUSTOMCONNSTR_Db__Part")]
+    [InlineData("", "other", "o", "Other")]
+    [InlineData("", "Missing", "x", null)]
+    [InlineData("Z_", "Db:Host", "a", null)]
+    public void Finds_the_environment_variable_behind_a_key(string prefix, string key, string value, string? expected)
+    {
+        var describer = Describer(new()
+        {
+            ["App_Db__Host"] = "a",
+            ["APP_DB__HOST"] = "b",
+            ["app_db__host"] = "c",
+            ["Db__Host"] = "d",
+            ["SQLCONNSTR_Main"] = "Server=main",
+            ["APP_SQLCONNSTR_Main"] = "Server=app",
+            ["MYSQLCONNSTR_Main"] = "Server=my",
+            ["REDISCACHECONNSTR_Cache"] = "redis",
+            ["App__Nested__Key"] = "n",
+            ["CUSTOMCONNSTR_Db__Part"] = "custom",
+            ["Other"] = "o",
+        });
+
+        Assert.Equal(expected, describer.FindEnvironmentVariable(prefix, key, value));
+    }
+
+    [Fact]
+    public void Reads_the_environment_once_for_all_the_keys_of_a_prefix()
+    {
+        var variables = new Dictionary<string, string?>(StringComparer.Ordinal);
+        for (var i = 0; i < 3000; i++)
+        {
+            variables[$"CFCOUNT_Key{i}__Part"] = $"v{i}";
+        }
+
+        var environment = new CountingDictionary(variables);
+        var describer = new ProviderDescriber(environment, new TraceDiagnostics());
+
+        for (var i = 0; i < 3000; i++)
+        {
+            Assert.Equal($"CFCOUNT_Key{i}__Part", describer.FindEnvironmentVariable("CFCOUNT_", $"Key{i}:Part", $"v{i}"));
+        }
+
+        Assert.Equal(1, environment.Enumerations);
+    }
+
     [Fact]
     public void Matches_a_prefix_written_with_a_colon()
     {
@@ -210,5 +269,31 @@ public sealed class ProviderDescriberTests : IDisposable
     private sealed class NamedProvider : ConfigurationProvider
     {
         public override string ToString() => "my provider";
+    }
+
+    // Counts how often the variables are read through, to show how much work finding them takes.
+    private sealed class CountingDictionary(Dictionary<string, string?> inner) : IReadOnlyDictionary<string, string?>
+    {
+        public int Enumerations { get; private set; }
+
+        public string? this[string key] => inner[key];
+
+        public IEnumerable<string> Keys => inner.Keys;
+
+        public IEnumerable<string?> Values => inner.Values;
+
+        public int Count => inner.Count;
+
+        public bool ContainsKey(string key) => inner.ContainsKey(key);
+
+        public bool TryGetValue(string key, out string? value) => inner.TryGetValue(key, out value);
+
+        public IEnumerator<KeyValuePair<string, string?>> GetEnumerator()
+        {
+            Enumerations++;
+            return inner.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }
