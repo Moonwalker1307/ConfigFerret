@@ -159,7 +159,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         Assert.Equal([scan.Full("deploy/values-prod.yaml")], helm.ValuesFiles);
         var kubernetes = Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource));
         Assert.Equal("Rendered manifests", kubernetes.Name);
-        Assert.Equal("helm-template.yaml", Path.GetFileName(Assert.Single(kubernetes.Paths)));
+        Assert.Equal("helm-template.yaml", kubernetes.Rendered?.Name);
         Assert.DoesNotContain(notes, n => n.StartsWith("Install", StringComparison.Ordinal));
     }
 
@@ -215,7 +215,7 @@ public class RepositoryAnalyzerProfileTests : IDisposable
         Assert.Equal(scan.Full("k8s/overlay"), kustomize.Folder);
         var kubernetes = Assert.IsType<KubernetesSource>(profile.Sources.Single(s => s is KubernetesSource));
         Assert.Equal("Rendered manifests", kubernetes.Name);
-        Assert.Equal("kustomize-build.yaml", Path.GetFileName(Assert.Single(kubernetes.Paths)));
+        Assert.Equal("kustomize-build.yaml", kubernetes.Rendered?.Name);
     }
 
     [Fact]

@@ -152,6 +152,13 @@ public sealed partial class KubernetesSource : SourceSettings
     [ObservableProperty]
     public partial string Container { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Manifests a tool rendered, such as <c>helm template</c> output: the file name the trace shows, and the text. Used
+    /// instead of <see cref="Paths"/>, and kept in memory only, because they can hold secrets from the chart's values.
+    /// </summary>
+    [JsonIgnore]
+    internal (string Name, string Text)? Rendered { get; set; }
+
     /// <summary><see cref="Paths"/> as one path per line.</summary>
     [JsonIgnore]
     public string PathsText

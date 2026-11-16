@@ -633,6 +633,26 @@ public class TraceRunnerSourcesTests : IDisposable
         AssertHoldsNoValue(finding);
     }
 
+    [Fact]
+    public async Task A_manifest_file_is_rated_as_a_file_even_in_a_source_named_like_rendered_output()
+    {
+        // Only text the analyzer rendered is handed over in memory; a path is always a file, whatever the source is called.
+        Write("repo/src/Orders/appsettings.json", """{"Db":{"Password":""}}""");
+        Write("repo/deploy/helm-template.yaml", $"apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-secret\nstringData:\n  password: {CommittedPassword}\n---\n" + DeploymentUsingSecret("db-secret"));
+        var scan = RepositoryScanner.Scan(Path.Join(_temp.FullName, "repo"));
+        var choices = new AnalysisChoices();
+        RepositoryAnalyzer.SuggestChoices(scan, choices, []);
+        var profile = new RepositoryAnalyzer((_, _) => null).BuildProfile(scan, choices, NoConnections, []);
+        profile.Sources.OfType<KubernetesSource>().Single().Name = "Rendered manifests";
+
+        var result = await Run(profile);
+
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Exposed, finding.Rating);
+        Assert.Equal("Secret db-secret (key password, helm-template.yaml:6)", finding.Where);
+        AssertHoldsNoValue(finding);
+    }
+
     [Theory]
     [InlineData("stringData")]
     [InlineData("data")]
@@ -705,6 +725,11 @@ public class TraceRunnerSourcesTests : IDisposable
         Assert.Equal("Comes from Secret db-secret, which the chart renders without a values file that sets it. Check the chart's template: a value written there is kept in the repository, one it generates as it renders (such as with randAlphaNum or lookup) is not.", finding.Reason);
         Assert.Equal("Secret db-secret (key password)", finding.Where);
         AssertHoldsNoValue(finding);
+
+        // The rendered text is read from memory under the output's file name, as a file of that name would be.
+        static IEnumerable<ProvenanceStep> All(IEnumerable<ProvenanceStep> steps) => steps.SelectMany(s => All(s.Origins).Prepend(s));
+        var secret = All(result.Report.Find("Db:Password")!.Steps).Single(s => s.Kind == LayerKind.KubernetesSecret);
+        Assert.Equal("key password, helm-template.yaml:6", secret.Location);
     }
 
     [Fact]
