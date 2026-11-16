@@ -61,11 +61,7 @@ public sealed record GcpSecret
     public IReadOnlyList<GcpSecretVersion>? Versions { get; init; }
 
     /// <summary>The id of the newest enabled version, when versions were read and one is enabled.</summary>
-    public string? LatestEnabledVersion => Versions?
-        .Where(v => v.State == GcpSecretVersionState.Enabled)
-        .OrderByDescending(v => long.TryParse(v.Id, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1)
-        .Select(v => v.Id)
-        .FirstOrDefault();
+    public string? LatestEnabledVersion => GcpVersionOrder.Newest(Versions?.Where(v => v.State == GcpSecretVersionState.Enabled))?.Id;
 
     /// <summary>The version whose value was read, when it was.</summary>
     public string? ValueVersion { get; init; }
@@ -79,6 +75,14 @@ public sealed record GcpSecret
     /// <summary>Describes the secret without its value.</summary>
     public override string ToString() =>
         $"GcpSecret {{ Name = {Name}, Versions = {Versions?.Count.ToString(CultureInfo.InvariantCulture) ?? "not read"}, Value = {(Value is null ? "not read" : "(redacted)")} }}";
+}
+
+/// <summary>Orders secret versions the way Secret Manager numbers them: by the number in the id, an id that is no number last.</summary>
+internal static class GcpVersionOrder
+{
+    public static long Key(string id) => long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
+
+    public static GcpSecretVersion? Newest(IEnumerable<GcpSecretVersion>? versions) => versions?.MaxBy(v => Key(v.Id));
 }
 
 /// <summary>A pointer to a Google Cloud Secret Manager secret.</summary>
