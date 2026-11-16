@@ -514,6 +514,68 @@ public class ContainerTraceTests
             Assert.Single(report.Warnings));
     }
 
+    // An ExternalSecret in prod and a SecretProviderClass in staging that both create Secret synced.
+    private const string ExternalSecretInProd = """
+        apiVersion: external-secrets.io/v1
+        kind: ExternalSecret
+        metadata: { name: es, namespace: prod }
+        spec:
+          target: { name: synced }
+          data: [{ secretKey: PASSWORD, remoteRef: { key: prod-db } }]
+        """;
+
+    private const string SecretProviderClassInStaging = """
+        apiVersion: secrets-store.csi.x-k8s.io/v1
+        kind: SecretProviderClass
+        metadata: { name: kv, namespace: staging }
+        spec:
+          provider: aws
+          parameters:
+            objects: |
+              - objectName: staging-api-key
+                objectAlias: api-key
+          secretObjects:
+            - secretName: synced
+              data: [{ objectName: api-key, key: API_KEY }]
+        """;
+
+    private const string PodWithoutNamespace = """
+        kind: Pod
+        metadata: { name: api }
+        spec:
+          containers:
+            - name: api
+              envFrom: [{ secretRef: { name: synced } }]
+        """;
+
+    [Theory]
+    [InlineData(false, "API_KEY", "staging")]
+    [InlineData(true, "PASSWORD", "prod")]
+    public void A_workload_without_a_namespace_takes_the_created_secret_whose_creator_was_loaded_last_of_either_kind(bool externalSecretLast, string key, string ns)
+    {
+        var docs = externalSecretLast
+            ? new[] { SecretProviderClassInStaging, ExternalSecretInProd, PodWithoutNamespace }
+            : [ExternalSecretInProd, SecretProviderClassInStaging, PodWithoutNamespace];
+
+        var report = ConfigTracer.ForContainer(KubernetesManifests.Parse(string.Join("\n---\n", docs))).Trace();
+
+        Assert.Equal([key], report.Settings.Select(s => s.Key));
+        Assert.Equal(
+            $"Pod/api has no namespace, so it sees the objects of every namespace. Secret synced is in more than one; the one loaded last, in namespace {ns}, is used.",
+            Assert.Single(report.Warnings));
+    }
+
+    [Fact]
+    public void A_replaced_secret_provider_class_counts_as_loaded_when_it_was_replaced()
+    {
+        var manifests = KubernetesManifests.Parse(string.Join("\n---\n", SecretProviderClassInStaging, ExternalSecretInProd, SecretProviderClassInStaging, PodWithoutNamespace));
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        Assert.Equal(["API_KEY"], report.Settings.Select(s => s.Key));
+        Assert.Contains("in namespace staging, is used.", Assert.Single(report.Warnings), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_workload_without_a_namespace_warns_when_a_secret_in_the_manifests_wins_over_a_created_one()
     {
