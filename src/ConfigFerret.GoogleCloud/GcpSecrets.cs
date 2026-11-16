@@ -154,6 +154,12 @@ public sealed class GcpSecrets
     // A path segment that cannot change the request path once escaped: not empty, not . or .., no slash.
     private static bool IsPlainSegment(string segment) => segment.Length > 0 && segment != "." && segment != ".." && !segment.Contains('/', StringComparison.Ordinal);
 
+    // Secret Manager's own rule for a secret id: 1 to 255 letters, digits, underscores and hyphens.
+    private static bool IsSecretId(string id) => id.Length is > 0 and <= 255 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+
+    // A version id is a number: digits only, and at most 19 of them, the length of the largest long.
+    private static bool IsVersionId(string id) => id.Length is > 0 and <= 19 && id.All(char.IsAsciiDigit);
+
     private static string SecretPath(GcpSecret secret) => secret.Location is null
         ? $"projects/{Escape(secret.Project)}/secrets/{Escape(secret.Id)}"
         : $"projects/{Escape(secret.Project)}/locations/{Escape(secret.Location)}/secrets/{Escape(secret.Id)}";
@@ -185,9 +191,10 @@ public sealed class GcpSecrets
                     throw new HttpRequestException($"Google Cloud Secret Manager returned an unexpected response for {parent}/secrets: no 'secrets' array.");
                 }
 
+                var refused = 0;
                 foreach (var item in JsonRead.Items(items))
                 {
-                    if (ReadSecret(item) is not { } secret
+                    if (ReadSecret(item, ref refused) is not { } secret
                         || (!string.IsNullOrEmpty(options.Prefix) && !secret.Id.StartsWith(options.Prefix, StringComparison.OrdinalIgnoreCase)))
                     {
                         continue;
@@ -200,6 +207,12 @@ public sealed class GcpSecrets
                     }
 
                     secrets.Add(secret);
+                }
+
+                if (refused > 0)
+                {
+                    // Never print what a refused id was called: it came from the server.
+                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Left out {refused} Google Cloud secret(s) whose id is not a valid Secret Manager secret id."));
                 }
 
                 pageToken = JsonRead.String(JsonRead.Property(root, "nextPageToken"));
@@ -225,11 +238,17 @@ public sealed class GcpSecrets
             try
             {
                 var versions = new List<GcpSecretVersion>();
-                var more = await ReadVersionPageAsync(string.Create(CultureInfo.InvariantCulture, $"{path}?pageSize={VersionsPageSize}"), versions, cancellationToken).ConfigureAwait(false);
+                var (more, refused) = await ReadVersionPageAsync(string.Create(CultureInfo.InvariantCulture, $"{path}?pageSize={VersionsPageSize}"), versions, cancellationToken).ConfigureAwait(false);
                 if (more && !versions.Any(v => v.State == GcpSecretVersionState.Enabled))
                 {
                     // The newest enabled version is further back: ask for it alone rather than read every page.
-                    await ReadVersionPageAsync($"{path}?pageSize=1&filter={Escape("state:ENABLED")}", versions, cancellationToken).ConfigureAwait(false);
+                    refused += (await ReadVersionPageAsync($"{path}?pageSize=1&filter={Escape("state:ENABLED")}", versions, cancellationToken).ConfigureAwait(false)).Refused;
+                }
+
+                if (refused > 0)
+                {
+                    // Never print what a refused id was called: it came from the server.
+                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Left out {refused} version(s) of Google Cloud secret {secret.Id} whose id is not a number."));
                 }
 
                 return versions
@@ -286,8 +305,8 @@ public sealed class GcpSecrets
             return secret;
         }
 
-        // Returns true when there are more pages.
-        private async Task<bool> ReadVersionPageAsync(string query, List<GcpSecretVersion> into, CancellationToken cancellationToken)
+        // Returns whether there are more pages, and how many versions were left out for an id that is not a number.
+        private async Task<(bool More, int Refused)> ReadVersionPageAsync(string query, List<GcpSecretVersion> into, CancellationToken cancellationToken)
         {
             using var doc = await GetAsync(query, cancellationToken).ConfigureAwait(false);
             var root = doc.RootElement;
@@ -297,6 +316,7 @@ public sealed class GcpSecrets
                 throw new HttpRequestException("Google Cloud Secret Manager returned an unexpected response: no 'versions' array.");
             }
 
+            var refused = 0;
             foreach (var item in JsonRead.Items(items))
             {
                 var name = JsonRead.String(JsonRead.Property(item, "name"));
@@ -304,6 +324,12 @@ public sealed class GcpSecrets
                 var id = slash < 0 ? null : name![(slash + "/versions/".Length)..];
                 if (id is null || !IsPlainSegment(id))
                 {
+                    continue;
+                }
+
+                if (!IsVersionId(id))
+                {
+                    refused++;
                     continue;
                 }
 
@@ -317,13 +343,19 @@ public sealed class GcpSecrets
                 into.Add(new GcpSecretVersion(id, state, JsonRead.Date(JsonRead.Property(item, "createTime"))));
             }
 
-            return !string.IsNullOrEmpty(JsonRead.String(JsonRead.Property(root, "nextPageToken")));
+            return (!string.IsNullOrEmpty(JsonRead.String(JsonRead.Property(root, "nextPageToken"))), refused);
         }
 
-        private static GcpSecret? ReadSecret(JsonElement item)
+        private static GcpSecret? ReadSecret(JsonElement item, ref int refused)
         {
             if (JsonRead.String(JsonRead.Property(item, "name")) is not { } name || ParseSecretName(name) is not { } secret)
             {
+                return null;
+            }
+
+            if (!IsSecretId(secret.Id))
+            {
+                refused++;
                 return null;
             }
 

@@ -383,6 +383,43 @@ public class GcpSecretsTests
         Assert.Equal("user-managed", gcp.Find("Odd")!.Replication);
     }
 
+    [Theory]
+    [InlineData("bad\\nid")]
+    [InlineData("bad\\u0007id")]
+    [InlineData("bad id")]
+    [InlineData("bad.id")]
+    public async Task Leaves_out_a_secret_whose_id_is_not_a_secret_manager_id_without_naming_it(string id)
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{{Secret(id)}},{{Secret("Ok_1-b")}}]}"""));
+
+        Assert.Equal(["Ok_1-b"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal("Left out 1 Google Cloud secret(s) whose id is not a valid Secret Manager secret id.", Assert.Single(gcp.Warnings));
+    }
+
+    [Fact]
+    public async Task Leaves_out_a_secret_whose_id_is_longer_than_255_characters()
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{{Secret(new string('a', 10000))}},{{Secret(new string('b', 256))}},{{Secret(new string('c', 255))}}]}"""));
+
+        Assert.Equal([new string('c', 255)], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal("Left out 2 Google Cloud secret(s) whose id is not a valid Secret Manager secret id.", Assert.Single(gcp.Warnings));
+    }
+
+    [Fact]
+    public async Task Leaves_out_a_version_whose_id_is_not_a_number_without_naming_it()
+    {
+        var versions = string.Join(",", new[] { "1\\n2", "1\\u00072", "abc", new string('9', 10000), new string('0', 10000) + "1", "7" }
+            .Select(id => $$"""{"name":"projects/123/secrets/A/versions/{{id}}","state":"ENABLED"}"""));
+        var handler = new FakeHttpHandler()
+            .Respond(List, $$"""{"secrets":[{{Secret("A")}}]}""")
+            .Respond("/v1/projects/123/secrets/A/versions?pageSize=25", $$"""{"versions":[{{versions}}]}""");
+
+        var gcp = await Load(handler, o => o.IncludeVersions = true);
+
+        Assert.Equal("7", Assert.Single(gcp.Find("A")!.Versions!).Id);
+        Assert.Equal("Left out 5 version(s) of Google Cloud secret A whose id is not a number.", Assert.Single(gcp.Warnings));
+    }
+
     [Fact]
     public async Task Reads_past_property_names_that_are_not_valid_UTF16()
     {
@@ -399,8 +436,8 @@ public class GcpSecretsTests
     public async Task Escapes_path_segments_and_never_follows_dot_segments()
     {
         var handler = new FakeHttpHandler()
-            .Respond("/v1/projects/a%20b%3Fc/secrets?pageSize=250", """{"secrets":[{"name":"projects/p%2F/secrets/s?x"}]}""")
-            .Respond("/v1/projects/p%252F/secrets/s%3Fx/versions?pageSize=25", Versions((1, "ENABLED")));
+            .Respond("/v1/projects/a%20b%3Fc/secrets?pageSize=250", """{"secrets":[{"name":"projects/p%2F/secrets/s"}]}""")
+            .Respond("/v1/projects/p%252F/secrets/s/versions?pageSize=25", Versions((1, "ENABLED")));
 
         var gcp = await Load(handler, o =>
         {

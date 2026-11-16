@@ -134,6 +134,8 @@ A secret whose versions or value cannot be read is kept with a trace warning ins
 - Secrets are read from one project, and from one location for regional secrets.
 - `Prefix` is applied after listing. Use `Filter` to narrow the list on the server.
 - Only the first 25 versions of each secret are read, plus the newest enabled one when it is older.
+- A secret whose id breaks Secret Manager's rules (1 to 255 letters, digits, `_` and `-`), and a version whose id is not
+  a number, are left out of what the server sent. A warning gives how many, never their names.
 - Secrets with no enabled version are skipped when versions are read, unless `IncludeDisabled` is on.
 - Only the latest enabled version's value is read. A reference pinned to another version is linked, but its value is
   not compared. Binary payloads are not compared either.
