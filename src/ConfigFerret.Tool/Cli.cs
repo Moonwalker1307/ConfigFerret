@@ -32,6 +32,11 @@ internal static class Cli
             var invocation = new InvocationConfiguration { Output = host.Out, Error = host.Error, EnableDefaultExceptionHandler = false };
             return await parse.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);
         }
+        catch (InvalidDataException ex)
+        {
+            host.Error.WriteLine("configferret: " + DescribeInvalidData(ex));
+            return ExitCodes.Usage;
+        }
         catch (Exception ex) when (ex is UsageException or IOException or UnauthorizedAccessException or FormatException
             or InvalidOperationException or ArgumentException or HttpRequestException or JsonException)
         {
@@ -39,6 +44,19 @@ internal static class Cli
             host.Error.WriteLine("configferret: " + ex.Message);
             return ExitCodes.Usage;
         }
+    }
+
+    // The file provider wraps the parser's error in an InvalidDataException. The parser's own message can quote the
+    // character it stopped at, which may be part of a value, so report its reason and line and leave the text out.
+    private static string DescribeInvalidData(InvalidDataException ex)
+    {
+        if (ex.InnerException is not FormatException reason)
+        {
+            return ex.Message;
+        }
+
+        var line = reason.InnerException is JsonException { LineNumber: { } number } ? $" Line {number + 1}." : string.Empty;
+        return $"{ex.Message} {reason.Message}{line}";
     }
 
     internal static Command BuildRootCommand(CliHost host, IReadOnlyList<string> appArgs)

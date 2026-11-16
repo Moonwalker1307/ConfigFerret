@@ -154,6 +154,58 @@ public class InputErrorTests
         Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("""{ "Db": { "Timeout": 30, "timeout": 31 } }""", "duplicate key 'Db:timeout'", "")]
+    [InlineData("[1,2]", "Top-level JSON element must be an object", "")]
+    [InlineData("{ \"Db\": {\n  \"Password\": @fake-secret-value\n} }", "Could not parse the JSON file", "line 2")]
+    public async Task Reports_a_malformed_settings_file_in_one_line_without_its_content(string json, string reason, string position)
+    {
+        var directory = Directory.CreateTempSubdirectory("configferret-malformed-").FullName;
+        try
+        {
+            var file = Path.Join(directory, "appsettings.json");
+            await File.WriteAllTextAsync(file, json, TestContext.Current.CancellationToken);
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", directory);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Equal(string.Empty, result.Output);
+            Assert.Single(result.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+            Assert.Contains("appsettings.json", result.Error, StringComparison.Ordinal);
+            Assert.Contains(reason, result.Error, StringComparison.Ordinal);
+            Assert.Contains(position, result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("@", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake-secret-value", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Reports_a_malformed_config_file_in_one_line()
+    {
+        var directory = Directory.CreateTempSubdirectory("configferret-malformed-").FullName;
+        try
+        {
+            var file = Path.Join(directory, "extra.json");
+            await File.WriteAllTextAsync(file, """{ "Db": { "Password": } }""", TestContext.Current.CancellationToken);
+
+            var result = await new ToolRunner().RunAsync("trace", "-a", ToolRunner.Golden("local-dev"), "--config", file);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Single(result.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+            Assert.Contains("extra.json", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Refuses_a_user_secrets_id_that_leaves_the_secrets_folder()
     {
