@@ -76,7 +76,8 @@ jobs:
 
       # Every package gets the same version, so the extension packages depend on the matching ConfigFerret, and the
       # ConfigFerret.Tool command bundles the same libraries. Every project under src/ with IsPackable=true is packed
-      # (the desktop app is not), so a new extension package needs no change here.
+      # (the desktop and web apps are not), and the next step expects a package from every other project, so a new
+      # extension package needs no change here.
       - name: Pack
         shell: bash
         env:
@@ -92,13 +93,17 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Every project under src/ except the two apps must have produced a package, so a library or the tool that
+          # stops packing fails here instead of dropping out of a release.
+          for project in src/*/*.csproj; do
+            id=$(basename "$project" .csproj)
+            case "$id" in ConfigFerret.Desktop | ConfigFerret.Web) continue ;; esac
+            if [[ ! -f "artifacts/$id.$VERSION.nupkg" ]]; then
+              echo "::error::$project produced no package artifacts/$id.$VERSION.nupkg"
+              exit 1
+            fi
+          done
           ids=$(cd artifacts && ls *.nupkg | sed "s/\.$VERSION\.nupkg\$//" | grep -vx 'ConfigFerret.Tool')
-          echo "$ids" | grep -qx ConfigFerret
-          echo "$ids" | grep -qx ConfigFerret.GitHub
-          echo "$ids" | grep -qx ConfigFerret.Octopus
-          echo "$ids" | grep -qx ConfigFerret.GoogleCloud
-          echo "$ids" | grep -qx ConfigFerret.AzureDevOps
-          echo "$ids" | grep -qx ConfigFerret.GitLab
           for id in $ids; do
             pkg="artifacts/$id.$VERSION.nupkg"
             unzip -l "$pkg" > contents.txt
