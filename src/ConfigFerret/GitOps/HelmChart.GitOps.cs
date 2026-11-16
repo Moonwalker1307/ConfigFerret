@@ -185,23 +185,7 @@ public sealed partial class HelmChart
     /// that is no path, such as one with a NUL character, is outside.
     /// </remarks>
     internal static bool IsInRoot(string path, string root) =>
-        IsBelowAsText(path, root) && Kustomization.IsInFolder(path, root, orFolder: true);
-
-    /// <summary>True when <paramref name="path"/> is <paramref name="root"/> or in it as text, without looking at the disk.</summary>
-    private static bool IsBelowAsText(string path, string root)
-    {
-        string relative;
-        try
-        {
-            relative = Path.GetRelativePath(root, path);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-
-        return !(Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal));
-    }
+        Kustomization.IsBelowAsText(path, root) && Kustomization.IsInFolder(path, root, orFolder: true);
 
     private static string? ChartFolderFor(GitOpsApplication application, GitOpsHelmSource source, GitOpsOptions options, List<string> warnings)
     {
@@ -269,7 +253,7 @@ public sealed partial class HelmChart
         // .. takes out of every root is dropped, and one in a root that links outside makes the file outside.
         var inText = relative.Length == 0 ? [] : roots
             .Select(r => Path.Join(r, relative))
-            .Where(c => roots.Any(r => IsBelowAsText(c, r)))
+            .Where(c => roots.Any(r => Kustomization.IsBelowAsText(c, r)))
             .ToList();
         var inside = inText.Where(c => roots.Any(r => IsInRoot(c, r))).ToList();
         var found = inside.Select(Path.GetFullPath).FirstOrDefault(File.Exists);

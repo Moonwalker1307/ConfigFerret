@@ -245,7 +245,7 @@ public sealed partial class TraceRunner
 
         // Dead settings: configured keys that no code in the app reads. Only an app trace has code to read.
         var app = profile.Mode == TraceMode.App ? sources.OfType<AppSettingsSource>().FirstOrDefault(a => Directory.Exists(a.Folder)) : null;
-        CodeReadScanner? code = app is null ? null : CodeReadScanner.Scan(app.Folder, cancellationToken);
+        CodeReadScanner? code = app is null ? null : CodeReadScanner.Scan(app.Folder, profile.RepositoryRoot ?? app.Folder, cancellationToken);
         if (code is { SkippedFiles.Count: > 0 })
         {
             notes.Add(SkippedCodeNote(code.SkippedFiles, code.AllClassesOpen, code.SkippedFileCount));

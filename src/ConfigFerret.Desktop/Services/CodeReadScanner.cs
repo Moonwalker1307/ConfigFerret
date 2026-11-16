@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using ConfigFerret.Kustomize;
 
 namespace ConfigFerret.Desktop.Services;
 
@@ -131,18 +132,28 @@ public sealed partial class CodeReadScanner
     public IReadOnlyDictionary<string, string> BoundSections => _bound;
 
     /// <summary>
-    /// Reads the C# files in <paramref name="folder"/> and in the projects its project files reference, skipping
-    /// <c>bin</c>, <c>obj</c> and test projects.
+    /// Reads the C# files in <paramref name="folder"/> and in the projects its project files reference inside it,
+    /// skipping <c>bin</c>, <c>obj</c> and test projects.
     /// </summary>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
-    public static CodeReadScanner Scan(string folder, CancellationToken cancellationToken = default) => Scan(folder, MaxTotalBytes, cancellationToken);
+    public static CodeReadScanner Scan(string folder, CancellationToken cancellationToken = default) => Scan(folder, folder, cancellationToken);
+
+    /// <summary>
+    /// Reads the C# files in <paramref name="folder"/> and in the projects its project files reference inside
+    /// <paramref name="repository"/>, skipping <c>bin</c>, <c>obj</c> and test projects. A reference that leads out of the
+    /// repository, by its path or through a symbolic link, is not followed.
+    /// </summary>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static CodeReadScanner Scan(string folder, string repository, CancellationToken cancellationToken = default) =>
+        Scan(folder, repository, MaxTotalBytes, cancellationToken);
 
     // For tests: maxTotalBytes is the code the scan holds in memory at once.
-    internal static CodeReadScanner Scan(string folder, long maxTotalBytes, CancellationToken cancellationToken)
+    internal static CodeReadScanner Scan(string folder, string repository, long maxTotalBytes, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         var scanner = new CodeReadScanner();
-        scanner.Read(scanner.ReadFiles(folder, maxTotalBytes, cancellationToken), null, cancellationToken);
+        scanner.Read(scanner.ReadFiles(folder, repository, maxTotalBytes, cancellationToken), null, cancellationToken);
         return scanner;
     }
 
@@ -150,11 +161,11 @@ public sealed partial class CodeReadScanner
     // MaxFileBytes is searched for the names of the types it declares, while all such searches stay within
     // maxTotalBytes. A file past MaxFiles, one that doesn't fit in maxTotalBytes, and one over MaxFileBytes past the
     // search budget, are listed without being opened, so every class is left open.
-    private IEnumerable<(string Name, string Text)> ReadFiles(string folder, long maxTotalBytes, CancellationToken cancellationToken)
+    private IEnumerable<(string Name, string Text)> ReadFiles(string folder, string repository, long maxTotalBytes, CancellationToken cancellationToken)
     {
         var total = 0L;
         var searched = 0L;
-        foreach (var (file, read) in SourceFiles(folder))
+        foreach (var (file, read) in SourceFiles(folder, repository))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var name = Path.GetRelativePath(folder, file);
@@ -1159,12 +1170,13 @@ public sealed partial class CodeReadScanner
         return i;
     }
 
-    // Each C# file of the folder and of the project folders it references, and whether the scan may read it. The
-    // project files of the first MaxFolders folders are read, and each folder is walked once: one is left out only when
-    // a walk already went through it. A reference left past MaxFolders is listed; when a walk went through its folder,
-    // its files are read, but its own references aren't followed. The files past the first MaxFiles are only listed.
-    // Paths are taken in ordinal order, so the same repository gives the same result on every file system.
-    private IEnumerable<(string File, bool Read)> SourceFiles(string folder)
+    // Each C# file of the folder and of the project folders it references inside the repository, and whether the scan
+    // may read it. The project files of the first MaxFolders folders are read, and each folder is walked once: one is
+    // left out only when a walk already went through it. A reference not followed is listed with why. One left past
+    // MaxFolders is listed too; when a walk went through its folder, its files are read, but its own references aren't
+    // followed. The files past the first MaxFiles are only listed. Paths are taken in ordinal order, so the same
+    // repository gives the same result on every file system.
+    private IEnumerable<(string File, bool Read)> SourceFiles(string folder, string repository)
     {
         // Paths compare as IsInFolder compares them, so ..\Shared and ..\shared are one folder where case is ignored.
         var comparer = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -1174,14 +1186,25 @@ public sealed partial class CodeReadScanner
         queue.Enqueue((Path.GetFullPath(folder), null));
         while (queue.Count > 0 && folders.Count < MaxFolders)
         {
-            var (current, _) = queue.Dequeue();
-            if (!known.Add(Path.TrimEndingDirectorySeparator(current)) || !Directory.Exists(current))
+            var (current, include) = queue.Dequeue();
+            current = Path.TrimEndingDirectorySeparator(current);
+            if (!known.Add(current))
             {
                 continue;
             }
 
-            folders.Add(Path.TrimEndingDirectorySeparator(current));
-            foreach (var reference in ProjectReferences(folder, current))
+            if (!Directory.Exists(current))
+            {
+                if (include is not null)
+                {
+                    SkipReference(include, "no such folder, or one the scan may not open");
+                }
+
+                continue;
+            }
+
+            folders.Add(current);
+            foreach (var reference in ProjectReferences(folder, current, repository))
             {
                 queue.Enqueue(reference);
             }
@@ -1263,7 +1286,7 @@ public sealed partial class CodeReadScanner
 
     // The project references of the project files in a folder. A project file that is too big or isn't XML is listed by
     // its path below the scanned folder, and its references are not followed.
-    private IEnumerable<(string Folder, string Include)> ProjectReferences(string scanned, string folder)
+    private IEnumerable<(string Folder, string Include)> ProjectReferences(string scanned, string folder, string repository)
     {
         string[] projects;
         try
@@ -1312,15 +1335,60 @@ public sealed partial class CodeReadScanner
                     continue;
                 }
 
-                var path = Path.GetFullPath(Path.Combine(folder, include.Replace('\\', Path.DirectorySeparatorChar)));
+                // An absolute path, enough "..", or a link can lead anywhere on the machine, so the project file must be in
+                // the repository: first as text, so a path on another root, such as a share, is never looked at, then
+                // with links followed. Test projects are left out on purpose.
+                var path = ProjectPath(folder, include);
                 var directory = Path.GetDirectoryName(path);
-                if (directory is not null && !Path.GetFileName(directory).Contains("Test", StringComparison.OrdinalIgnoreCase))
+                if (directory is null || Path.GetFileName(directory).Contains("Test", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (include.Contains("$(", StringComparison.Ordinal))
+                {
+                    SkipReference(include, "it uses an MSBuild property");
+                }
+                else if (LeadsOutAsText(path, include, repository) || !IsInRepository(path, repository))
+                {
+                    var limit = Kustomization.IsBelowAsText(repository, scanned) ? "the app folder" : "the repository";
+                    SkipReference(include, $"outside {limit}, or through a link the scan won't follow");
+                }
+                else
                 {
                     yield return (directory, include);
                 }
             }
         }
     }
+
+    // Whether the project file is in the repository once links are followed. An error while following them counts as
+    // outside. On Linux, a path below a folder the user may not search throws no error: it shows no link and no folder.
+    private static bool IsInRepository(string path, string repository)
+    {
+        try
+        {
+            return Kustomization.IsInFolder(path, repository);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    // The full path a ProjectReference names, from the folder of its project file. Only text: nothing is looked at.
+    internal static string ProjectPath(string folder, string include) =>
+        Path.GetFullPath(Path.Combine(folder, include.Replace('\\', Path.DirectorySeparatorChar)));
+
+    // Whether the text alone puts a project path outside the repository. Text that Windows reads as rooted, a drive as in
+    // C:\x or a share as in \\host\share, names no place in a repository on another system either.
+    internal static bool LeadsOutAsText(string path, string include, string repository) =>
+        (!OperatingSystem.IsWindows() && (include.StartsWith(@"\\", StringComparison.Ordinal) || (include.Length >= 2 && char.IsAsciiLetter(include[0]) && include[1] == ':')))
+        || !Kustomization.IsBelowAsText(path, repository);
 
     // Lists a reference once, as written, at most 200 characters of it, with characters that could disguise it replaced,
     // and why.
@@ -1334,10 +1402,10 @@ public sealed partial class CodeReadScanner
             _skippedReferences.Add(entry);
         }
 
-        // Control and format characters, such as U+202E, which turns the text after it around, and the separators that
-        // break a line.
-        static bool IsHidden(char c) => char.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.Format
-            or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
+        // Control and format characters, such as U+202E, which turns the text after it around, the separators that break
+        // a line, every space but the plain one, and a quote, which could make one entry look like two.
+        static bool IsHidden(char c) => c == '"' || (c != ' ' && char.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.Format
+            or UnicodeCategory.SpaceSeparator or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator);
     }
 
     private sealed record TypeBody(string Name, OptionsShape Shape, int Open, int Close);

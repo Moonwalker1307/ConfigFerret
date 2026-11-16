@@ -60,6 +60,14 @@ public sealed partial class Profile : ObservableObject
     [ObservableProperty]
     public partial TraceMode Mode { get; set; } = TraceMode.App;
 
+    /// <summary>
+    /// The repository the profile was built from, or null. The search for the keys the app reads follows project references
+    /// only inside it, or inside the app folder when it is null. It isn't saved, since no profile is: opening a folder or
+    /// repository again builds its profile again, from the same folder.
+    /// </summary>
+    [JsonIgnore]
+    public string? RepositoryRoot { get; set; }
+
     /// <summary>The sources, in the order the app's configuration stacks them (later ones win).</summary>
     public ObservableCollection<SourceSettings> Sources { get; init; } = [];
 
