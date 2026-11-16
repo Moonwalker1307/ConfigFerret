@@ -81,7 +81,7 @@ public sealed class Kustomization
             {
                 for (var i = 0; i < history.Count; i++)
                 {
-                    history[i] = history[i] with { Kustomization = Path.GetRelativePath(common, history[i].Kustomization).Replace('\\', '/') };
+                    history[i] = history[i] with { Kustomization = Path.GetRelativePath(common, history[i].Kustomization).Replace(Path.DirectorySeparatorChar, '/') };
                 }
             }
         }
