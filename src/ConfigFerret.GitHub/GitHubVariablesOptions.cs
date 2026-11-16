@@ -20,8 +20,9 @@ public sealed class GitHubVariablesOptions
 
     /// <summary>
     /// A token that can read Actions variables: a fine-grained token with "Variables: read" (and "Secrets: read" for
-    /// secret names, "Environments: read" for environments), a classic token with <c>repo</c>, or a GitHub Actions
-    /// <c>GITHUB_TOKEN</c> with <c>actions: read</c>. Read it from user secrets, an environment variable or a key vault;
+    /// secret names, "Environments: read" for environments), a classic token with <c>repo</c>, or a GitHub App
+    /// installation token with the same permissions. The built-in Actions <c>GITHUB_TOKEN</c> cannot be given the
+    /// "Variables" permission, so it does not work. Read it from user secrets, an environment variable or a key vault;
     /// never hard-code it or put it in a committed appsettings file. ConfigFerret sends it only in the Authorization header and never writes it to a report or exception.
     /// </summary>
     public string? Token { get; set; }

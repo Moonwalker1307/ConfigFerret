@@ -63,8 +63,10 @@ dotnet user-secrets set "ConfigFerret:GitHub:Token" "<token>"      # development
 export ConfigFerret__GitHub__Token="<token>"                       # CI, containers
 ```
 
-or from a key vault configuration provider. In a GitHub Actions workflow, map the built-in token:
-`env: ConfigFerret__GitHub__Token: ${{ secrets.GITHUB_TOKEN }}`.
+or from a key vault configuration provider. In a GitHub Actions workflow, store a fine-grained token or a GitHub App
+installation token as a repository secret and map it:
+`env: ConfigFerret__GitHub__Token: ${{ secrets.CONFIGFERRET_GITHUB_TOKEN }}`. The built-in `GITHUB_TOKEN` cannot be given
+the "Variables" permission, so it cannot read Actions variables.
 
 Every property of `GitHubVariablesOptions` and `GitHubTraceOptions` binds from the section (`ApiBaseAddress`,
 `IncludeOrganization`, `IncludeSecrets`, `MatchByName` and so on). In `Links`, prefix a value with `secrets.` to link to
@@ -92,7 +94,8 @@ so the environment one wins.
 ## Tokens and secrets
 
 - The token needs read access to Actions variables (fine-grained: "Variables: read", plus "Secrets: read" for secret
-  names and "Environments: read" for environments). In a workflow, `GITHUB_TOKEN` with `actions: read` works.
+  names and "Environments: read" for environments). In a workflow, the built-in `GITHUB_TOKEN` does not work, because
+  its permissions do not include "Variables".
 - The token is sent only in the `Authorization` header, only over HTTPS, and redirects are not followed. It never
   appears in a report or an exception message.
 - GitHub never returns secret values, so secrets show up by name only and are marked sensitive. The usual ConfigFerret
