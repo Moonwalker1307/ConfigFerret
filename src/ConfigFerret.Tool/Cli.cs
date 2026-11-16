@@ -233,9 +233,10 @@ internal static class Cli
                 }
             }
 
+            var position = 0;
             foreach (var pair in result.GetValue(app.Env) ?? [])
             {
-                var (name, value) = EnvironmentInput.ParsePair(pair, "--env");
+                var (name, value) = EnvironmentInput.ParsePair(pair, "--env", ++position);
                 environment[name] = value;
             }
 
