@@ -1078,6 +1078,24 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    public void Reads_the_files_in_the_order_of_their_paths_with_slashes()
+    {
+        // With \ as the separator apps\aB.yaml would sort before apps\a\x.yaml; with / it sorts after, on every system.
+        var text = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: n}\ndata: {K: '${V}'}\n";
+        Write("apps/a/x.yaml", text);
+        Write("apps/aB.yaml", text);
+
+        var resolver = new GitOpsResolver(
+            Kustomization("    substitute: {V: x}"),
+            new GitOpsOptions { RepositoryRoot = _root, ScanLimits = FluxScanLimits.Default with { Bytes = text.Length } });
+
+        Assert.Equal(
+            [$"Flux Kustomization apps: the YAML files under apps hold more than {text.Length} bytes, so apps/aB.yaml and the files after it were not read and no variable is listed as unused."],
+            resolver.Warnings);
+        Assert.Equal("apps/a/x.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("n", "K"), new TraceDiagnostics())).Source);
+    }
+
+    [Fact]
     public void Stops_before_a_file_past_the_limit_on_bytes_and_lists_no_variable_as_unused()
     {
         Write("apps/a.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {K: '${V}'}\n");
