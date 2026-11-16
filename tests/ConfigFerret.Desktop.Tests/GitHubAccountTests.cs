@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Text;
 using ConfigFerret.Desktop.Services;
@@ -305,6 +306,84 @@ public class GitHubAccountTests
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(folder));
     }
 
+    [Fact]
+    public async Task Removes_a_download_that_ends_early_and_keeps_the_other_folders()
+    {
+        var tarball = CutInsideABlock(FakeGitHub.Tarball(OrdersRepo.Root));
+        using var http = new HttpClient(new TarballHandler(tarball));
+        using var parent = new TempFolder();
+        parent.Write(Path.Join("contoso_orders-earlier", "appsettings.json"), "{}");
+
+        await Assert.ThrowsAnyAsync<IOException>(() => new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).DownloadAsync("contoso/orders", "main", parent.Path, TestContext.Current.CancellationToken));
+
+        Assert.Equal(["contoso_orders-earlier"], Directory.EnumerateFileSystemEntries(parent.Path).Select(Path.GetFileName));
+        Assert.True(File.Exists(parent.Full(Path.Join("contoso_orders-earlier", "appsettings.json"))));
+    }
+
+    [Fact]
+    public async Task Removes_a_cancelled_download()
+    {
+        var tarball = FakeGitHub.Tarball(OrdersRepo.Root);
+        using var parent = new TempFolder();
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var http = new HttpClient(new StreamHandler(() => new InterruptedStream(tarball, tarball.Length / 2, () =>
+        {
+            Assert.NotEmpty(Directory.EnumerateFiles(Assert.Single(Directory.GetDirectories(parent.Path)), "*", SearchOption.AllDirectories));
+            cancel.Cancel();
+        })));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).DownloadAsync("contoso/orders", "main", parent.Path, cancel.Token));
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(parent.Path));
+    }
+
+    [Fact]
+    public async Task Removes_a_failed_download_without_following_links_and_keeps_the_error()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var tarball = FakeGitHub.Tarball(OrdersRepo.Root);
+        using var outside = new TempFolder();
+        outside.Write(Path.Join("deep", "keep.json"), "{}");
+        using var parent = new TempFolder();
+        var error = new IOException("The connection was reset.");
+        using var http = new HttpClient(new StreamHandler(() => new InterruptedStream(tarball, tarball.Length / 2, () =>
+        {
+            var target = Assert.Single(Directory.GetDirectories(parent.Path));
+            Directory.CreateSymbolicLink(Path.Join(target, "linked-folder"), outside.Path);
+            File.CreateSymbolicLink(Path.Join(target, "linked.json"), outside.Full(Path.Join("deep", "keep.json")));
+            throw error;
+        })));
+
+        var thrown = await Assert.ThrowsAsync<IOException>(() => new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).DownloadAsync("contoso/orders", "main", parent.Path, TestContext.Current.CancellationToken));
+
+        Assert.Same(error, thrown);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(parent.Path));
+        Assert.True(File.Exists(outside.Full(Path.Join("deep", "keep.json"))));
+    }
+
+    // The tarball with its tar cut two thirds in, inside a 512-byte block so it can't look like a clean end, and gzipped
+    // again whole.
+    private static byte[] CutInsideABlock(byte[] tarball)
+    {
+        using var tar = new MemoryStream();
+        using (var unzip = new GZipStream(new MemoryStream(tarball), CompressionMode.Decompress))
+        {
+            unzip.CopyTo(tar);
+        }
+
+        using var cut = new MemoryStream();
+        using (var gzip = new GZipStream(cut, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            gzip.Write(tar.GetBuffer(), 0, (int)(tar.Length * 2 / 3 / 512 * 512) + 100);
+        }
+
+        return cut.ToArray();
+    }
+
     private static HttpResponseMessage Redirect(string location) =>
         new(HttpStatusCode.Found) { Headers = { Location = new Uri(location, UriKind.RelativeOrAbsolute) } };
 
@@ -461,5 +540,65 @@ public class GitHubAccountTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(tarball) });
+    }
+
+    /// <summary>Answers every request with the body <paramref name="body"/> makes.</summary>
+    private sealed class StreamHandler(Func<Stream> body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body()) });
+    }
+
+    /// <summary>Serves <paramref name="data"/> and calls <paramref name="interrupt"/> once, when <paramref name="after"/> bytes were read.</summary>
+    private sealed class InterruptedStream(byte[] data, int after, Action interrupt) : Stream
+    {
+        private int _position;
+        private bool _interrupted;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_position == after && !_interrupted)
+            {
+                _interrupted = true;
+                interrupt();
+            }
+
+            var count = Math.Min(buffer.Length, (_position < after ? after : data.Length) - _position);
+            data.AsSpan(_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer, offset, count));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
