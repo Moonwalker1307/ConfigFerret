@@ -1,0 +1,44 @@
+@variables:
+- name: X
+  value: base
+stages:
+- stage: s0
+  variables:
+  - name: X
+    value: $(X)
+- stage: s1
+  variables:
+  - name: X
+    value: $(X)
+- stage: s2
+  variables:
+  - name: X
+    value: $(X)
+- stage: s3
+  variables:
+  - name: X
+    value: $(X)
+- stage: s4
+  variables:
+  - name: X
+    value: $(X)
+- stage: s5
+  variables:
+  - name: X
+    value: $(X)
+- stage: s6
+  variables:
+  - name: X
+    value: $(X)
+- stage: s7
+  variables:
+  - name: X
+    value: $(X)
+- stage: s8
+  variables:
+  - name: X
+    value: $(X)
+- stage: s9
+  variables:
+  - name: X
+    value: $(X)

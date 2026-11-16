@@ -1,0 +1,20 @@
+Avariables:
+  DB_TIMEOUT: "15"
+  ALIAS: $DB_TIMEOUT
+
+deploy:
+  environment: production
+  variables:
+    DB_PASSWORD: ${DB_PASSWORD}
+  script:
+    - export Db__Timeout=$ALIAS
+    - SMTP_AUTH=$SMTP_PASSWORD ./run.sh
+
+%%
+review:
+  environment:
+    name: review/$CI_COMMIT_REF_SLUG
+  variables:
+    DB_TIMEOUT: $REVIEW_TIMEOUT
+  script:
+    - export Db__Timeout=$DB_TIMEOUT

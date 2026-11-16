@@ -1,0 +1,42 @@
+@variables:
+  X: base
+job-0:
+  variables:
+    X: $X
+  script: [make]
+job-1:
+  variables:
+    X: $X
+  script: [make]
+job-2:
+  variables:
+    X: $X
+  script: [make]
+job-3:
+  variables:
+    X: $X
+  script: [make]
+job-4:
+  variables:
+    X: $X
+  script: [make]
+job-5:
+  variables:
+    X: $X
+  script: [make]
+job-6:
+  variables:
+    X: $X
+  script: [make]
+job-7:
+  variables:
+    X: $X
+  script: [make]
+job-8:
+  variables:
+    X: $X
+  script: [make]
+job-9:
+  variables:
+    X: $X
+  script: [make]
