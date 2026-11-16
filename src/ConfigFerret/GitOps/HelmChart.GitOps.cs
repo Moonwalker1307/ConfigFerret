@@ -188,7 +188,7 @@ public sealed partial class HelmChart
         IsBelowAsText(path, root) && Kustomization.IsInFolder(path, root, orFolder: true);
 
     /// <summary>True when <paramref name="path"/> is <paramref name="root"/> or in it as text, without looking at the disk.</summary>
-    private static bool IsBelowAsText(string path, string root)
+    internal static bool IsBelowAsText(string path, string root)
     {
         string relative;
         try
