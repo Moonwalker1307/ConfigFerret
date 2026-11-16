@@ -77,7 +77,8 @@ or as a JSON array. Repeat it to combine several runs.
 `trace` and `unused` read the app folder (`--app`, default the current folder) in the order the .NET host does:
 
 1. `appsettings.json`, then `appsettings.{Environment}.json`. The environment is `--environment`, else
-   `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT` from the app's variables, else `Production`.
+   `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT` from the app's variables, else `Production`. A name with a
+   slash or backslash in it is refused, so the settings file always comes from the app folder.
 2. Each `--config` file, in order.
 3. User secrets, in Development only, using the `UserSecretsId` in the folder's project file (or `--user-secrets-id`).
    `--no-user-secrets` turns this off.

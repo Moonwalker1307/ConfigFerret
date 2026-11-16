@@ -34,6 +34,10 @@ internal static partial class AppConfiguration
     {
         var directory = Path.GetFullPath(InputReader.RequireDirectory(inputs.AppDirectory, "The app folder"));
         environmentName = PickEnvironment(inputs);
+        if (!IsFileNamePart(environmentName))
+        {
+            throw new UsageException($"'{environmentName}' is not a valid environment name.");
+        }
 
         var builder = new ConfigurationBuilder();
         var baseFile = Path.Join(directory, "appsettings.json");
@@ -173,6 +177,10 @@ internal static partial class AppConfiguration
 
     private static string? Get(IReadOnlyDictionary<string, string?> environment, string name) =>
         environment.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+
+    // The environment name becomes part of a file name in the app folder, so a name that holds a folder is refused.
+    private static bool IsFileNamePart(string name) =>
+        name.IndexOfAny(['/', '\\']) < 0 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
 
     // User secrets ids are usually GUIDs; anything that could leave the usersecrets folder is refused.
     [GeneratedRegex(@"^[A-Za-z0-9._-]+$", RegexOptions.CultureInvariant)]
