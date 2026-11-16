@@ -634,7 +634,10 @@ dotnet pack src/ConfigFerret.Tool -c Release
 To try the command from a local build: `dotnet tool install -g --add-source src/ConfigFerret.Tool/bin/Release ConfigFerret.Tool`
 after packing, or `dotnet run --project src/ConfigFerret.Tool -f net10.0 -- trace --help`.
 
-Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, for example in Rider or Visual Studio, the build targets `net10.0` only.
+Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, `dotnet build` targets `net10.0` only. Visual
+Studio and `MSBuild.exe` do not run MSBuild from the SDK's folder, so they cannot tell which SDK is installed and
+target `net11.0` too: install the .NET 11 SDK, or set the environment variable `TargetFrameworks` to `net10.0` before
+starting them.
 
 `GoldenTests` traces five realistic setups in `tests/ConfigFerret.Tests/TestData/golden/` (a Helm release, a
 Kustomize overlay, a developer machine, a container traced from its pod and Helm release, and one whose Secrets
