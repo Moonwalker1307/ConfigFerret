@@ -70,10 +70,18 @@ public sealed class AzureAppConfigurationSettings
             {
                 Add(_byKey, value.ConfigurationKey, value);
             }
+
+            if (setting.Kind == AzureAppConfigurationSettingKind.FeatureFlag)
+            {
+                LongestFlagKey = Math.Max(LongestFlagKey, setting.ConfigurationKey.Length);
+            }
         }
 
         Warnings = [.. warnings ?? []];
     }
+
+    /// <summary>The length of the longest configuration key a feature flag sets, or 0 when there is no flag.</summary>
+    internal int LongestFlagKey { get; }
 
     /// <summary>The store name, for example <c>contoso</c>.</summary>
     public string Store { get; }
@@ -325,7 +333,7 @@ public sealed class AzureAppConfigurationSettings
 
         if (setting.Key.StartsWith(FeatureFlagPrefix, StringComparison.Ordinal))
         {
-            return ToFeatureFlag(basic, raw, warnings);
+            return ToFeatureFlag(basic, raw, prefixes, warnings);
         }
 
         if (IsContentType(contentType, KeyVaultReferenceContentType) || setting is SecretReferenceConfigurationSetting)
@@ -535,7 +543,7 @@ public sealed class AzureAppConfigurationSettings
         }
     }
 
-    private static AzureAppConfigurationSetting ToFeatureFlag(AzureAppConfigurationSetting basic, string? raw, List<string> warnings)
+    private static AzureAppConfigurationSetting ToFeatureFlag(AzureAppConfigurationSetting basic, string? raw, IReadOnlyList<string> prefixes, List<string> warnings)
     {
         var name = basic.Key[FeatureFlagPrefix.Length..];
         bool? enabled = null;
@@ -577,11 +585,12 @@ public sealed class AzureAppConfigurationSettings
         }
 
         // The .NET provider sets FeatureManagement:<name> to true or false, or, with filters, FeatureManagement:<name>:EnabledFor.
+        // It trims that key by the prefixes, as it trims the keys of key-values.
         var value = enabled is null || (enabled == true && filters.Count > 0) ? null : (enabled == true ? "True" : "False");
         return basic with
         {
             Kind = AzureAppConfigurationSettingKind.FeatureFlag,
-            ConfigurationKey = "FeatureManagement:" + name,
+            ConfigurationKey = Trim("FeatureManagement:" + name, prefixes),
             Enabled = enabled,
             Filters = filters,
             Value = value,
