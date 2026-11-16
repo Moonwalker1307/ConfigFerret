@@ -1043,15 +1043,16 @@ public sealed class ComposeProject
     }
 
     /// <summary>A path as shown in reports: relative to the project directory when it is inside it, with / separators.</summary>
+    /// <remarks>Only the system's own separator becomes /: outside Windows a backslash is part of a file name.</remarks>
     internal string Display(string fullPath)
     {
         if (_displayRoot is null)
         {
-            return fullPath.Replace('\\', '/');
+            return fullPath.Replace(Path.DirectorySeparatorChar, '/');
         }
 
         var relative = Path.GetRelativePath(_displayRoot, fullPath);
-        return (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? fullPath : relative).Replace('\\', '/');
+        return (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? fullPath : relative).Replace(Path.DirectorySeparatorChar, '/');
     }
 
     // Why a file that a compose file names is not read, or null when it may be. With every link followed it has to be

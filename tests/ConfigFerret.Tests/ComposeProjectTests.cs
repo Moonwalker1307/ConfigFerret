@@ -823,7 +823,7 @@ public class ComposeProjectTests
         Assert.EndsWith("; the file is not read", service.MountLayers("/etc/ssl/app.pem")[0].Note, StringComparison.Ordinal);
         Assert.Equal("compose.yaml:9: service app uses secret undefined, which is not defined under the top-level secrets.", Assert.Single(service.Warnings));
         Assert.Empty(service.MountLayers("/nope"));
-        Assert.Single(service.MountLayers("\\run\\secrets\\db"));
+        Assert.Single(service.MountLayers(string.Join(Path.DirectorySeparatorChar, "", "run", "secrets", "db")));
 
         options.ReadSecretFiles = true;
         var read = Service(ComposeProject.Load([compose], options));
@@ -1325,6 +1325,23 @@ public class ComposeProjectTests
 
         Assert.Equal("Stopped reading at inc/.env: the compose, env and mounted files this load read hold more than 100 characters of text.", ex.Message);
         Assert.DoesNotContain("aaaa", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Keeps_a_backslash_in_a_file_name_on_linux_and_macos()
+    {
+        // Outside Windows a backslash is part of a file name, so a\b.env is not the file b.env in a folder a.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A backslash is a separator on Windows.");
+        using var folder = new TempFolder();
+        folder.Write("a\\b.env", "X=1\n");
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    env_file: a\\b.env\n    secrets:\n      - source: s\n        target: x/y\nsecrets:\n  s: { file: s.txt }\n");
+
+        var service = Service(ComposeProject.Load(compose));
+
+        var step = Assert.Single(service.Layers("X"));
+        Assert.Equal("env_file a\\b.env", step.Source);
+        Assert.Single(service.MountLayers("/run/secrets/x/y"));
+        Assert.Empty(service.MountLayers("/run/secrets/x\\y"));
     }
 
     [Fact]

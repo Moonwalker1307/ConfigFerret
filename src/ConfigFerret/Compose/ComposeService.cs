@@ -48,8 +48,10 @@ public sealed class ComposeService
     public IReadOnlyList<ProvenanceStep> MountLayers(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        // Try the path as listed first: a target can itself hold a backslash, and Mounts lists it unchanged.
-        return _mounts.TryGetValue(path, out var step) || _mounts.TryGetValue(path.Replace('\\', '/'), out step) ? [step with { IsEffective = true }] : [];
+        // Try the path as listed first: a target can itself hold a backslash, and Mounts lists it unchanged. The path is
+        // a file the traced app reads on this system, so only this system's own separator stands for a / in the
+        // container: outside Windows a backslash is part of a file name.
+        return _mounts.TryGetValue(path, out var step) || _mounts.TryGetValue(path.Replace(Path.DirectorySeparatorChar, '/'), out step) ? [step with { IsEffective = true }] : [];
     }
 
     private static List<ProvenanceStep> MarkEffective(List<ProvenanceStep> steps) =>
