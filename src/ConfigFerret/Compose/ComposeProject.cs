@@ -1129,7 +1129,7 @@ public sealed class ComposeProject
     private sealed record ComposeText(string? Path, string Text, string? Name = null);
 
     /// <summary>How much text, and how much compose YAML within it, one load may still read.</summary>
-    private sealed class TextBudget(long limit, long yamlLimit)
+    internal sealed class TextBudget(long limit, long yamlLimit)
     {
         private long _read;
         private long _yaml;
@@ -1154,14 +1154,20 @@ public sealed class ComposeProject
                 : text;
         }
 
-        /// <summary>
-        /// Reads a compose file passed in, and counts it as text and as YAML. It reads at most one character more than
-        /// both limits leave, so a file beyond them is never read in full.
-        /// </summary>
+        /// <summary>Reads a compose file passed in, and counts it as text and as YAML.</summary>
         public string ReadYaml(string path)
         {
-            var left = Math.Max(0, Math.Min(limit - _read, yamlLimit - _yaml));
             using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            return ReadYaml(reader, path);
+        }
+
+        /// <summary>
+        /// Reads the text of <paramref name="where"/>, and counts it as text and as YAML. It reads at most one character
+        /// more than both limits leave, so a file beyond them is never read in full.
+        /// </summary>
+        public string ReadYaml(TextReader reader, string where)
+        {
+            var left = Math.Max(0, Math.Min(limit - _read, yamlLimit - _yaml));
             var text = new StringBuilder();
             var buffer = new char[(int)Math.Min(left + 1, 64 * 1024)];
             int count;
@@ -1170,7 +1176,7 @@ public sealed class ComposeProject
                 text.Append(buffer, 0, count);
             }
 
-            return TakeYaml(Take(text.ToString(), path), path);
+            return TakeYaml(Take(text.ToString(), where), where);
         }
 
         private static string Size(long chars) => chars % (1024 * 1024) == 0

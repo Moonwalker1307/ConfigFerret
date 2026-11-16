@@ -1366,15 +1366,18 @@ public class ComposeProjectTests
         Assert.Equal($"Stopped reading at {compose}: the compose files this load read, with their includes and extends files, hold more than 10 characters of YAML.", own.Message);
     }
 
-    [Fact(Timeout = 60_000)]
-    public async Task Stops_reading_a_compose_file_passed_in_at_the_bound()
+    [Fact]
+    public void Stops_reading_a_compose_file_passed_in_at_the_bound()
     {
-        // /dev/zero never ends, so it is read only as far as the bound allows.
-        Assert.SkipWhen(OperatingSystem.IsWindows(), "Needs /dev/zero.");
+        // The text never ends, and the reader throws past twice the bound, so a bound that no longer holds fails here
+        // at once instead of filling the memory.
+        var budget = new ComposeProject.TextBudget(100, 1_000);
+        using var endless = new EndlessReader(200);
 
-        var ex = await Assert.ThrowsAsync<FormatException>(() => Task.Run(() => ComposeProject.Load(["/dev/zero"], null, 100), TestContext.Current.CancellationToken));
+        var ex = Assert.Throws<FormatException>(() => budget.ReadYaml(endless, "endless.yaml"));
 
-        Assert.Equal("Stopped reading at /dev/zero: the compose, env and mounted files this load read hold more than 100 characters of text.", ex.Message);
+        Assert.Equal("Stopped reading at endless.yaml: the compose, env and mounted files this load read hold more than 100 characters of text.", ex.Message);
+        Assert.Equal(101, endless.CharsRead);
     }
 
     [Fact]
@@ -1848,5 +1851,23 @@ public class ComposeProjectLargeIncludeTests
 
         Assert.Equal(count + 1, project.ServiceNames.Count);
         Assert.Empty(project.Warnings);
+    }
+}
+
+// Text that never ends, which throws once more than limit characters have been read from it.
+internal sealed class EndlessReader(int limit) : TextReader
+{
+    public int CharsRead { get; private set; }
+
+    public override int Read(char[] buffer, int index, int count)
+    {
+        if (CharsRead > limit)
+        {
+            throw new InvalidOperationException($"Read {CharsRead} characters, more than {limit}.");
+        }
+
+        Array.Fill(buffer, 'x', index, count);
+        CharsRead += count;
+        return count;
     }
 }
