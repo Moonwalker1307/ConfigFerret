@@ -45,6 +45,9 @@ public sealed record TraceResult(
     /// <summary>Places in the code that read a key the scan cannot work out, so a dead setting may still be read there.</summary>
     public IReadOnlyList<string> DynamicReads { get; init; } = [];
 
+    /// <summary>How many such places there are. <see cref="DynamicReads"/> lists at most the first 1000.</summary>
+    public int DynamicReadCount { get; init; }
+
     /// <summary>GitHub variables that a workflow uses but no setting in the trace does, such as a deploy action's publish profile.</summary>
     public IReadOnlyList<WorkflowVariable> WorkflowVariables { get; init; } = [];
 
@@ -245,7 +248,12 @@ public sealed partial class TraceRunner
         CodeReadScanner? code = app is null ? null : CodeReadScanner.Scan(app.Folder, cancellationToken);
         if (code is { SkippedFiles.Count: > 0 })
         {
-            notes.Add(SkippedCodeNote(code.SkippedFiles));
+            notes.Add(SkippedCodeNote(code.SkippedFiles, code.AllClassesOpen, code.SkippedFileCount));
+        }
+
+        if (code is { SkippedReferences.Count: > 0 })
+        {
+            notes.Add(SkippedReferencesNote(code.SkippedReferences));
         }
 
         UnusedReport unused;
@@ -281,15 +289,29 @@ public sealed partial class TraceRunner
             CodeFilesScanned = code?.FilesScanned,
             DynamicReads = code?.DynamicReads ?? [],
             Environment = environmentName,
+            DynamicReadCount = code?.DynamicReadCount ?? 0,
         };
 
         static string Where(ProvenanceStep step) => step.Location is null ? step.Source : $"{step.Source} ({step.Location})";
     }
 
-    // Names the first five files the code scan skipped, and how many more.
-    internal static string SkippedCodeNote(IReadOnlyList<string> files) =>
-        $"The search for the keys the app reads skipped {string.Join(", ", files.Take(5))}{(files.Count > 5 ? $" and {files.Count - 5} more" : string.Empty)}, "
-        + $"because {(files.Count == 1 ? "it is" : "they are")} over 1 MB or took too long to read. A setting marked dead may still be read there.";
+    // Names the first five files the code scan skipped, and how many more of all it counted, and says when every class is
+    // left open.
+    internal static string SkippedCodeNote(IReadOnlyList<string> files, bool allClassesOpen = false, int? count = null)
+    {
+        var total = Math.Max(count ?? 0, files.Count);
+        var one = total == 1;
+        return $"The search for the keys the app reads skipped {string.Join(", ", files.Take(5))}{(total > 5 ? $" and {total - 5} more" : string.Empty)}, "
+            + $"because {(one ? "it is" : "they are")} over 1 MB, {(one ? "doesn't" : "don't")} fit in the 64 MB of code the scan holds, "
+            + $"{(one ? "comes" : "come")} past the first 5000 files, or took too long to read. A setting marked dead may still be read there."
+            + (allClassesOpen ? $" The scan didn't look for the classes {(one ? "it declares" : "they declare")}, so every class counts as having any property." : string.Empty);
+    }
+
+    // Names the first five project references the code scan did not follow and project files it could not read, each
+    // with why, and how many more.
+    internal static string SkippedReferencesNote(IReadOnlyList<string> references) =>
+        $"The search for the keys the app reads did not follow all project references: "
+        + $"{string.Join(", ", references.Take(5))}{(references.Count > 5 ? $" and {references.Count - 5} more" : string.Empty)}. A setting marked dead may still be read there.";
 
     // A variable a prefix strips also sets its whole name, such as ORDERS_Db:Password next to Db:Password. Both rows come
     // from the one variable, so the whole name counts as read when the name without the prefix is. Only a row an

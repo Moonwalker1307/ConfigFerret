@@ -1288,12 +1288,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             filter.Load(_allRows);
         }
 
+        // DynamicReads lists the first places only; a result made without a count counts the list.
+        var dynamicReads = Math.Max(result.DynamicReadCount, result.DynamicReads.Count);
         DeadScanText = result.CodeFilesScanned switch
         {
             null => "No app code in this trace, so settings were not checked against code.",
             0 => "No C# code found in the app folder, so settings were not checked against code.",
             var n => $"Read {n} C# {(n == 1 ? "file" : "files")} for the keys the app reads."
-                + (result.DynamicReads.Count > 0 ? $" {result.DynamicReads.Count} {(result.DynamicReads.Count == 1 ? "read builds its key" : "reads build their key")} at run time, so check before deleting." : string.Empty),
+                + (dynamicReads > 0 ? $" {dynamicReads} {(dynamicReads == 1 ? "read builds its key" : "reads build their key")} at run time, so check before deleting." : string.Empty),
         };
 
         Problems.Clear();
@@ -1302,9 +1304,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             Problems.Add(new ProblemRow("error", $"{source.Source.Name}: {source.Problem}"));
         }
 
-        if (result.DynamicReads.Count > 0)
+        if (dynamicReads > 0)
         {
-            Problems.Add(new ProblemRow("info", $"Code reads configuration with a key built at run time in {string.Join(", ", result.DynamicReads.Take(5))}{(result.DynamicReads.Count > 5 ? $" and {result.DynamicReads.Count - 5} more" : string.Empty)}. A setting marked dead may still be read there."));
+            Problems.Add(new ProblemRow("info", $"Code reads configuration with a key built at run time in {string.Join(", ", result.DynamicReads.Take(5))}{(dynamicReads > 5 ? $" and {dynamicReads - 5} more" : string.Empty)}. A setting marked dead may still be read there."));
         }
 
         if (DeadScanText is not null)
