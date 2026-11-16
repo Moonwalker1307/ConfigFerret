@@ -167,7 +167,7 @@ public sealed class GitLabVariables
         public async Task<ProjectInfo> ReadProjectAsync(string project, CancellationToken cancellationToken)
         {
             var uri = new Uri(api, "projects/" + Uri.EscapeDataString(project));
-            using var doc = await JsonApi.GetAsync(client, uri, AddHeaders, "GitLab", cancellationToken).ConfigureAwait(false);
+            using var doc = await GetAsync(uri, null, cancellationToken).ConfigureAwait(false);
             var root = doc.RootElement;
             if (JsonRead.Number(JsonRead.Property(root, "id")) is not { } id)
             {
@@ -203,7 +203,7 @@ public sealed class GitLabVariables
                 var uri = new Uri(api, string.Create(CultureInfo.InvariantCulture, $"{path}?per_page={PageSize}&page={page}"));
                 int? next = null;
                 var hasHeader = false;
-                using var doc = await JsonApi.GetAsync(client, uri, AddHeaders, "GitLab", response => (hasHeader, next) = NextPage(response), cancellationToken).ConfigureAwait(false);
+                using var doc = await GetAsync(uri, response => (hasHeader, next) = NextPage(response), cancellationToken).ConfigureAwait(false);
                 var root = doc.RootElement;
                 if (root.ValueKind != JsonValueKind.Array)
                 {
@@ -227,6 +227,20 @@ public sealed class GitLabVariables
                 }
 
                 page = hasHeader ? next!.Value : page + 1;
+            }
+        }
+
+        // GitLab answers a request without a token for a private project as if the project did not exist, so a refusal
+        // says when no token was sent. A reason that repeats the token is left out.
+        private async Task<JsonDocument> GetAsync(Uri uri, Action<HttpResponseMessage>? onSuccess, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await JsonApi.GetAsync(client, uri, AddHeaders, "GitLab", onSuccess, token, cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex) when (string.IsNullOrEmpty(token) && ex.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
+            {
+                throw new HttpRequestException($"{ex.Message}{(ex.Message.EndsWith('.') ? string.Empty : ".")} No token was sent; set Token.", ex, ex.StatusCode);
             }
         }
 
