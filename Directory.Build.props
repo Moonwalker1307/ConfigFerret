@@ -1,7 +1,10 @@
 <Project>
   <PropertyGroup>
-    <!-- net11.0 needs the .NET 11 SDK. With an older SDK, for example in Rider or Visual Studio, build net10.0 only.
-         The SDK's version is the name of the folder MSBuild runs from, such as sdk/10.0.115. CI installs .NET 11 and builds both. -->
+    <!-- net11.0 needs the .NET 11 SDK. When MSBuild runs from an older SDK, as with dotnet build, build net10.0 only.
+         The SDK's version is the name of the folder MSBuild runs from, such as sdk/10.0.115. Visual Studio and MSBuild.exe
+         run MSBuild from their own folder, so this check does not apply there and they target net11.0 too: with only the
+         .NET 10 SDK, set the TargetFrameworks environment variable to net10.0 before starting them, as this file keeps
+         a TargetFrameworks set from outside. CI installs .NET 11 and builds both. -->
     <_ConfigFerretSdkFolder>$([System.IO.Path]::GetFileName($(MSBuildBinPath.TrimEnd('/\'))))</_ConfigFerretSdkFolder>
     <_ConfigFerretSdkMajor Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(_ConfigFerretSdkFolder)', '^\d+\.'))">$(_ConfigFerretSdkFolder.Split('.')[0])</_ConfigFerretSdkMajor>
     <TargetFrameworks Condition="'$(TargetFrameworks)' == '' and '$(_ConfigFerretSdkMajor)' != '' and $(_ConfigFerretSdkMajor) &lt; 11">net10.0</TargetFrameworks>
