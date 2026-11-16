@@ -213,13 +213,86 @@ public class CodeReadScannerTests
         temp.Write("src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
         temp.Write("src/Api.Tests/Tests.cs", """var t = configuration["Test:Key"];""");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, scanner.FilesScanned);
         Assert.True(scanner.Check("A:B").IsRead);
         Assert.True(scanner.Check("Shared:Key").IsRead);
         Assert.False(scanner.Check("Obj:Key").IsRead);
         Assert.False(scanner.Check("Test:Key").IsRead);
+    }
+
+    [Fact]
+    public void Project_references_that_are_not_followed_are_listed_with_why()
+    {
+        using var outside = new TempFolder();
+        outside.Write("Other/Other.csproj", "<Project />");
+        outside.Write("Other/Secret.cs", """var s = configuration["Outside:Key"]; var d = configuration[name];""");
+        using var temp = new TempFolder();
+        var absolute = outside.Full("Other/Other.csproj");
+        var climb = Path.GetRelativePath(temp.Full("repo/src/Api"), absolute);
+        var references = $"""<ProjectReference Include="{absolute}" /><ProjectReference Include="{climb}" /><ProjectReference Include="../Shared/Shared.csproj" />"""
+            + """<ProjectReference Include="$(SolutionDir)Lib\Lib.csproj" /><ProjectReference Include="../Missing/Missing.csproj" />""";
+        temp.Write("repo/src/Api/Api.csproj", $"<Project><ItemGroup>{references}</ItemGroup></Project>");
+        temp.Write("repo/src/Api/Program.cs", """var a = configuration["A:B"];""");
+        temp.Write("repo/src/Shared/Shared.csproj", """<Project><ItemGroup><ProjectReference Include="$(SolutionDir)Lib\Lib.csproj" /></ItemGroup></Project>""");
+        temp.Write("repo/src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
+
+        var scanner = CodeReadScanner.Scan(temp.Full("repo/src/Api"), temp.Full("repo"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, scanner.FilesScanned);
+        Assert.True(scanner.Check("Shared:Key").IsRead);
+        Assert.False(scanner.Check("Outside:Key").IsRead);
+        Assert.Empty(scanner.DynamicReads);
+
+        // Both projects hold the reference written with an MSBuild property, and it is listed once.
+        Assert.Equal(
+            [
+                $"\"{absolute}\" (outside the repository, or through a link the scan won't follow)",
+                $"\"{climb}\" (outside the repository, or through a link the scan won't follow)",
+                "\"$(SolutionDir)Lib\\Lib.csproj\" (it uses an MSBuild property)",
+                "\"../Missing/Missing.csproj\" (no such folder, or one the scan may not open)",
+            ],
+            scanner.SkippedReferences);
+
+        // Without a repository, the app folder is the limit, and the reason says so.
+        var alone = CodeReadScanner.Scan(temp.Full("repo/src/Api"), TestContext.Current.CancellationToken);
+        Assert.Equal(1, alone.FilesScanned);
+        Assert.False(alone.Check("Shared:Key").IsRead);
+        Assert.Contains("\"../Shared/Shared.csproj\" (outside the app folder, or through a link the scan won't follow)", alone.SkippedReferences);
+    }
+
+    [Fact]
+    public void A_project_reference_through_a_link_out_of_the_repository_is_not_followed()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Making a symbolic link on Windows needs rights the tests may not have.");
+        using var outside = new TempFolder();
+        outside.Write("Other/Other.csproj", "<Project />");
+        outside.Write("Other/Secret.cs", """var s = configuration["Outside:Key"];""");
+        using var temp = new TempFolder();
+        temp.Write("repo/src/Api/Api.csproj", """<Project><ItemGroup><ProjectReference Include="../Linked/Other.csproj" /></ItemGroup></Project>""");
+        temp.Write("repo/src/Api/Program.cs", """var a = configuration["A:B"];""");
+        Directory.CreateSymbolicLink(temp.Full("repo/src/Linked"), outside.Full("Other"));
+
+        var scanner = CodeReadScanner.Scan(temp.Full("repo/src/Api"), temp.Full("repo"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, scanner.FilesScanned);
+        Assert.False(scanner.Check("Outside:Key").IsRead);
+        Assert.Equal(["\"../Linked/Other.csproj\" (outside the repository, or through a link the scan won't follow)"], scanner.SkippedReferences);
+    }
+
+    // Decided from the text alone, so a share or another drive is never looked at, on any system.
+    [Theory]
+    [InlineData(@"\\host.example\share\X.csproj")]
+    [InlineData(@"C:\x\X.csproj")]
+    [InlineData(@"..\..\..\X.csproj")]
+    public void A_project_reference_to_another_root_leads_out_as_text(string include)
+    {
+        var repository = Path.GetFullPath(Path.Join(Path.GetTempPath(), "repo"));
+        var folder = Path.Join(repository, "src", "Api");
+
+        Assert.True(CodeReadScanner.LeadsOutAsText(CodeReadScanner.ProjectPath(folder, include), include, repository));
+        Assert.False(CodeReadScanner.LeadsOutAsText(CodeReadScanner.ProjectPath(folder, @"..\Shared\Shared.csproj"), @"..\Shared\Shared.csproj", repository));
     }
 
     [Theory]
@@ -993,7 +1066,7 @@ public class CodeReadScannerTests
         temp.Write("Later.cs", """public partial class AppOptions { public string Region { get; set; } = ""; }""" + new string(' ', 1000));
 
         // Whatever order the files come in, the two small ones fit in 250 bytes and the big one never does.
-        var scanner = CodeReadScanner.Scan(temp.Path, 250, TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Path, temp.Path, 250, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, scanner.FilesScanned);
         Assert.Equal(["Later.cs"], scanner.SkippedFiles);
@@ -1068,7 +1141,7 @@ public class CodeReadScannerTests
             temp.Write($"P{i}/Code.cs", "var x = 1;");
         }
 
-        var scanner = CodeReadScanner.Scan(temp.Full("P0"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("P0"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(50, scanner.FilesScanned);
         Assert.Empty(scanner.SkippedFiles);
@@ -1094,13 +1167,28 @@ public class CodeReadScannerTests
         temp.Write("src/Shared/Shared.csproj", "<Project />");
         temp.Write("src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.True(scanner.Check("M60:Key").IsRead);
         Assert.False(scanner.Check("Shared:Key").IsRead);
         Assert.Equal(
             Enumerable.Range(50, 11).Select(i => $"\"Modules/M{i:D2}/M{i:D2}.csproj\" (past the first 50 projects, so its references aren't followed)"),
             scanner.SkippedReferences);
+    }
+
+    [Fact]
+    public void A_reference_not_followed_is_listed_with_at_most_two_hundred_characters_and_no_hidden_ones()
+    {
+        using var temp = new TempFolder();
+        var hidden = "\u202E" + new string('a', 300) + "/X.csproj";
+        var pair = "\u2028\u2029 " + new string('b', 196) + "\U0001F600" + "/Y.csproj";
+        temp.Write("A/A.csproj", $"""<Project><ItemGroup><ProjectReference Include="{hidden}" /><ProjectReference Include="{pair}" /></ItemGroup></Project>""");
+        temp.Write("A/A.cs", "var x = 1;");
+
+        var scanner = CodeReadScanner.Scan(temp.Full("A"), temp.Path, TestContext.Current.CancellationToken);
+
+        // The second is cut before the pair that would be split, and the plain space stays.
+        Assert.Equal([$"\"?{new string('a', 199)}…\" (no such folder, or one the scan may not open)", $"\"?? {new string('b', 196)}…\" (no such folder, or one the scan may not open)"], scanner.SkippedReferences);
     }
 
     [Fact]
@@ -1149,7 +1237,7 @@ public class CodeReadScannerTests
         temp.Write("plugins/Reader.cs", """var p = configuration["Plugins:Key"];""");
         Directory.CreateSymbolicLink(temp.Full("src/Api/Plugins"), temp.Full("plugins"));
 
-        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, scanner.FilesScanned);
         Assert.True(scanner.Check("Plugins:Key").IsRead);
@@ -1168,7 +1256,7 @@ public class CodeReadScannerTests
         temp.Write("src/Shared/Reader.cs", """var s = configuration["Shared:Key"];""");
         Assert.SkipWhen(!Directory.Exists(temp.Full("src/shared")), "This file system tells names apart by case, so the two names are two folders.");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("src/Api"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(3, scanner.FilesScanned);
         Assert.True(scanner.Check("Shared:Key").IsRead);
@@ -1184,7 +1272,7 @@ public class CodeReadScannerTests
             File.WriteAllText(temp.Full($"F{i:D4}.cs"), "var x = 1;");
         }
 
-        var scanner = CodeReadScanner.Scan(temp.Path, 0, TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Path, temp.Path, 0, TestContext.Current.CancellationToken);
 
         Assert.Equal(1200, scanner.SkippedFileCount);
         Assert.Equal(1000, scanner.SkippedFiles.Count);
@@ -1201,7 +1289,7 @@ public class CodeReadScannerTests
         temp.Write("Lib/Lib.csproj", "<Project />");
         temp.Write("Lib/Lib.cs", """var b = configuration["B:Key"];""");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("App"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("App"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, scanner.FilesScanned);
         Assert.False(scanner.Check("B:Key").IsRead);
@@ -1214,6 +1302,44 @@ public class CodeReadScannerTests
     }
 
     [Fact]
+    public void A_reference_with_other_spaces_or_quotes_shows_them_as_question_marks()
+    {
+        using var temp = new TempFolder();
+        temp.Write("A/A.csproj", """<Project><ItemGroup><ProjectReference Include="x&#xA0;&#x3000;&quot; (outside the repository), &quot;y z/X.csproj" /></ItemGroup></Project>""");
+        temp.Write("A/A.cs", "var x = 1;");
+
+        var scanner = CodeReadScanner.Scan(temp.Full("A"), temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["\"x??? (outside the repository), ?y z/X.csproj\" (no such folder, or one the scan may not open)"], scanner.SkippedReferences);
+    }
+
+    // Below a folder the user may not search, .NET sees no link and no folder, and the trace goes on.
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void A_reference_into_a_folder_that_may_not_be_searched_is_listed()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has no Unix file mode.");
+        using var temp = new TempFolder();
+        temp.Write("repo/Api/Api.csproj", """<Project><ItemGroup><ProjectReference Include="../Locked/Inner/Inner.csproj" /></ItemGroup></Project>""");
+        temp.Write("repo/Api/Program.cs", """var a = configuration["A:Key"];""");
+        temp.Write("repo/Locked/Inner/Inner.csproj", "<Project />");
+        File.SetUnixFileMode(temp.Full("repo/Locked"), UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanOpen(temp.Full("repo/Locked/Inner/Inner.csproj")), "A user who may read any file, such as root, can't see the failure.");
+
+            var scanner = CodeReadScanner.Scan(temp.Full("repo/Api"), temp.Full("repo"), TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, scanner.FilesScanned);
+            Assert.Equal(["\"../Locked/Inner/Inner.csproj\" (no such folder, or one the scan may not open)"], scanner.SkippedReferences);
+        }
+        finally
+        {
+            File.SetUnixFileMode(temp.Full("repo/Locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
     public void Ignores_project_references_that_are_missing_broken_or_circular()
     {
         using var temp = new TempFolder();
@@ -1223,12 +1349,12 @@ public class CodeReadScannerTests
         temp.Write("B/B.cs", """var b = configuration["B:Key"];""");
         temp.Write("A/Broken.csproj", "<Project");
 
-        var scanner = CodeReadScanner.Scan(temp.Full("A"), TestContext.Current.CancellationToken);
+        var scanner = CodeReadScanner.Scan(temp.Full("A"), temp.Path, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, scanner.FilesScanned);
         Assert.True(scanner.Check("A:Key").IsRead);
         Assert.True(scanner.Check("B:Key").IsRead);
-        Assert.Equal(["\"Broken.csproj\" (a project file the scan can't read, so its references aren't followed)"], scanner.SkippedReferences);
+        Assert.Equal(["\"Broken.csproj\" (a project file the scan can't read, so its references aren't followed)", "\"..\\Missing\\Missing.csproj\" (no such folder, or one the scan may not open)"], scanner.SkippedReferences);
     }
 
     [Fact]

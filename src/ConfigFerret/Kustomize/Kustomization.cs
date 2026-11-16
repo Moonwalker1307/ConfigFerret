@@ -403,6 +403,22 @@ public sealed class Kustomization
             || (orFolder && string.Equals(Path.TrimEndingDirectorySeparator(realPath), trimmed, comparison));
     }
 
+    /// <summary>True when <paramref name="path"/> is <paramref name="root"/> or in it as text, without looking at the disk.</summary>
+    internal static bool IsBelowAsText(string path, string root)
+    {
+        string relative;
+        try
+        {
+            relative = Path.GetRelativePath(root, path);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        return !(Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+    }
+
     // As many links as Linux follows in one path before it gives up.
     private const int MaxLinks = 40;
 

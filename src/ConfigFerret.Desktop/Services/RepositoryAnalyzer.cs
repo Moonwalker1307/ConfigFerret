@@ -185,7 +185,7 @@ public sealed partial class RepositoryAnalyzer
         ArgumentNullException.ThrowIfNull(choices);
         ArgumentNullException.ThrowIfNull(connections);
         ArgumentNullException.ThrowIfNull(notes);
-        var profile = new Profile { Name = Path.GetFileName(scan.Root) };
+        var profile = new Profile { Name = Path.GetFileName(scan.Root), RepositoryRoot = scan.Root };
         var app = scan.Apps.FirstOrDefault(a => a.RelativePath == choices.App);
 
         // Rendered manifests: a Helm release, else a Kustomize overlay, else plain manifests in the repository. Rendered
