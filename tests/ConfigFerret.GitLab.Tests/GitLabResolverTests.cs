@@ -645,6 +645,33 @@ public class GitLabResolverTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void Leaves_out_a_job_the_bound_cuts_without_calling_it_missing(bool linked)
+    {
+        // job-a links MAIL_AUTH to X, which exactly as many hidden jobs set as one step looks at, so following job-a
+        // uses up the bound and job-b, which sets MAIL_AUTH itself or links it to its own Y, is cut on its first entry.
+        var yaml = new StringBuilder("job-a:\n  script:\n    - export MAIL_AUTH=$X\n");
+        for (var i = 0; i < 1_000; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $".t{i}:\n  variables:\n    X: v\n");
+        }
+
+        yaml.Append(linked
+            ? "job-b:\n  variables:\n    Y: y\n  script:\n    - export MAIL_AUTH=$Y\n"
+            : "job-b:\n  variables:\n    MAIL_AUTH: direct\n  script:\n    - ./run.sh\n");
+        var resolver = Resolver(o => o.AddCiFileText(yaml.ToString(), ".gitlab-ci.yml"), new GitLabVariables([]));
+        var diagnostics = new TraceDiagnostics();
+
+        var steps = resolver.Resolve(EnvStep("MAIL_AUTH", "v"), diagnostics);
+
+        Assert.InRange(steps.Count, 1, 1_000);
+        Assert.All(steps, s => Assert.True(s.IsSensitive));
+        Assert.Contains(diagnostics.Warnings, w => w.Contains("than the trace follows for one step", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics.Warnings, w => w.Contains("no such variable", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void Keeps_the_job_definition_matched_by_name_when_the_bound_cuts_the_others(bool otherEnvironments)
     {
         // A job's X near the top, and after it more hidden definitions of X, or more jobs for other environments, than
