@@ -191,6 +191,175 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void Merge_finds_a_base_generator_by_its_name_before_the_base_prefix()
+    {
+        Write("base/kustomization.yaml", """
+            namePrefix: shop-
+            configMapGenerator:
+              - name: api-config
+                literals: [Db__Host=localhost, A=1]
+            """);
+        Write("mid/kustomization.yaml", """
+            resources: [../base]
+            nameSuffix: -v2
+            configMapGenerator:
+              - name: api-config
+                behavior: merge
+                literals: [Db__Host=mid-db]
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../mid]
+            configMapGenerator:
+              - name: shop-api-config
+                behavior: replace
+                literals: [Db__Host=prod-db.internal]
+            """);
+        var k = Load();
+
+        var config = Assert.Single(k.ConfigMaps).Value;
+        Assert.Equal("shop-api-config-v2", config.Name);
+        Assert.Equal(["localhost", "mid-db", null, "prod-db.internal"], config.Keys["Db__Host"].Select(h => h.Value));
+        Assert.Equal(["base/kustomization.yaml", "mid/kustomization.yaml", "app/kustomization.yaml", "app/kustomization.yaml"], config.Keys["Db__Host"].Select(h => h.Kustomization));
+        Assert.Equal([false, true], config.Keys["A"].Select(h => h.IsRemoval));
+    }
+
+    [Fact]
+    public void Merge_finds_a_generator_by_every_name_it_had_after_several_renames()
+    {
+        Write("base/kustomization.yaml", """
+            namePrefix: a-
+            nameSuffix: -1
+            configMapGenerator:
+              - name: cfg
+                literals: [K=base]
+            """);
+        Write("mid/kustomization.yaml", """
+            resources: [../base]
+            namePrefix: b-
+            nameSuffix: -2
+            """);
+        Write("top/kustomization.yaml", """
+            resources: [../mid]
+            nameSuffix: -3
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../top]
+            namePrefix: c-
+            configMapGenerator:
+              - name: cfg
+                behavior: merge
+                literals: [K=own]
+              - name: a-cfg-1
+                behavior: merge
+                literals: [K=innermost]
+              - name: b-a-cfg-1-2
+                behavior: merge
+                literals: [K=middle]
+              - name: b-a-cfg-1-2-3
+                behavior: merge
+                literals: [K=outermost]
+              - name: a-cfg-1-2
+                behavior: merge
+                literals: [K=never]
+              - name: b-a-cfg-1
+                behavior: merge
+                literals: [K=never]
+            """);
+        var k = Load();
+
+        // a-cfg-1-2 and b-a-cfg-1 mix the prefix of one level with the suffix of another, so they are new objects.
+        Assert.Equal(["c-a-cfg-1-2", "c-b-a-cfg-1", "c-b-a-cfg-1-2-3"], k.ConfigMaps.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["base", "own", "innermost", "middle", "outermost"], k.ConfigMaps["c-b-a-cfg-1-2-3"].Keys["K"].Select(h => h.Value));
+    }
+
+    [Fact]
+    public void Merge_that_fits_objects_from_two_bases_is_refused()
+    {
+        Write("frontend/kustomization.yaml", """
+            namePrefix: frontend-
+            configMapGenerator:
+              - name: app-config
+                literals: [Mode=fast]
+            """);
+        Write("backend/kustomization.yaml", """
+            namePrefix: backend-
+            configMapGenerator:
+              - name: app-config
+                literals: [Mode=slow]
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../frontend, ../backend]
+            configMapGenerator:
+              - name: app-config
+                behavior: merge
+                literals: [Mode=hunter2]
+            """);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Load());
+
+        Assert.Contains("configMapGenerator app-config", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.Join(_root, "app"), ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("frontend-", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Merge_with_its_own_namespace_that_fits_objects_from_two_bases_matches_the_current_name_only()
+    {
+        // kustomize merges into a-config, the only object in team-a. Namespaces are not traced, so the overlay's
+        // generator stays an object of its own, as when earlier names were not matched at all.
+        Write("team-a/kustomization.yaml", """
+            namespace: team-a
+            namePrefix: a-
+            configMapGenerator:
+              - name: config
+                literals: [Mode=fast]
+            """);
+        Write("team-b/kustomization.yaml", """
+            namespace: team-b
+            namePrefix: b-
+            configMapGenerator:
+              - name: config
+                literals: [Mode=slow]
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../team-a, ../team-b]
+            configMapGenerator:
+              - name: config
+                namespace: team-a
+                behavior: merge
+                literals: [Mode=steady]
+            """);
+        var k = Load();
+
+        Assert.Equal(["a-config", "b-config", "config"], k.ConfigMaps.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["fast"], k.ConfigMaps["a-config"].Keys["Mode"].Select(h => h.Value));
+        Assert.Equal(["steady"], k.ConfigMaps["config"].Keys["Mode"].Select(h => h.Value));
+    }
+
+    [Fact]
+    public void Create_does_not_take_over_a_base_object_by_its_name_before_the_prefix()
+    {
+        Write("base/kustomization.yaml", """
+            namePrefix: a-
+            configMapGenerator:
+              - name: config
+                literals: [A=1]
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../base]
+            configMapGenerator:
+              - name: config
+                literals: [B=2]
+            """);
+        var k = Load();
+
+        Assert.Equal(["a-config", "config"], k.ConfigMaps.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["1"], k.ConfigMaps["a-config"].Keys["A"].Select(h => h.Value));
+        Assert.Equal(["B"], k.ConfigMaps["config"].Keys.Keys);
+    }
+
+    [Fact]
     public void Shows_a_lone_kustomization_with_its_folder_name()
     {
         Write("app/kustomization.yml", """

@@ -40,7 +40,11 @@ public sealed class Kustomization
     /// after following symbolic links. Pass true to read them from anywhere, as
     /// <c>kustomize build --load-restrictor LoadRestrictionsNone</c> does. Bases and resources may be anywhere either way.
     /// </param>
-    /// <exception cref="InvalidOperationException">An env file is outside its kustomization's folder, or the bases or components form a cycle.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// An env file is outside its kustomization's folder, the bases or components form a cycle, or a <c>merge</c> or
+    /// <c>replace</c> generator without a <c>namespace</c> of its own fits more than one generated object by its current or
+    /// an earlier name.
+    /// </exception>
     public static Kustomization Load(string directory, bool allowFilesOutsideFolder = false)
     {
         ArgumentNullException.ThrowIfNull(directory);
@@ -137,7 +141,7 @@ public sealed class Kustomization
         {
             for (var i = 0; i < state.Count; i++)
             {
-                state[i] = state[i] with { Name = prefix + state[i].Name + suffix };
+                state[i] = state[i] with { Name = prefix + state[i].Name + suffix, Renames = [.. state[i].Renames, (prefix.Length, suffix.Length)] };
             }
         }
 
@@ -162,7 +166,23 @@ public sealed class Kustomization
             var behavior = generator.Str("behavior") ?? "create";
             var entries = ReadEntries(generator, directory, allowFilesOutsideFolder);
 
-            var existing = state.FirstOrDefault(g => g.Name == name && g.IsSecret == isSecret);
+            // Like kustomize, merge and replace also find an object by a name it had before a namePrefix or nameSuffix,
+            // and refuse to pick one when several fit.
+            var matches = state.Where(g => g.IsSecret == isSecret && (g.Name == name || (behavior != "create" && g.HadName(name)))).ToList();
+            if (matches.Count > 1)
+            {
+                // kustomize also matches by namespace, which is not traced here. A generator with its own namespace may
+                // fit just one of them there, so it falls back to the current name only.
+                if (string.IsNullOrEmpty(generator.Str("namespace")))
+                {
+                    throw new InvalidOperationException(
+                        $"The {(isSecret ? "secretGenerator" : "configMapGenerator")} {name} in {directory} fits more than one generated object, which kustomize refuses.");
+                }
+
+                matches = matches.FindAll(g => g.Name == name);
+            }
+
+            var existing = matches.FirstOrDefault();
             if (existing is null || behavior == "create")
             {
                 if (existing is not null)
@@ -364,7 +384,31 @@ public sealed class Kustomization
 /// <param name="Name">The final name after prefixes and suffixes, without the hash.</param>
 /// <param name="IsSecret">True for a <c>secretGenerator</c>.</param>
 /// <param name="Keys">The history of each key, lowest priority (deepest base) first.</param>
-public sealed record GeneratedData(string Name, bool IsSecret, Dictionary<string, List<KustomizeStep>> Keys);
+public sealed record GeneratedData(string Name, bool IsSecret, Dictionary<string, List<KustomizeStep>> Keys)
+{
+    /// <summary>
+    /// The length of each <c>namePrefix</c> and <c>nameSuffix</c> applied, first the innermost. Every earlier name is a
+    /// part of <see cref="Name"/>, so it is not kept as a string of its own.
+    /// </summary>
+    internal IReadOnlyList<(int Prefix, int Suffix)> Renames { get; init; } = [];
+
+    /// <summary>True when the object had <paramref name="name"/> before one of its prefixes or suffixes.</summary>
+    internal bool HadName(string name)
+    {
+        var (start, end) = (0, Name.Length);
+        for (var i = Renames.Count - 1; i >= 0; i--)
+        {
+            start += Renames[i].Prefix;
+            end -= Renames[i].Suffix;
+            if (Name.AsSpan(start, end - start).SequenceEqual(name))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
 
 /// <summary>One kustomization that set or removed a generated key.</summary>
 /// <param name="Kustomization">The kustomization file, relative to the parent of the loaded directory.</param>
