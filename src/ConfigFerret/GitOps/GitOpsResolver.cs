@@ -342,7 +342,14 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             var relative = Relative(root, file);
             try
             {
-                bytes += new FileInfo(file).Length;
+                var length = new FileInfo(file).Length;
+                if (length > limits.FileBytes)
+                {
+                    Limit(string.Create(CultureInfo.InvariantCulture, $"{relative} is larger than {limits.FileBytes} bytes, so it was not read"));
+                    continue;
+                }
+
+                bytes += length;
                 if (bytes > limits.Bytes)
                 {
                     Limit(string.Create(CultureInfo.InvariantCulture, $"the YAML files under {top} hold more than {limits.Bytes} bytes, so {relative} and the files after it were not read"));

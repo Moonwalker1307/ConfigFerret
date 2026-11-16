@@ -1036,7 +1036,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void The_scan_of_the_folder_reads_at_most_the_limits_the_readme_names()
     {
-        Assert.Equal(new FluxScanLimits(100_000, 256L * 1024 * 1024, 64), FluxScanLimits.Default);
+        Assert.Equal(new FluxScanLimits(100_000, 256L * 1024 * 1024, 64, 16L * 1024 * 1024), FluxScanLimits.Default);
         Assert.Equal(FluxScanLimits.Default, new GitOpsOptions().ScanLimits);
     }
 
@@ -1055,6 +1055,25 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal(
             ["Flux Kustomization apps: apps holds more than 4 files and folders, so the rest were not read and no variable is listed as unused."],
             resolver.Warnings);
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact]
+    public void Skips_a_file_larger_than_16_mib_and_lists_no_variable_as_unused()
+    {
+        Write("apps/a.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {K: '${V}'}\n");
+        var header = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: big}\ndata: {K: '${V}'}\n# ";
+        Write("apps/big.yaml", header + new string('x', (16 * 1024 * 1024) + 1 - header.Length));
+        Write("apps/c.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(
+            ["Flux Kustomization apps: apps/big.yaml is larger than 16777216 bytes, so it was not read and no variable is listed as unused."],
+            resolver.Warnings);
+        Assert.Single(resolver.Resolve(ConfigMapKey("a", "K"), new TraceDiagnostics()));
+        Assert.Empty(resolver.Resolve(ConfigMapKey("big", "K"), new TraceDiagnostics()));
+        Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics()));
         AssertNoneUnused(resolver);
     }
 

@@ -648,7 +648,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   are not followed; when one leads out of the folder, one warning names how many did, and again no variable is
   listed as unused.
   The scan of `spec.path` looks at most at 100,000 files and folders, reads at most 256 MiB of YAML and goes at most 64
-  folders deep; at a limit it warns once, and again lists no variable as unused.
+  folders deep; at a limit it warns once, and again lists no variable as unused. A YAML file larger than 16 MiB is
+  skipped with a warning of its own, and the same rule holds.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest
