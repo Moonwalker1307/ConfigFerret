@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ConfigFerret.GitOps;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Sources;
@@ -905,6 +906,113 @@ public sealed class GitOpsResolverTests : IDisposable
         metadata: {"{"}name: out{"}"}
         {spec}
         """, "out.yaml");
+
+    [Fact]
+    public void A_dangling_link_in_the_folder_it_deploys_is_skipped_like_any_link()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        File.CreateSymbolicLink(Path.Join(_root, "apps", "local.yaml"), Path.Join(_root, "missing.yaml"));
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal("apps/cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
+        Assert.Empty(resolver.Warnings);
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public void A_file_it_may_not_read_in_the_folder_it_deploys_is_a_warning()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        var locked = Write("apps/locked.yaml", "a: 1\n");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanRead(locked), "The process may read any file, for example as root.");
+
+            var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x}"), new GitOpsOptions { RepositoryRoot = _root });
+
+            Assert.StartsWith(
+                "Could not read apps/locked.yaml, so no variable of Flux Kustomization apps is listed as unused: ",
+                Assert.Single(resolver.Warnings),
+                StringComparison.Ordinal);
+            Assert.Equal("apps/cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public void A_folder_it_may_not_read_leaves_the_other_folders_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
+        Write("apps/a/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {K: '${A}'}\n");
+        Write("apps/b/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\ndata: {K: '${V}'}\n");
+        var locked = Path.Join(_root, "apps", "a");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanRead(locked), "The process may read any folder, for example as root.");
+
+            var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+            Assert.StartsWith(
+                "Could not read the folder apps/a, so no variable of Flux Kustomization apps is listed as unused: ",
+                Assert.Single(resolver.Warnings),
+                StringComparison.Ordinal);
+            Assert.Equal("apps/b/cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("b", "K"), new TraceDiagnostics())).Source);
+
+            // apps/a may name UNUSED, so it is not called unused, and it is still an entry.
+            var loaded = new LoadedConfigSource("flux", resolver, resolver.Entries());
+            Assert.Empty(loaded.FindUnused(new ProvenanceReport([], [])));
+            Assert.Equal(["UNUSED", "V"], loaded.Entries.Select(e => e.Name));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
+    public void Lists_unused_variables_when_every_file_in_the_folder_was_read()
+    {
+        Write("apps/b/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\ndata: {K: '${V}'}\n");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Empty(resolver.Warnings);
+        Assert.Equal(["UNUSED"], new LoadedConfigSource("flux", resolver, resolver.Entries()).FindUnused(new ProvenanceReport([], [])).Select(e => e.Name));
+    }
+
+    private static bool CanRead(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                _ = Directory.EnumerateFileSystemEntries(path).Any();
+            }
+            else
+            {
+                File.ReadAllText(path);
+            }
+
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     [Theory]
     [InlineData("${A}", "A", null)]

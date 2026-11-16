@@ -639,7 +639,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation is not read. `${VAR}` inside a HelmRelease's values
   is not linked. `FindUnused` never lists a variable that a YAML file under `spec.path` names anywhere, for example
   in an Ingress host, since Flux substitutes it there too; a `${VAR}` in a comment or in a file the build leaves out
-  counts as well. The variable stays in `Entries`.
+  counts as well. The variable stays in `Entries`. A file or folder under `spec.path` that cannot be read is a
+  warning, and then `FindUnused` lists no variable of that Kustomization, since the part not read may name any of them.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest

@@ -145,7 +145,7 @@ public sealed partial class TerraformOutputs
             {
                 AddDefinitions(File.ReadAllText(file), Path.GetFileName(file));
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 _warnings.Add($"Could not read {file}: {ex.Message}");
             }
