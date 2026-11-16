@@ -447,17 +447,22 @@ public sealed partial class RepositoryAnalyzer
     ];
 
     /// <summary>
-    /// Runs <paramref name="tool"/> with no shell and returns its output, or why there is none: missing, failed, over a
-    /// minute or over <paramref name="maxOutput"/> characters of output. The repository decides what the tool reads, so
-    /// the tool gets no network: a kustomization may name remote bases (git or http URLs), which would otherwise be
-    /// fetched, with the user's git credentials, from any host. For the same reason it gets only the environment
-    /// variables it needs to run (see <see cref="StartInfo"/>).
+    /// Runs <paramref name="tool"/>, as found on PATH only (see <see cref="ToolPath"/>), with no shell and returns its
+    /// output, or why there is none: missing, failed, over a minute or over <paramref name="maxOutput"/> characters of
+    /// output. The repository decides what the tool reads, so the tool gets no network: a kustomization may name remote
+    /// bases (git or http URLs), which would otherwise be fetched, with the user's git credentials, from any host. For
+    /// the same reason it gets only the environment variables it needs to run (see <see cref="StartInfo"/>).
     /// </summary>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the tool and every process it started are stopped.</exception>
     internal static ToolRun RunTool(string tool, IReadOnlyList<string> arguments, int maxOutput = MaxToolOutput, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var start = StartInfo(tool, arguments, Environment.GetEnvironmentVariable);
+        if (ToolPath.Find(tool) is not { } path)
+        {
+            return ToolRun.Missing;
+        }
+
+        var start = StartInfo(path, arguments, Environment.GetEnvironmentVariable);
         try
         {
             using var process = Process.Start(start);

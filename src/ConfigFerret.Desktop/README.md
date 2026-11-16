@@ -97,9 +97,11 @@ folder.
 ## Optional tools
 
 If `helm` and `kubectl` or `kustomize` are on your `PATH`, the app renders charts and overlays, so the values link
-back to the app's settings. Without them the app reads the files as they are. When a tool is installed but fails, the
-notes name the tool and its exit code, and the reason for a few common errors, such as chart dependencies that are
-not committed. Its own error output is not shown, because it can quote values; run the tool on the folder to see it.
+back to the app's settings. Without them the app reads the files as they are. Only the `PATH` folders are searched,
+not the current folder or the app's own folder, and on Windows only for `.exe` files. When a tool is installed but
+fails, the notes name the tool and its exit code, and the reason for a few common errors, such as chart dependencies
+that are not committed. Its own error output is not shown, because it can quote values; run the tool on the folder to
+see it.
 
 ## Release
 
