@@ -196,7 +196,8 @@ internal sealed partial class GitOpsResolver : IOriginResolver
             return;
         }
 
-        var files = Directory.EnumerateFiles(folder, "*.*", SearchOption.AllDirectories)
+        // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files.
+        var files = Directory.EnumerateFiles(folder, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint })
             .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
             .Order(StringComparer.Ordinal);
         foreach (var file in files)

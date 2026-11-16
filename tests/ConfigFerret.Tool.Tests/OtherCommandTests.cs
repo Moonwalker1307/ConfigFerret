@@ -114,6 +114,40 @@ public class ContainerCommandTests
     }
 
     [Fact]
+    public async Task Does_not_follow_links_in_a_manifest_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            var k8s = Directory.CreateDirectory(Path.Join(root.FullName, "k8s")).FullName;
+            var outside = Directory.CreateDirectory(Path.Join(root.FullName, "outside")).FullName;
+            await File.WriteAllTextAsync(Path.Join(k8s, "pod.yaml"), "apiVersion: v1\nkind: Pod\nmetadata: {name: api}\nspec:\n  containers:\n    - name: api\n      env: [{name: A, value: inside-value}]\n", ct);
+            await File.WriteAllTextAsync(Path.Join(outside, "pod.yaml"), "apiVersion: v1\nkind: Pod\nmetadata: {name: other}\nspec:\n  containers:\n    - name: other\n      env: [{name: B, value: fake-outside-value}]\n", ct);
+            Directory.CreateSymbolicLink(Path.Join(k8s, "loop"), ".");
+            Directory.CreateSymbolicLink(Path.Join(k8s, "extra"), outside);
+            File.CreateSymbolicLink(Path.Join(k8s, "linked.yaml"), Path.Join(outside, "pod.yaml"));
+
+            var inside = await new ToolRunner().RunAsync("container", "-m", k8s, "-w", "api");
+            var other = await new ToolRunner().RunAsync("container", "-m", k8s, "-w", "other");
+
+            Assert.Equal(0, inside.ExitCode);
+            Assert.Contains("inside-value", inside.Output, StringComparison.Ordinal);
+            Assert.Contains("No Kubernetes workload named 'other'", other.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake-outside-value", other.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Needs_manifests()
     {
         var result = await new ToolRunner().RunAsync("container");

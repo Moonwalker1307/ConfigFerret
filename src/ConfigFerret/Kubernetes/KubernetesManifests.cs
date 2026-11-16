@@ -57,15 +57,19 @@ public sealed class KubernetesManifests
         return result;
     }
 
-    /// <summary>Loads manifests from files. Directories are searched for <c>*.yaml</c>, <c>*.yml</c> and <c>*.json</c>.</summary>
+    /// <summary>
+    /// Loads manifests from files. Directories are searched for <c>*.yaml</c>, <c>*.yml</c> and <c>*.json</c>, without
+    /// following symbolic links below them.
+    /// </summary>
     public static KubernetesManifests LoadFiles(params string[] paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
         var result = new KubernetesManifests();
         foreach (var path in paths)
         {
+            // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files.
             var files = Directory.Exists(path)
-                ? Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories)
+                ? Directory.EnumerateFiles(path, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint })
                     .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
                         || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
                         || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))

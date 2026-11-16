@@ -225,6 +225,33 @@ public sealed class KubernetesManifestsTests : IDisposable
     }
 
     [Fact]
+    public void Does_not_follow_links_below_a_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var outside = Directory.CreateTempSubdirectory("cf-manifests-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Join(outside, "other.yaml"), "kind: ConfigMap\nmetadata: { name: outside }\n");
+            File.WriteAllText(Path.Join(_dir, "cm.yaml"), "kind: ConfigMap\nmetadata: { name: inside }\n");
+            Directory.CreateSymbolicLink(Path.Join(_dir, "loop"), ".");
+            Directory.CreateSymbolicLink(Path.Join(_dir, "extra"), outside);
+            File.CreateSymbolicLink(Path.Join(_dir, "linked.yaml"), Path.Join(outside, "other.yaml"));
+
+            var manifests = KubernetesManifests.LoadFiles(_dir);
+
+            Assert.Equal(["inside"], manifests.ConfigMaps.Keys);
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Loads_a_single_file_of_any_extension()
     {
         var path = Path.Join(_dir, "x.txt");

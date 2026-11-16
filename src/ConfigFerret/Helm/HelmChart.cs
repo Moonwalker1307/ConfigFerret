@@ -58,7 +58,9 @@ public sealed partial class HelmChart
         var templates = Path.Combine(chartDirectory, "templates");
         if (Directory.Exists(templates))
         {
-            foreach (var file in Directory.EnumerateFiles(templates, "*.*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+            // Links are skipped: a link to a parent folder never ends, and one out of the chart reads other files.
+            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
+            foreach (var file in Directory.EnumerateFiles(templates, "*", options).Order(StringComparer.Ordinal))
             {
                 var relative = Path.GetRelativePath(chartDirectory, file).Replace('\\', '/');
                 AddTemplate(relative, File.ReadAllText(file));

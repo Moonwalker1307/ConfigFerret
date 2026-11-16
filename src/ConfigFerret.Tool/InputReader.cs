@@ -26,8 +26,8 @@ internal sealed class InputReader(CliHost host)
     }
 
     /// <summary>
-    /// Loads manifests from files, folders (every <c>*.yaml</c>, <c>*.yml</c> and <c>*.json</c> below them) and
-    /// standard input, in the order given.
+    /// Loads manifests from files, folders (every <c>*.yaml</c>, <c>*.yml</c> and <c>*.json</c> below them, without
+    /// following symbolic links) and standard input, in the order given.
     /// </summary>
     public KubernetesManifests ReadManifests(IReadOnlyList<string> paths)
     {
@@ -49,10 +49,11 @@ internal sealed class InputReader(CliHost host)
         return manifests ?? throw new UsageException("No manifest files found in " + string.Join(", ", paths) + ".");
     }
 
-    // A folder stands for every manifest file below it, in a stable order.
+    // A folder stands for every manifest file below it, in a stable order. Links below it are skipped: a link to a
+    // parent folder never ends, and one out of the folder reads other files.
     private static IEnumerable<string> ExpandFolder(string path) =>
         path != StandardInput && Directory.Exists(path)
-            ? Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories)
+            ? Directory.EnumerateFiles(path, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint })
                 .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
                     || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
                     || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))

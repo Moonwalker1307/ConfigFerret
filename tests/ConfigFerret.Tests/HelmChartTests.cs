@@ -46,6 +46,37 @@ public class HelmChartTests
     }
 
     [Fact]
+    public void Does_not_follow_links_in_the_templates_folder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var chart = Directory.CreateTempSubdirectory("cf-chart-").FullName;
+        var outside = Directory.CreateTempSubdirectory("cf-chart-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Join(chart, "values.yaml"), "a: 1\n");
+            Directory.CreateDirectory(Path.Join(chart, "templates"));
+            File.WriteAllText(Path.Join(chart, "templates", "own.yaml"), "env:\n  - name: OWN\n    value: {{ .Values.a }}\n");
+            File.WriteAllText(Path.Join(outside, "other.yaml"), "env:\n  - name: OUTSIDE\n    value: {{ .Values.a }}\n");
+            Directory.CreateSymbolicLink(Path.Join(chart, "templates", "loop"), ".");
+            Directory.CreateSymbolicLink(Path.Join(chart, "templates", "extra"), outside);
+
+            var loaded = HelmChart.Load(chart);
+
+            Assert.Equal("templates/own.yaml", Assert.Single(loaded.FindUses("OWN")).Template);
+            Assert.Empty(loaded.FindUses("OUTSIDE"));
+        }
+        finally
+        {
+            Directory.Delete(chart, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Lists_are_kept_as_one_value()
     {
         var chart = HelmChart.FromText([("values.yaml", "hosts: [a, b]\n"), ("prod.yaml", "hosts:\n  - c\n")]);
