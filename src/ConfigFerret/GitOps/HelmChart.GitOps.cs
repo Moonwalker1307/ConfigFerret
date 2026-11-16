@@ -119,7 +119,11 @@ public sealed partial class HelmChart
     /// The text is checked first: a path that <c>..</c> takes out of the root is never looked at on disk, and text
     /// that is no path, such as one with a NUL character, is outside.
     /// </remarks>
-    internal static bool IsInRoot(string path, string root)
+    internal static bool IsInRoot(string path, string root) =>
+        IsBelowAsText(path, root) && Kustomization.IsInFolder(path, root, orFolder: true);
+
+    /// <summary>True when <paramref name="path"/> is <paramref name="root"/> or in it as text, without looking at the disk.</summary>
+    private static bool IsBelowAsText(string path, string root)
     {
         string relative;
         try
@@ -131,8 +135,7 @@ public sealed partial class HelmChart
             return false;
         }
 
-        var leaves = Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
-        return !leaves && Kustomization.IsInFolder(path, root, orFolder: true);
+        return !(Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal));
     }
 
     private static string? ChartFolderFor(GitOpsApplication application, GitOpsHelmSource source, GitOpsOptions options, List<string> warnings)
@@ -196,10 +199,22 @@ public sealed partial class HelmChart
             roots = new[] { chartFolder, repositoryRoot }.OfType<string>().ToList();
         }
 
-        var found = roots
-            .Select(r => (Root: Path.GetFullPath(r), File: Path.GetFullPath(Path.Join(r, relative))))
-            .FirstOrDefault(c => relative.Length > 0 && File.Exists(c.File));
-        if (found.File is null)
+        // Argo CD reads a values file anywhere in the repository, also one named with .. from the chart folder. Each
+        // place is checked before it is looked at, so the warnings never tell whether a file outside exists: one that
+        // .. takes out of every root is dropped, and one in a root that links outside makes the file outside.
+        var inText = relative.Length == 0 ? [] : roots
+            .Select(r => Path.Join(r, relative))
+            .Where(c => roots.Any(r => IsBelowAsText(c, r)))
+            .ToList();
+        var inside = inText.Where(c => roots.Any(r => IsInRoot(c, r))).ToList();
+        var found = inside.Select(Path.GetFullPath).FirstOrDefault(File.Exists);
+        if (found is null && relative.Length > 0 && roots.Count > 0 && (inText.Count == 0 || inside.Count < inText.Count))
+        {
+            _warnings.Add($"{where} names the values file {file.Path}, which is outside {string.Join(" and ", roots)}, so it was not read.");
+            return;
+        }
+
+        if (found is null)
         {
             if (!source.IgnoreMissingValuesFiles)
             {
@@ -210,15 +225,9 @@ public sealed partial class HelmChart
             return;
         }
 
-        if (!Kustomization.IsInFolder(found.File, found.Root))
-        {
-            _warnings.Add($"{where} names the values file {file.Path}, which is outside {found.Root}, so it was not read.");
-            return;
-        }
-
         try
         {
-            AddValuesFile(found.File, file.Path);
+            AddValuesFile(found, file.Path);
             _layerInfo[file.Path] = (LayerKind.Helm, false);
         }
         catch (FormatException ex)

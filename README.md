@@ -603,7 +603,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   files (`https://`) and `fileParameters` are not read. Argo CD `$ref/` values files are looked up in the one
   repository checkout you pass. ApplicationSet generator parameters (`{{cluster}}`) are not filled in. A source path
   or Flux `spec.path` that leads outside the checkout (with `..` or a symbolic link) is not read, and neither is a
-  chart's `values.yaml` or `templates` folder that links outside it; the trace warns instead.
+  chart's `values.yaml` or `templates` folder that links outside it; the trace warns instead. A values file is read
+  when it is in the checkout or the chart folder, also when it is named with `..` from the chart folder. Unlike Argo
+  CD, a values file that starts with `/` is looked up in the chart folder before the checkout root, and a name that is
+  missing from the chart folder is read from the checkout root, where Argo CD fails the sync.
 - Argo CD kustomize patches are traced only when they are inline and set ConfigMap `data` (strategic merge, or JSON
   patch on `/data/...`). Patch files, env patches, Flux `spec.patches` and `postRenderers` are not traced.
 - A Flux `${VAR}` link needs the source manifests under `spec.path` in the checkout, and matches the rendered
