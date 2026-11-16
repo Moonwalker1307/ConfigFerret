@@ -623,7 +623,11 @@ dotnet pack src/ConfigFerret.GitHub -c Release
 dotnet pack src/ConfigFerret.Octopus -c Release
 dotnet pack src/ConfigFerret.HashiCorp -c Release
 dotnet pack src/ConfigFerret.KubernetesCluster -c Release
+dotnet pack src/ConfigFerret.Azure -c Release
+dotnet pack src/ConfigFerret.Aws -c Release
 dotnet pack src/ConfigFerret.GoogleCloud -c Release
+dotnet pack src/ConfigFerret.AzureDevOps -c Release
+dotnet pack src/ConfigFerret.GitLab -c Release
 dotnet pack src/ConfigFerret.Tool -c Release
 ```
 
@@ -632,9 +636,10 @@ after packing, or `dotnet run --project src/ConfigFerret.Tool -f net10.0 -- trac
 
 Building `net11.0` needs the .NET 11 SDK. With only the .NET 10 SDK, for example in Rider or Visual Studio, the build targets `net10.0` only.
 
-`GoldenTests` traces three realistic setups in `tests/ConfigFerret.Tests/TestData/golden/` (a Helm release, a
-Kustomize overlay and a developer machine) and compares the full text and JSON output with the approved snapshots
-in `tests/ConfigFerret.Tests/Snapshots/`, using [Verify](https://github.com/VerifyTests/Verify). When you change
+`GoldenTests` traces five realistic setups in `tests/ConfigFerret.Tests/TestData/golden/` (a Helm release, a
+Kustomize overlay, a developer machine, a container traced from its pod and Helm release, and one whose Secrets
+come from External Secrets Operator and the Secrets Store CSI driver) and compares the full text and JSON output with
+the approved snapshots in `tests/ConfigFerret.Tests/Snapshots/`, using [Verify](https://github.com/VerifyTests/Verify). When you change
 the output on purpose, the failing test writes a `.received.` file next to the snapshot: check the diff, then
 rename it to `.verified.` (or accept it in your diff tool) and commit it.
 
