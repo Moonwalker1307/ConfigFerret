@@ -163,6 +163,48 @@ public sealed class GitLabVariablesTests : IDisposable
         });
     }
 
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData(" \t")]
+    public async Task Sends_a_token_read_with_a_trailing_line_break_without_it(string end)
+    {
+        // A token read from a mounted secret file ends in a line break.
+        Full(_handler);
+        var options = Options();
+        options.Token = " " + Token + end;
+
+        await Load(options);
+
+        Assert.All(_handler.Requests, r => Assert.Equal(Token, Assert.Single(r.Headers.GetValues("PRIVATE-TOKEN"))));
+    }
+
+    [Fact]
+    public async Task Sends_no_token_header_for_a_token_of_white_space()
+    {
+        var options = Options();
+        options.Token = " \n";
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Load(options));
+
+        Assert.All(_handler.Requests, r => Assert.False(r.Headers.Contains("PRIVATE-TOKEN")));
+        Assert.EndsWith("No token was sent; set Token.", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("glpat-never\nprinted_4d2")]
+    [InlineData("glpat-never\0printed_4d2")]
+    public async Task Refuses_a_token_with_a_line_break_or_control_character_inside(string token)
+    {
+        var options = Options();
+        options.Token = token;
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => Load(options));
+
+        Assert.Equal("Token holds a line break or another control character, so it cannot be sent in a request header. (Parameter 'options')", ex.Message);
+        Assert.Empty(_handler.Requests);
+    }
+
     [Fact]
     public async Task Sends_no_token_header_without_a_token_and_uses_a_self_managed_address()
     {
