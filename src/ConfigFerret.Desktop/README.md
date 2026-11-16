@@ -58,10 +58,16 @@ The app reads the C# code in the app's folder and in the projects it references 
 skipped) and collects the keys it reads: `config["A:B"]`, `GetValue<T>("A:B")`, `GetSection("A")`,
 `GetConnectionString("Db")`, `Environment.GetEnvironmentVariable("A__B")`, and sections, or the whole configuration,
 bound to an options class with `Configure<T>`, `Bind`, `Get<T>` or `BindConfiguration`. For a bound section only keys
-that match a property of the class count as read, so `Db:Timeout` is dead when `DbOptions` has no `Timeout`. A `Bind`
-that names no class, such as `config.Bind("Smtp", smtp)` or `config.Bind(settings)`, reads its section or the whole
-configuration. Keys the host reads itself, such as `Logging`, `AllowedHosts` and variables that start with
-`ASPNETCORE_` or `DOTNET_`, always count as read, and commented-out code doesn't.
+that match a property of the class count as read, so `Db:Timeout` is dead when `DbOptions` has no `Timeout`, unless a
+section below it is read or bound on its own, or the scan can't see every property the class has. That is the case
+when the class derives from a class that isn't in the code or is more than 16 levels up, from one with its own name
+(`Settings : Lib.Settings`), or from two different classes in classes of one name, and when the scan can't take its
+declaration apart. A base named like an interface, `I` then a capital and a lower-case letter as in `IDisposable`,
+adds no property, so `IISServerOptions` counts as a class. A `Bind` that names no class, such as
+`config.Bind("Smtp", smtp)` or `config.Bind(settings)`, reads its section or the whole configuration. A key more than
+64 segments below a bound section, or under more than 64 bound sections, counts as read. Keys the host reads itself,
+such as `Logging`, `AllowedHosts` and variables that start with `ASPNETCORE_` or `DOTNET_`, always count as read, and
+commented-out code doesn't.
 
 The scan reads source text, so it can't follow a key built at run time, such as `config[name]`. Those places are
 listed under the scan, and a dead setting may still be read there. So is a file the scan gave up on because reading it

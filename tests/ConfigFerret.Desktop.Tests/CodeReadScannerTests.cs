@@ -637,6 +637,166 @@ public class CodeReadScannerTests
     }
 
     [Fact]
+    public void A_sub_section_bound_or_read_on_its_own_is_read_under_a_bound_section()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<MessagingOptions>(cfg.GetSection("Messaging"));
+            services.Configure<KafkaOptions>(cfg.GetSection("Messaging:Kafka"));
+            foreach (var child in cfg.GetSection("Messaging:Raw").GetChildren()) { }
+            """,
+            """
+            public sealed class MessagingOptions { public string Name { get; set; } = ""; }
+            public sealed class KafkaOptions { public string Brokers { get; set; } = ""; }
+            """);
+
+        Assert.True(scanner.Check("Messaging:Name").IsRead);
+        Assert.True(scanner.Check("Messaging:Kafka:Brokers").IsRead);
+        Assert.True(scanner.Check("Messaging:Raw:A").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Messaging is bound to MessagingOptions, which has no property Other"), scanner.Check("Messaging:Other"));
+        Assert.Equal(new ReadVerdict(false, "Messaging:Kafka is bound to KafkaOptions, which has no property Topic"), scanner.Check("Messaging:Kafka:Topic"));
+    }
+
+    [Fact]
+    public void A_class_whose_base_class_is_not_in_the_code_reads_everything_under_it()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<KafkaOptions>(cfg.GetSection("Kafka"));
+            services.Configure<CheckedOptions>(cfg.GetSection("Checked"));
+            """,
+            """
+            public sealed class KafkaOptions : Confluent.Kafka.ConsumerConfig { public string Topic { get; set; } = ""; }
+            public sealed class CheckedOptions : IValidatableObject { public int Size { get; set; } }
+            """);
+
+        Assert.True(scanner.Check("Kafka:Topic").IsRead);
+        Assert.True(scanner.Check("Kafka:BootstrapServers").IsRead);
+        Assert.True(scanner.Check("Checked:Size").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Checked is bound to CheckedOptions, which has no property Color"), scanner.Check("Checked:Color"));
+    }
+
+    [Fact]
+    public void Every_part_of_a_partial_class_and_every_class_of_one_name_gives_its_properties()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<AppOptions>(cfg.GetSection("App"));
+            services.Configure<A.Settings>(cfg.GetSection("Smtp"));
+            services.Configure<B.Settings>(cfg.GetSection("Bus"));
+            public partial class AppOptions { public string Name { get; set; } = ""; }
+            """,
+            """
+            public partial class AppOptions { public int Port { get; set; } }
+            namespace A { public class Settings { public string Host { get; set; } = ""; } }
+            namespace B { public class Settings { public string Queue { get; set; } = ""; } }
+            """);
+
+        Assert.True(scanner.Check("App:Name").IsRead);
+        Assert.True(scanner.Check("App:Port").IsRead);
+        Assert.True(scanner.Check("Smtp:Host").IsRead);
+        Assert.True(scanner.Check("Bus:Queue").IsRead);
+        Assert.Equal(new ReadVerdict(false, "App is bound to AppOptions, which has no property Color"), scanner.Check("App:Color"));
+    }
+
+    [Fact]
+    public void A_base_of_the_same_name_or_not_named_like_an_interface_reads_everything_under_it()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<Settings>(cfg.GetSection("Lib"));
+            services.Configure<WebOptions>(cfg.GetSection("Iis"));
+            services.Configure<NetOptions>(cfg.GetSection("Net"));
+            services.Configure<PoolOptions>(cfg.GetSection("Pool"));
+            services.Configure<SizedOptions>(cfg.GetSection("Sized"));
+            """,
+            """
+            public sealed class Settings : Lib.Settings { public string Own { get; set; } = ""; }
+            public sealed class WebOptions : IISServerOptions { public int Port { get; set; } }
+            public sealed class NetOptions : IPAddressOptions { public int Port { get; set; } }
+            public sealed class PoolOptions : IDisposable { public int Size { get; set; } public void Dispose() { } }
+            public sealed class SizedOptions : IOSize { public int Size { get; set; } }
+            public interface IOSize { int Size { get; } }
+            """);
+
+        Assert.True(scanner.Check("Lib:Inherited").IsRead);
+        Assert.True(scanner.Check("Iis:AllowSynchronousIO").IsRead);
+        Assert.True(scanner.Check("Net:Address").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Pool is bound to PoolOptions, which has no property Color"), scanner.Check("Pool:Color"));
+        Assert.Equal(new ReadVerdict(false, "Sized is bound to SizedOptions, which has no property Color"), scanner.Check("Sized:Color"));
+    }
+
+    [Fact]
+    public void Two_bases_for_one_class_name_read_everything_under_it()
+    {
+        var scanner = Scan(
+            """services.Configure<Settings>(cfg.GetSection("Two"));""",
+            """
+            namespace A { public class Settings : BaseA { } public class BaseA { public int Host { get; set; } } }
+            namespace B { public class Settings : BaseB { } public class BaseB { public int Queue { get; set; } } }
+            """);
+
+        Assert.True(scanner.Check("Two:Host").IsRead);
+        Assert.True(scanner.Check("Two:Port").IsRead);
+    }
+
+    [Fact]
+    public void A_base_list_over_lines_or_with_arguments_is_followed_and_one_the_scan_cannot_read_leaves_the_class_open()
+    {
+        var scanner = Scan(
+            """
+            services.Configure<AppOptions>(cfg.GetSection("App"));
+            services.Configure<Child>(cfg.GetSection("Child"));
+            services.Configure<Odd>(cfg.GetSection("Odd"));
+            """,
+            """
+            public partial class AppOptions
+                : BaseOptions,
+                  IValidatableObject
+            {
+                public int Port { get; set; }
+            }
+
+            public partial class AppOptions { public string Name { get; set; } = ""; }
+            public class BaseOptions { public string Region { get; set; } = ""; }
+            public record Child(int Size) : Parent(Size) { public string Color { get; init; } = ""; }
+            public record Parent(int Size) { public string Shade { get; init; } = ""; }
+            public partial class Odd : Parent(Make(1)) { }
+            public partial class Odd { public int Known { get; set; } }
+            """);
+
+        Assert.True(scanner.Check("App:Port").IsRead);
+        Assert.True(scanner.Check("App:Name").IsRead);
+        Assert.True(scanner.Check("App:Region").IsRead);
+        Assert.Equal(new ReadVerdict(false, "App is bound to AppOptions, which has no property Color"), scanner.Check("App:Color"));
+        Assert.True(scanner.Check("Child:Size").IsRead);
+        Assert.True(scanner.Check("Child:Color").IsRead);
+        Assert.True(scanner.Check("Child:Shade").IsRead);
+        Assert.Equal(new ReadVerdict(false, "Child is bound to Child, which has no property Nope"), scanner.Check("Child:Nope"));
+        Assert.True(scanner.Check("Odd:Known").IsRead);
+        Assert.True(scanner.Check("Odd:Unseen").IsRead);
+    }
+
+    [Fact]
+    public void A_key_far_below_a_bound_section_or_under_many_bound_sections_counts_as_read()
+    {
+        static string Path(int segments) => string.Join(':', Enumerable.Repeat("b", segments));
+        var binds = string.Concat(Enumerable.Range(1, 65).Select(i => $"services.Configure<Leaf>(cfg.GetSection(\"{Path(i)}\"));\n"));
+        var scanner = Scan(
+            """services.Configure<Node>(cfg.GetSection("Tree"));""",
+            binds,
+            """
+            public class Node { public Node A { get; set; } = null!; }
+            public class Leaf { }
+            """);
+
+        Assert.Equal(new ReadVerdict(false, "Tree is bound to Node, which has no property Missing"), scanner.Check("Tree:A:A:Missing"));
+        Assert.True(scanner.Check("Tree:" + string.Concat(Enumerable.Repeat("A:", 70)) + "Missing").IsRead);
+        Assert.Equal(new ReadVerdict(false, $"{Path(60)} is bound to Leaf, which has no property x"), scanner.Check(Path(60) + ":x"));
+        Assert.True(scanner.Check(Path(65) + ":x").IsRead);
+    }
+
+    [Fact]
     public void Inheritance_adds_the_properties_of_every_base_and_survives_a_cycle()
     {
         var scanner = Scan(
@@ -1136,6 +1296,11 @@ public class CodeReadScannerHostileFileTests
     [InlineData("a Configure call with a long dotted argument")]
     [InlineData("AddOptions calls that never close")]
     [InlineData("Configure calls with type arguments that never close")]
+
+    // Shapes for base lists over lines and with arguments, and for type declarations the scan can't take apart.
+    [InlineData("a base list over many lines")]
+    [InlineData("base arguments that never close")]
+    [InlineData("many type declarations the scan can't take apart")]
     public async Task A_hostile_file_is_scanned_in_linear_time(string shape)
     {
         var source = HostileSource(shape);
@@ -1146,6 +1311,43 @@ public class CodeReadScannerHostileFileTests
 
         Assert.True(finished, $"Scanning {source.Length} characters of {shape} took longer than {watch.Elapsed.TotalSeconds:0}s.");
         Assert.Equal(1, (await scan).FilesScanned);
+    }
+
+    [Fact]
+    public async Task A_key_of_many_segments_is_checked_in_linear_time()
+    {
+        var scanner = CodeReadScanner.FromSources([("File0.cs", "services.Configure<A>(cfg.GetSection(\"a\"));\nclass A { public A a { get; set; } }")], TestContext.Current.CancellationToken);
+        var key = Repeat("a:", 400_000) + "b";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var check = Task.Factory.StartNew(() => scanner.Check(key), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        var finished = await Task.WhenAny(check, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == check;
+
+        Assert.True(finished, $"Checking a key of {key.Length} characters took longer than {watch.Elapsed.TotalSeconds:0}s.");
+        // The key goes more than 64 segments below the bound section, so it counts as read.
+        Assert.True((await check).IsRead);
+    }
+
+    [Fact]
+    public async Task A_long_key_under_many_bound_sections_is_checked_in_bounded_time()
+    {
+        var binds = new System.Text.StringBuilder("class Node { public Node a { get; set; } }\n");
+        var path = "a";
+        for (var i = 0; i < 2000; i++)
+        {
+            binds.Append("services.Configure<Node>(cfg.GetSection(\"").Append(path).Append("\"));\n");
+            path += ":a";
+        }
+
+        var scanner = CodeReadScanner.FromSources([("File0.cs", binds.ToString())], TestContext.Current.CancellationToken);
+        var key = Repeat("a:", 200_000) + "zzz";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var check = Task.Factory.StartNew(() => scanner.Check(key), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        var finished = await Task.WhenAny(check, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == check;
+
+        Assert.True(finished, $"Checking a key of {key.Length} characters under 2000 bound sections took longer than {watch.Elapsed.TotalSeconds:0}s.");
+        Assert.True((await check).IsRead);
     }
 
     private static string HostileSource(string shape) => shape switch
@@ -1174,6 +1376,9 @@ public class CodeReadScannerHostileFileTests
             "class B {\n" + string.Concat(Enumerable.Range(0, 12_000).Select(i => $"public int P{i} {{ get; }}\n")) + "}\n"
             + string.Concat(Enumerable.Range(0, 12_000).Select(i => $"class D{i} : B {{ }}\n")),
         "a long word that ends in config again and again" => Repeat("config", 1_000_000) + " .Bind",
+        "a base list over many lines" => "class A :" + Repeat("\n B", 3_000_000),
+        "base arguments that never close" => Repeat("class A : B(", 3_000_000),
+        "many type declarations the scan can't take apart" => Repeat("class A : B(C()) ", 3_000_000),
         "Configure calls with type arguments that never close" => Repeat("Configure<A<b ", 2_000_000) + Repeat("Configure<A<" + new string('b', 10_000), 1_000_000),
         "AddOptions calls that never close" => Repeat("AddOptions<A>(" + new string('a', 1_000), 3_000_000),
         "a Configure call with a long dotted argument" => Repeat("Configure<A>(" + Repeat("a.", 1_000) + "config ", 1_000_000),

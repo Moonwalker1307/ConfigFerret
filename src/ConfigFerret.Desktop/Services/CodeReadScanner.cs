@@ -15,8 +15,11 @@ public sealed record ReadVerdict(bool IsRead, string Reason);
 /// <c>GetValue&lt;T&gt;("A:B")</c>, <c>GetSection("A")</c>, <c>GetConnectionString("Db")</c>,
 /// <c>Environment.GetEnvironmentVariable("A__B")</c>, and sections, or the whole configuration, bound to options classes
 /// with <c>Configure&lt;T&gt;</c>, <c>Bind</c>, <c>Get&lt;T&gt;</c> or <c>BindConfiguration</c>. For a bound section, only keys
-/// that match a property of the options class count as read. A <c>Bind</c> that names no class reads its section, or the
-/// whole configuration, whole.
+/// that match a property of the options class count as read, unless a section below it is read or bound on its own or
+/// the class may have properties the scan can't see: it derives from a class not in the code, more than 16 levels up or
+/// of its own name, or the scan can't take its declaration apart. A base named like an interface, such as
+/// <c>IDisposable</c>, adds no property. A <c>Bind</c> that names no class reads its section, or the whole
+/// configuration, whole.
 /// </summary>
 /// <remarks>
 /// This reads text, not compiled code, so it can miss a read: a key built at run time, or read by a library. Such reads
@@ -43,10 +46,16 @@ public sealed partial class CodeReadScanner
     // How many base classes a class takes properties from, so a long chain of them can't make the scan quadratic.
     private const int MaxBaseClasses = 16;
 
+    // How far Check follows a key: at most this many bound sections along it, and this many segments below each. A key
+    // past either counts as read, so a long key and many bound sections can't make Check cost their product.
+    private const int MaxBoundDepth = 64;
+
     private readonly HashSet<string> _keys = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _sections = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _bound = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OptionsShape> _shapes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _interfaces = new(StringComparer.Ordinal);
+    private readonly SectionNode _tree = new();
     private readonly List<(string File, int Line)> _dynamic = [];
     private readonly List<string> _skipped = [];
     private CancellationToken _cancellationToken;
@@ -136,29 +145,47 @@ public sealed partial class CodeReadScanner
         (string Type, string Name)? rootMissing = null;
         string? root = null;
         if (_sections.Contains(string.Empty)
-            || (_bound.TryGetValue(string.Empty, out root) && (rootMissing = MissingProperty(root, segments)) is null))
+            || (_bound.TryGetValue(string.Empty, out root) && (rootMissing = MissingProperty(root, segments, 0)) is null))
         {
             return new ReadVerdict(true, string.Empty);
         }
 
-        for (var i = 1; i <= segments.Length; i++)
+        if (IsFramework(segments[0]))
         {
-            var prefix = string.Join(':', segments.Take(i));
-            if (_sections.Contains(prefix) || (i == 1 && IsFramework(prefix)))
+            return new ReadVerdict(true, string.Empty);
+        }
+
+        // A class without the property doesn't make the key dead while a longer prefix is read or bound on its own, such
+        // as Messaging:Kafka under Messaging. When none is, the reason names the longest prefix bound. The prefixes are
+        // walked one segment at a time down the sections the code reads. Each bound one is followed at most MaxBoundDepth
+        // segments down, and a key under more than MaxBoundDepth bound sections counts as read, so the cost is bounded by
+        // the key's length plus MaxBoundDepth squared lookups.
+        (int End, string Type, string Name)? dead = null;
+        var node = _tree;
+        var end = -1;
+        var bound = 0;
+        for (var i = 0; i < segments.Length && node.Children.TryGetValue(segments[i], out node); i++)
+        {
+            end += segments[i].Length + 1;
+            if (node.Read)
             {
                 return new ReadVerdict(true, string.Empty);
             }
 
-            if (_bound.TryGetValue(prefix, out var type))
+            if (node.Bound is { } type)
             {
-                var missing = MissingProperty(type, segments.Skip(i).ToList());
-                if (missing is null)
+                if (++bound > MaxBoundDepth || MissingProperty(type, segments, i + 1) is not { } missing)
                 {
                     return new ReadVerdict(true, string.Empty);
                 }
 
-                return new ReadVerdict(false, $"{prefix} is bound to {missing.Value.Type}, which has no property {missing.Value.Name}");
+                dead = (end, missing.Type, missing.Name);
             }
+        }
+
+        if (dead is { } longest)
+        {
+            return new ReadVerdict(false, $"{key[..longest.End]} is bound to {longest.Type}, which has no property {longest.Name}");
         }
 
         if (rootMissing is { } missingAtRoot)
@@ -181,10 +208,11 @@ public sealed partial class CodeReadScanner
         || section.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase);
 
     // The first segment the options class can't take, or null when the binder sets a property from it.
-    private (string Type, string Name)? MissingProperty(string type, IReadOnlyList<string> rest)
+    // A key more than MaxBoundDepth segments below the bound section counts as taken.
+    private (string Type, string Name)? MissingProperty(string type, string[] segments, int start)
     {
         var current = type;
-        foreach (var segment in rest)
+        foreach (var segment in segments.AsSpan(start, Math.Min(segments.Length - start, MaxBoundDepth)))
         {
             if (!_shapes.TryGetValue(current, out var shape))
             {
@@ -208,7 +236,9 @@ public sealed partial class CodeReadScanner
     }
 
     // Looks a property up in the class and then in its bases, at most MaxBaseClasses up, so no class copies the
-    // properties of its bases. Open is true when the class or a base it reached may have properties the scan can't see.
+    // properties of its bases. Open is true when the class or a base it reached may have properties the scan can't see:
+    // a class it could not read whole, a base class not in the code, such as a library's options class, or a base past
+    // the last one followed. A base named like an interface, such as IValidatableObject, gives the binder no property.
     private bool TryGetProperty(OptionsShape shape, string name, out string? type, out bool open)
     {
         open = false;
@@ -222,8 +252,14 @@ public sealed partial class CodeReadScanner
             }
 
             open |= current.Open;
-            if (current.Base is null || !_shapes.TryGetValue(current.Base, out var parent))
+            if (current.Base is null)
             {
+                break;
+            }
+
+            if (!_shapes.TryGetValue(current.Base, out var parent))
+            {
+                open |= !_interfaces.Contains(current.Base) && !IsInterfaceName(current.Base);
                 break;
             }
 
@@ -294,6 +330,18 @@ public sealed partial class CodeReadScanner
 
         FilesScanned = skipped.Count(s => !s);
         _skipped.AddRange(files.Where((_, i) => skipped[i]).Select(f => f.Name));
+
+        // The sections read or bound, by segment, so Check walks a key once. The whole configuration, the empty path, is
+        // checked on its own.
+        foreach (var section in _sections.Where(section => section.Length > 0))
+        {
+            SectionAt(section).Read = true;
+        }
+
+        foreach (var (path, type) in _bound.Where(bound => bound.Key.Length > 0))
+        {
+            SectionAt(path).Bound = type;
+        }
 
         bool TryRead(string name, string step, Action read)
         {
@@ -637,8 +685,28 @@ public sealed partial class CodeReadScanner
         {
             Step();
             var name = m.Groups["name"].Value;
+            var baseName = m.Groups["base"].Success ? Simple(m.Groups["base"].Value.Split([',', '('])[0]) : null;
             parsed.Add((m.Index, m.Index + m.Length));
-            var shape = new OptionsShape(m.Groups["base"].Success ? Simple(m.Groups["base"].Value.Split(',')[0]) : null);
+
+            // Another part of a partial class, or a class of the same name in another namespace, adds to the one shape.
+            // Two different base classes can't both be followed, so the shape is left open.
+            if (_shapes.TryGetValue(name, out var shape))
+            {
+                shape.Open |= baseName is not null && shape.Base is not null && baseName != shape.Base;
+                shape.Base ??= baseName;
+            }
+            else
+            {
+                shape = new OptionsShape(baseName);
+                _shapes.Add(name, shape);
+            }
+
+            // A base of the same name, such as Settings : Lib.Settings, is another class the scan can't tell apart.
+            if (baseName == name)
+            {
+                shape.Open = true;
+            }
+
             declared.Add(shape);
 
             if (m.Groups["parameters"].Success)
@@ -660,12 +728,11 @@ public sealed partial class CodeReadScanner
             {
                 bodies.Add(new TypeBody(name, shape, open, close));
             }
-
-            _shapes.TryAdd(name, shape);
         }
 
-        // A type the pattern above could not take apart, such as one with a where clause over 1000 characters, may have
-        // properties the scan can't see, so it is left open.
+        // A type the pattern above could not take apart, such as one with a where clause over 1000 characters or a base
+        // that takes nested calls, may have properties the scan can't see, so it is left open. An interface is noted, so a
+        // base of that name gives no property.
         var next = 0;
         foreach (Match m in TypeStart().Matches(text))
         {
@@ -675,9 +742,13 @@ public sealed partial class CodeReadScanner
                 next++;
             }
 
-            if (!m.Groups["interface"].Success && (next == parsed.Count || parsed[next].Start > m.Index))
+            var name = m.Groups["name"].Value;
+            if (m.Groups["interface"].Success)
             {
-                var name = m.Groups["name"].Value;
+                _interfaces.Add(name);
+            }
+            else if (next == parsed.Count || parsed[next].Start > m.Index)
+            {
                 if (!_shapes.TryGetValue(name, out var shape))
                 {
                     shape = new OptionsShape(null);
@@ -1098,9 +1169,40 @@ public sealed partial class CodeReadScanner
         }
     }
 
+    // IValidatableObject, IDisposable: named like an interface, by the .NET convention of I, a capital and a lower-case
+    // letter. IISServerOptions and IPAddressOptions are not, so a base of that name counts as a class the scan can't see.
+    private static bool IsInterfaceName(string name) => name.Length > 2 && name[0] == 'I' && char.IsUpper(name[1]) && char.IsLower(name[2]);
+
+    private SectionNode SectionAt(string path)
+    {
+        var node = _tree;
+        foreach (var segment in path.Split(':'))
+        {
+            if (!node.Children.TryGetValue(segment, out var child))
+            {
+                child = new SectionNode();
+                node.Children.Add(segment, child);
+            }
+
+            node = child;
+        }
+
+        return node;
+    }
+
+    // A segment of the sections the code reads: read whole, bound to a class, or only on the way to one below it.
+    private sealed class SectionNode
+    {
+        public Dictionary<string, SectionNode> Children { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool Read { get; set; }
+
+        public string? Bound { get; set; }
+    }
+
     private sealed class OptionsShape(string? baseName)
     {
-        public string? Base { get; } = baseName;
+        public string? Base { get; set; } = baseName;
 
         // True when the class may have properties the scan can't see, so a key it lacks may still be bound.
         public bool Open { get; set; }
@@ -1182,9 +1284,10 @@ public sealed partial class CodeReadScanner
     [GeneratedRegex(@"^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex Identifier();
 
-    // The base list is words split by spaces, each taken whole, and stops before where; a where clause is at most 1000
-    // characters long. A type parameter list and a parameter list can't hold the < or ( that starts another one.
-    [GeneratedRegex(@"\b(?:class|record(?:\s+class)?|struct)\s+(?<name>[A-Za-z_]\w*)\s*(?:<[^<>{]*>\s*)?(?:\((?<parameters>[^()]*)\)\s*)?(?::\s*(?<base>(?>[\w.<>,]+(?: +(?!where\b)[\w.<>,]+)*))\s*)?(?:where\b[^{;]{0,1000})?[{;]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    // The base list is words split by blanks or line breaks, each taken whole, and stops before where; the first word may
+    // pass arguments, as in Base(x), without nested calls. A where clause is at most 1000 characters long. A type
+    // parameter list and a parameter list can't hold the < or ( that starts another one.
+    [GeneratedRegex(@"\b(?:class|record(?:\s+class)?|struct)\s+(?<name>[A-Za-z_]\w*)\s*(?:<[^<>{]*>\s*)?(?:\((?<parameters>[^()]*)\)\s*)?(?::\s*(?<base>(?>[\w.<>,]+(?:\([^()]*\))?(?:\s*(?!where\b)[\w.<>,]+)*))\s*)?(?:where\b[^{;]{0,1000})?[{;]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex TypeDeclaration();
 
     // Where a type declaration starts, as TypeDeclaration starts, whatever follows.
