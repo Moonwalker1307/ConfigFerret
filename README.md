@@ -655,7 +655,9 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   the folder; a further link to another drive or a Windows share is not followed. On Linux and macOS, the .NET folder
   listing itself looks up each link's target once to tell whether it is a folder, without opening it.
   The scan of `spec.path` looks at most at 100,000 files and folders, reads at most 256 MiB of YAML and goes at most 64
-  folders deep; at a limit it warns once, and again lists no variable as unused.
+  folders deep; at a limit it warns once, and again lists no variable as unused. A YAML file larger than 16 MiB is
+  skipped with a warning of its own, and the same rule holds; a file is read only up to that size, even when it grows
+  while it is read, and nothing of size 0, such as a pipe, is opened.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest

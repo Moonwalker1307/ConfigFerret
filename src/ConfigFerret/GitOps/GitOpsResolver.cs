@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.IO.Enumeration;
+using System.Text;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
 using ConfigFerret.Sources;
+using Microsoft.Win32.SafeHandles;
 
 namespace ConfigFerret.GitOps;
 
@@ -355,14 +357,47 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             var relative = Relative(root, file);
             try
             {
-                bytes += new FileInfo(file).Length;
+                // A pipe or a device has no size, and opening a pipe to read waits for a writer, so nothing of size 0 is
+                // opened; an empty file holds nothing either.
+                if (new FileInfo(file).Length == 0)
+                {
+                    continue;
+                }
+
+                using var handle = File.OpenHandle(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                long length;
+                try
+                {
+                    length = RandomAccess.GetLength(handle);
+                }
+                catch (NotSupportedException)
+                {
+                    Limit($"{relative} is not a regular file, so it was not read");
+                    continue;
+                }
+
+                if (length > limits.FileBytes)
+                {
+                    Limit(string.Create(CultureInfo.InvariantCulture, $"{relative} is larger than {limits.FileBytes} bytes, so it was not read"));
+                    continue;
+                }
+
+                bytes += length;
                 if (bytes > limits.Bytes)
                 {
                     Limit(string.Create(CultureInfo.InvariantCulture, $"the YAML files under {top} hold more than {limits.Bytes} bytes, so {relative} and the files after it were not read"));
                     break;
                 }
 
-                var text = File.ReadAllText(file);
+                // The file may have grown since its size was taken, so the read stops past the cap too.
+                if (ReadAtMost(handle, limits.FileBytes) is not { } content)
+                {
+                    Limit(string.Create(CultureInfo.InvariantCulture, $"{relative} is larger than {limits.FileBytes} bytes, so it was not read"));
+                    continue;
+                }
+
+                using var reader = new StreamReader(new MemoryStream(content), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                var text = reader.ReadToEnd();
                 _usedVariables.UnionWith(ReadVariables(text).Select(v => v.Name));
                 AddTemplates(KubernetesManifests.Parse(text, relative));
             }
@@ -389,6 +424,25 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     {
         _partlyRead = true;
         _warnings.Add($"{_app.DisplayName}: {what} and no variable is listed as unused.");
+    }
+
+    /// <summary>The bytes of an open file, or null when it holds more than <paramref name="cap"/>; at most one byte more is read.</summary>
+    internal static byte[]? ReadAtMost(SafeFileHandle handle, long cap)
+    {
+        using var content = new MemoryStream();
+        var chunk = new byte[81920];
+        while (content.Length <= cap)
+        {
+            var read = RandomAccess.Read(handle, chunk.AsSpan(0, (int)Math.Min(chunk.Length, cap + 1 - content.Length)), content.Length);
+            if (read == 0)
+            {
+                return content.ToArray();
+            }
+
+            content.Write(chunk, 0, read);
+        }
+
+        return null;
     }
 
     // More links than this are not checked one by one: each check may follow a chain of up to 40 links.

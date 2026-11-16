@@ -1118,7 +1118,7 @@ public sealed class GitOpsResolverTests : IDisposable
     [Fact]
     public void The_scan_of_the_folder_reads_at_most_the_limits_the_readme_names()
     {
-        Assert.Equal(new FluxScanLimits(100_000, 256L * 1024 * 1024, 64), FluxScanLimits.Default);
+        Assert.Equal(new FluxScanLimits(100_000, 256L * 1024 * 1024, 64, 16L * 1024 * 1024), FluxScanLimits.Default);
         Assert.Equal(FluxScanLimits.Default, new GitOpsOptions().ScanLimits);
     }
 
@@ -1137,6 +1137,54 @@ public sealed class GitOpsResolverTests : IDisposable
         Assert.Equal(
             ["Flux Kustomization apps: apps holds more than 4 files and folders, so the rest were not read and no variable is listed as unused."],
             resolver.Warnings);
+        AssertNoneUnused(resolver);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task A_pipe_named_like_a_yaml_file_is_not_read_and_does_not_block()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses mkfifo.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", Path.Join(_root, "apps", "pipe.yaml")))
+        {
+            await mkfifo.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, mkfifo.ExitCode);
+        }
+
+        // Opening a pipe to read waits for a writer, which never comes.
+        var resolver = await Task.Run(
+            () => new GitOpsResolver(Kustomization("    substitute: {V: x}"), new GitOpsOptions { RepositoryRoot = _root }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics()));
+    }
+
+    [Fact]
+    public void Reads_at_most_the_cap_and_one_byte_whatever_the_size_said()
+    {
+        var path = Write("apps/a.yaml", new string('x', 100));
+        using var handle = File.OpenHandle(path);
+
+        Assert.Null(GitOpsResolver.ReadAtMost(handle, 99));
+        Assert.Equal(100, GitOpsResolver.ReadAtMost(handle, 100)!.Length);
+    }
+
+    [Fact]
+    public void Skips_a_file_larger_than_16_mib_and_lists_no_variable_as_unused()
+    {
+        Write("apps/a.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {K: '${V}'}\n");
+        var header = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: big}\ndata: {K: '${V}'}\n# ";
+        Write("apps/big.yaml", header + new string('x', (16 * 1024 * 1024) + 1 - header.Length));
+        Write("apps/c.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(
+            ["Flux Kustomization apps: apps/big.yaml is larger than 16777216 bytes, so it was not read and no variable is listed as unused."],
+            resolver.Warnings);
+        Assert.Single(resolver.Resolve(ConfigMapKey("a", "K"), new TraceDiagnostics()));
+        Assert.Empty(resolver.Resolve(ConfigMapKey("big", "K"), new TraceDiagnostics()));
+        Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics()));
         AssertNoneUnused(resolver);
     }
 

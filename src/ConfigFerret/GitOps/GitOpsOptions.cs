@@ -35,8 +35,10 @@ public sealed class GitOpsOptions
 /// <param name="Entries">The files and folders it looks at.</param>
 /// <param name="Bytes">The size of the YAML files it reads, all together.</param>
 /// <param name="Depth">How many folders below the path it goes.</param>
-internal sealed record FluxScanLimits(int Entries, long Bytes, int Depth)
+/// <param name="FileBytes">The size of one YAML file it reads. Reading and parsing a file takes several times its size.</param>
+internal sealed record FluxScanLimits(int Entries, long Bytes, int Depth, long FileBytes)
 {
-    // Far above what the folder of one Kustomization holds in a large repository.
-    public static readonly FluxScanLimits Default = new(100_000, 256L * 1024 * 1024, 64);
+    // Far above what the folder of one Kustomization holds in a large repository. One file may hold as much as
+    // Kustomization.Load reads from one file.
+    public static readonly FluxScanLimits Default = new(100_000, 256L * 1024 * 1024, 64, 16L * 1024 * 1024);
 }
