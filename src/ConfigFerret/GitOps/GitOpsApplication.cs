@@ -640,10 +640,18 @@ public sealed record GitOpsDataReference(bool IsSecret, string Name, bool Option
 /// <summary>A Flux <c>postBuild</c> substitution variable, the reference on steps that substitute it.</summary>
 /// <param name="Kustomization">The Flux Kustomization name.</param>
 /// <param name="Name">The variable name.</param>
-public sealed record GitOpsVariableRef(string Kustomization, string Name) : SourceRef;
+public sealed record GitOpsVariableRef(string Kustomization, string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Name;
+}
 
 /// <summary>A ConfigMap key set by a kustomize patch on an Argo CD Application.</summary>
 /// <param name="Application">The Application name.</param>
 /// <param name="ConfigMap">The ConfigMap name in Git.</param>
 /// <param name="Key">The data key.</param>
-public sealed record GitOpsPatchRef(string Application, string ConfigMap, string Key) : SourceRef;
+public sealed record GitOpsPatchRef(string Application, string ConfigMap, string Key) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Key;
+}

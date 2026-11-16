@@ -257,6 +257,162 @@ public class ConfigTracerTests
         Assert.Equal(["***", "p"], setting.Steps[0].Origins.Select(o => o.Value));
     }
 
+    private static ProvenanceStep Named(SourceRef reference, string? value = "fake-smtp-password") =>
+        Step("upstream", value) with { Kind = LayerKind.Other, Reference = reference };
+
+    [Fact]
+    public void Hides_a_value_whose_winning_origin_is_named_like_a_secret()
+    {
+        const string secret = "fake-smtp-password";
+        SourceRef[] references =
+        [
+            new ConfigMapKeyRef("api-config", "smtp-password"),
+            new WorkloadEnvRef("api", "api", "SMTP_PASSWORD"),
+            new EnvironmentVariableRef("SMTP_PASSWORD"),
+            new HelmValueRef("smtp.password"),
+            new Compose.DotEnvEntryRef(".env", "SMTP_PASSWORD"),
+            new Compose.ComposeEnvironmentRef("api", "SMTP_PASSWORD"),
+            new GitOps.GitOpsVariableRef("apps", "smtp_password"),
+            new GitOps.GitOpsPatchRef("api", "api-config", "smtp-password"),
+            new Terraform.TerraformOutputRef("smtp", "password"),
+        ];
+
+        Assert.All(references, reference =>
+        {
+            var report = ConfigTracer.For(Memory(("Smtp:Auth", secret)))
+                .WithResolver(new Fixed(Named(reference) with { Origins = [Step("values file", secret)] }))
+                .WithOptions(o => o.MaxDepth = 1)
+                .Trace();
+
+            var setting = report.Find("Smtp:Auth")!;
+            Assert.True(setting.IsSensitive);
+            Assert.Equal("***", setting.Value);
+            Assert.Equal("***", setting.Steps[0].Value);
+            var origin = Assert.Single(setting.Steps[0].Origins);
+            Assert.True(origin.IsSensitive);
+            Assert.Equal("***", origin.Value);
+            Assert.Equal("***", Assert.Single(origin.Origins).Value);
+            Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.Explain("Smtp:Auth"), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Names_of_objects_files_and_folders_do_not_hide_a_value()
+    {
+        SourceRef[] references =
+        [
+            new ConfigMapKeyRef("secret-config", "smtp-host"),
+            new WorkloadEnvRef("token-service", "password-sidecar", "SMTP_HOST"),
+            new FileRef("/etc/secrets/appsettings.json"),
+            new Compose.DotEnvEntryRef("/run/secrets/.env", "SMTP_HOST"),
+            new Compose.ComposeEnvironmentRef("token-service", "SMTP_HOST"),
+            new GitOps.GitOpsVariableRef("secrets", "smtp_host"),
+            new GitOps.GitOpsPatchRef("secrets", "token-config", "smtp-host"),
+            new Terraform.TerraformOutputRef("smtp", "host"),
+        ];
+
+        Assert.All(references, reference =>
+        {
+            var setting = ConfigTracer.For(Memory(("Smtp:Host", "mail.example.test")))
+                .WithResolver(new Fixed(Named(reference, "mail.example.test")))
+                .WithOptions(o => o.MaxDepth = 1)
+                .Trace().Find("Smtp:Host")!;
+
+            Assert.False(setting.IsSensitive);
+            Assert.Equal("mail.example.test", setting.Value);
+            Assert.Equal("mail.example.test", Assert.Single(setting.Steps[0].Origins).Value);
+        });
+    }
+
+    [Fact]
+    public void An_environment_variable_prefix_named_like_a_secret_does_not_hide_values()
+    {
+        const string prefix = "CFTOKENSVC_";
+        Environment.SetEnvironmentVariable(prefix + "Db__Timeout", "30");
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+
+            // Upstream, the workload's env entry and a variable go by the same name, the second in other letter case.
+            var setting = ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [prefix + "Db__Timeout"] = "30" })
+                .WithResolver(new TopLevel(
+                    Named(new WorkloadEnvRef("api", "api", prefix + "Db__Timeout"), "30"),
+                    Named(new EnvironmentVariableRef(prefix.ToUpperInvariant() + "DB__TIMEOUT"), "30")))
+                .Trace().Find("Db:Timeout")!;
+
+            Assert.Equal(new EnvironmentVariableRef(prefix + "Db__Timeout"), Assert.Single(setting.Steps).Reference);
+            Assert.False(setting.IsSensitive);
+            Assert.Equal("30", setting.Value);
+            Assert.Equal("30", setting.Steps[0].Value);
+            Assert.Equal(["30", "30"], setting.Steps[0].Origins.Select(o => o.Value));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(prefix + "Db__Timeout", null);
+        }
+    }
+
+    [Fact]
+    public void The_configmap_key_an_appsettings_file_is_mounted_from_counts_as_a_name()
+    {
+        var file = Step("appsettings.Secrets.json", null) with
+        {
+            Kind = LayerKind.DotNetProvider,
+            Reference = new FileRef("/app/appsettings.Secrets.json"),
+            Origins = [Named(new ConfigMapKeyRef("api-files", "appsettings.Secrets.json"), value: null) with { IsEffective = true }],
+        };
+
+        var setting = ConfigTracer.For(Memory(("Smtp:Host", "mail.example.test")))
+            .WithResolver(new Fixed(file))
+            .WithOptions(o => o.MaxDepth = 1)
+            .Trace().Find("Smtp:Host")!;
+
+        // A file named like a secret says it holds secrets, so its values are hidden, as a container trace hides the file.
+        Assert.True(setting.IsSensitive);
+        Assert.Equal("***", setting.Value);
+        Assert.All(setting.Steps.Concat(Upstream(setting)), s => Assert.True(s.IsSensitive));
+    }
+
+    [Fact]
+    public void A_layer_named_like_a_secret_that_lost_hides_only_itself()
+    {
+        var setting = ConfigTracer.For(Memory(("Smtp:Auth", "v")))
+            .WithResolver(new Fixed(Named(new ConfigMapKeyRef("api-config", "smtp-password"), "s") with { Origins = [Step("values file", "s")] }, Step("public", "p")))
+            .WithOptions(o => o.MaxDepth = 1)
+            .Trace().Find("Smtp:Auth")!;
+
+        Assert.False(setting.IsSensitive);
+        Assert.Equal("v", setting.Value);
+        Assert.Equal("v", setting.Steps[0].Value);
+        Assert.Equal(["***", "p"], setting.Steps[0].Origins.Select(o => o.Value));
+        Assert.Equal("***", Assert.Single(setting.Steps[0].Origins[0].Origins).Value);
+    }
+
+    [Fact]
+    public void A_layer_named_like_a_secret_follows_the_reveal_switch_and_the_trace_pattern()
+    {
+        var config = Memory(("Smtp:Auth", "fake-smtp-password"));
+        ConfigTracer Tracer(string name) => ConfigTracer.For(config)
+            .WithResolver(new Fixed(Named(new ConfigMapKeyRef("api-config", name))))
+            .WithOptions(o => o.MaxDepth = 1);
+
+        var revealed = Tracer("smtp-password").WithOptions(o => o.RevealSensitiveValues = true).Trace().Find("Smtp:Auth")!;
+        var off = Tracer("smtp-password").WithOptions(o => o.SensitiveKeyPattern = null).Trace().Find("Smtp:Auth")!;
+        var custom = Tracer("hidden-auth").WithOptions(o => o.SensitiveKeyPattern = new Regex("^hidden", RegexOptions.IgnoreCase)).Trace().Find("Smtp:Auth")!;
+
+        Assert.True(revealed.IsSensitive);
+        Assert.Equal("fake-smtp-password", revealed.Value);
+        Assert.Equal("fake-smtp-password", Assert.Single(revealed.Steps[0].Origins).Value);
+        Assert.DoesNotContain(revealed.Steps.Concat(Upstream(revealed)), s => s.IsSensitive);
+        Assert.False(off.IsSensitive);
+        Assert.Equal("fake-smtp-password", Assert.Single(off.Steps[0].Origins).Value);
+        Assert.True(custom.IsSensitive);
+        Assert.Equal("***", Assert.Single(custom.Steps[0].Origins).Value);
+    }
+
     [Fact]
     public void Uses_a_custom_key_pattern_redacted_text_and_reveal_switch()
     {

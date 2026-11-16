@@ -302,6 +302,26 @@ public class AwsParametersTests
         Assert.Throws<ArgumentNullException>(() => resolver.Resolve(Env("X"), null!));
     }
 
+    /// <summary>Links each .NET layer to one upstream step with the given reference.</summary>
+    private sealed class LinkTo(SourceRef reference) : IOriginResolver
+    {
+        public IReadOnlyList<ProvenanceStep> Resolve(ProvenanceStep layer, TraceDiagnostics diagnostics) =>
+            layer.ConfigurationKey is null ? [] : [new ProvenanceStep { Kind = LayerKind.AwsParameterStore, Source = "parameter", Value = layer.Value, Reference = reference }];
+    }
+
+    [Theory]
+    [InlineData("/password-reset/prod/Smtp/Host", false)]
+    [InlineData("/orders/prod/smtp-password", true)]
+    public void Only_the_last_part_of_a_parameter_name_can_hide_its_value(string name, bool hidden)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Smtp:Host"] = "mail.example.test" }).Build();
+
+        var setting = ConfigTracer.For(configuration).WithResolver(new LinkTo(new AwsParameterRef(name))).Trace().Find("Smtp:Host")!;
+
+        Assert.Equal(hidden, setting.IsSensitive);
+        Assert.Equal(hidden ? "***" : "mail.example.test", setting.Value);
+    }
+
     [Fact]
     public void Traces_a_provider_key_and_redacts_SecureString_values_end_to_end()
     {

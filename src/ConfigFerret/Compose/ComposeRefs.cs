@@ -6,12 +6,20 @@ namespace ConfigFerret.Compose;
 /// <summary>A key in a dotenv file: a project <c>.env</c>, an <c>env_file</c> or a layered app dotenv file.</summary>
 /// <param name="File">The file's full path, or its name when it was parsed from text.</param>
 /// <param name="Name">The key.</param>
-public sealed record DotEnvEntryRef(string File, string Name) : SourceRef;
+public sealed record DotEnvEntryRef(string File, string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Name;
+}
 
 /// <summary>An entry in a Docker Compose service's <c>environment</c>.</summary>
 /// <param name="Service">The service name.</param>
 /// <param name="Name">The variable name.</param>
-public sealed record ComposeEnvironmentRef(string Service, string Name) : SourceRef;
+public sealed record ComposeEnvironmentRef(string Service, string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected internal override string? ValueName() => Name;
+}
 
 /// <summary>A Docker Compose secret or config, mounted into a service's containers as a file.</summary>
 /// <param name="Name">The top-level secret or config name.</param>

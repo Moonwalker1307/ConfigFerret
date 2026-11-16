@@ -64,4 +64,8 @@ public sealed record AzureAppConfigurationSetting(string Key, string? Label, str
 /// <param name="Key">The key as stored.</param>
 /// <param name="Label">The label, or null for no label.</param>
 /// <param name="SecretId">For a Key Vault reference, the secret it points to, so the Key Vault source can link it.</param>
-public sealed record AzureAppConfigurationSettingRef(string Store, string Key, string? Label, Uri? SecretId = null) : SourceRef;
+public sealed record AzureAppConfigurationSettingRef(string Store, string Key, string? Label, Uri? SecretId = null) : SourceRef
+{
+    /// <inheritdoc/>
+    protected override string? ValueName() => Key;
+}

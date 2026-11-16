@@ -177,6 +177,38 @@ public class OctopusResolverTests
         }
     }
 
+    [Fact]
+    public void Redacts_a_value_from_a_variable_named_like_a_secret_that_is_not_sensitive_end_to_end()
+    {
+        const string secret = "fake-api-token";
+        var dir = Directory.CreateTempSubdirectory("configferret-octopus-");
+        try
+        {
+            var file = Path.Join(dir.FullName, "appsettings.json");
+            File.WriteAllText(file, $$"""{ "Api": { "Auth": "{{secret}}" } }""");
+            var configuration = new ConfigurationBuilder().AddJsonFile(file).Build();
+
+            // Neither the key nor the Octopus flag says secret, but the variable's own name does.
+            var report = ConfigTracer.For(configuration)
+                .WithOctopus(new OctopusVariables([Var("Api.Token", secret)]), o => o.Map("Api:Auth", "Api.Token"))
+                .Trace();
+
+            var auth = report.Find("Api:Auth")!;
+            var octopus = Assert.Single(auth.Steps[0].Origins);
+            Assert.Equal("Octopus variable Api.Token", octopus.Source);
+            Assert.True(octopus.IsSensitive);
+            Assert.Equal("***", octopus.Value);
+            Assert.True(auth.IsSensitive);
+            Assert.Equal("***", auth.Value);
+            Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

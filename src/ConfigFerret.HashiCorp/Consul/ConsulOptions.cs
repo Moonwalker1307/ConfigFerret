@@ -59,4 +59,15 @@ public sealed record ConsulEntry(string Key, string ConfigurationKey, string? Va
 /// <param name="Datacenter">The datacenter, or null for the agent's own.</param>
 /// <param name="Key">The Consul key.</param>
 /// <param name="JsonPath">The path inside the key's JSON value, or null for the whole key.</param>
-public sealed record ConsulKeyRef(string? Datacenter, string Key, string? JsonPath = null) : SourceRef;
+public sealed record ConsulKeyRef(string? Datacenter, string Key, string? JsonPath = null) : SourceRef
+{
+    /// <summary>
+    /// The last part of the key, with the JSON path when there is one: the folders above it are where the key is kept,
+    /// not its name.
+    /// </summary>
+    protected override string? ValueName()
+    {
+        var name = Key[(Key.LastIndexOf('/') + 1)..];
+        return JsonPath is null ? name : name + ":" + JsonPath;
+    }
+}

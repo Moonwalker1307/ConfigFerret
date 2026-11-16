@@ -571,7 +571,13 @@ provider is redacted too, with or without the extension package. A key looks sec
 - `SasUrl` or `SasUri` ends a word (`Storage:SasUrl`, `blobSasUri`, `sasUrl`), since a SAS URL holds the signature.
 
 So `Cache:KeyPrefix`, `KeyVaultName`, `PrimaryKeyColumn`, `PassThrough`, `Bypass` and `SasUrlExpiryDays` stay
-visible. Turn redaction off only on your own machine:
+visible. The same rule applies to the name of each upstream value, such as a ConfigMap key, an env entry, a Helm
+values path or a GitHub or Octopus variable: env `Smtp__Auth` from ConfigMap key `smtp-password` is `***`, and so is
+everything upstream of that key. Only the value's own name counts, not the ConfigMap, workload, file or folder that
+holds it, a prefix in front of the key, or the folders of an AWS parameter or a Consul key. A settings file mounted
+from a ConfigMap key that looks secret, such as `appsettings.Secrets.json`, has all its values hidden.
+
+Turn redaction off only on your own machine:
 
 ```csharp
 ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);

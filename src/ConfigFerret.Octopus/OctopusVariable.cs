@@ -41,4 +41,8 @@ internal enum ProcessScope
 /// <summary>A pointer to an Octopus Deploy variable.</summary>
 /// <param name="SetName">The project or library variable set that holds the variable.</param>
 /// <param name="Name">The variable name.</param>
-public sealed record OctopusVariableRef(string SetName, string Name) : SourceRef;
+public sealed record OctopusVariableRef(string SetName, string Name) : SourceRef
+{
+    /// <inheritdoc/>
+    protected override string? ValueName() => Name;
+}

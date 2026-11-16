@@ -168,6 +168,47 @@ public class ContainerTraceTests
     }
 
     [Fact]
+    public void A_value_from_a_configmap_key_named_like_a_secret_is_redacted()
+    {
+        const string secret = "fake-smtp-password";
+        var manifests = KubernetesManifests.Parse($$"""
+            apiVersion: v1
+            kind: ConfigMap
+            metadata: { name: api-config }
+            data:
+              smtp-password: {{secret}}
+              smtp-host: mail.example.test
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata: { name: api }
+            spec:
+              template:
+                spec:
+                  containers:
+                    - name: api
+                      env:
+                        - name: Smtp__Auth
+                          valueFrom:
+                            configMapKeyRef: { name: api-config, key: smtp-password }
+                        - name: Smtp__Host
+                          valueFrom:
+                            configMapKeyRef: { name: api-config, key: smtp-host }
+            """);
+
+        var report = ConfigTracer.ForContainer(manifests).Trace();
+
+        var auth = report.Find("Smtp__Auth")!;
+        Assert.True(auth.IsSensitive);
+        Assert.Equal("***", auth.Value);
+        Assert.All(auth.Steps, s => Assert.Equal("***", s.Value));
+        Assert.Equal("mail.example.test", report.Find("Smtp__Host")!.Value);
+        Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, report.Explain("Smtp__Auth"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Warns_when_an_envFrom_source_was_not_loaded()
     {
         var manifests = KubernetesManifests.Parse("""
