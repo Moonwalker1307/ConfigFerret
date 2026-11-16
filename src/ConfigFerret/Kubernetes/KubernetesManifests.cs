@@ -74,7 +74,8 @@ public sealed class KubernetesManifests
 
     /// <summary>
     /// Loads manifests from files. Directories are searched for <c>*.yaml</c>, <c>*.yml</c> and <c>*.json</c>, without
-    /// following symbolic links below them.
+    /// following symbolic links below them. A file is named in output by its file name, and a file found in a directory
+    /// by its path inside the directory, with forward slashes.
     /// </summary>
     public static KubernetesManifests LoadFiles(params string[] paths)
     {
@@ -83,7 +84,8 @@ public sealed class KubernetesManifests
         foreach (var path in paths)
         {
             // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files.
-            var files = Directory.Exists(path)
+            var isFolder = Directory.Exists(path);
+            var files = isFolder
                 ? Directory.EnumerateFiles(path, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint })
                     .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
                         || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
@@ -92,7 +94,8 @@ public sealed class KubernetesManifests
                 : (IEnumerable<string>)[path];
             foreach (var file in files)
             {
-                result.Add(File.ReadAllText(file), Path.GetFileName(file));
+                // Folders such as base and overlays often hold files of the same name, so the path tells them apart.
+                result.Add(File.ReadAllText(file), isFolder ? Path.GetRelativePath(path, file).Replace('\\', '/') : Path.GetFileName(file));
             }
         }
 

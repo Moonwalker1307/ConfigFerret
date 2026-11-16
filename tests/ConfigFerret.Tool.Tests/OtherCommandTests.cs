@@ -148,6 +148,33 @@ public class ContainerCommandTests
     }
 
     [Fact]
+    public async Task Names_a_manifest_in_a_folder_by_its_path_inside_it()
+    {
+        var root = Directory.CreateTempSubdirectory("configferret-tool-");
+        try
+        {
+            var ct = TestContext.Current.CancellationToken;
+            Directory.CreateDirectory(Path.Join(root.FullName, "api"));
+            Directory.CreateDirectory(Path.Join(root.FullName, "worker"));
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "pod.yaml"), "apiVersion: v1\nkind: Pod\nmetadata: {name: api}\nspec:\n  containers:\n    - name: api\n      envFrom: [{configMapRef: {name: api-config}}, {configMapRef: {name: worker-config}}]\n", ct);
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "api", "configmap.yaml"), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: api-config}\ndata: {Api__Host: api.internal}\n", ct);
+            await File.WriteAllTextAsync(Path.Join(root.FullName, "worker", "configmap.yaml"), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: worker-config}\ndata: {Worker__Host: worker.internal}\n", ct);
+
+            var folder = await new ToolRunner().RunAsync("container", "-m", root.FullName);
+            var files = await new ToolRunner().RunAsync("container", "-m", Path.Join(root.FullName, "pod.yaml"), "-m", Path.Join(root.FullName, "api", "configmap.yaml"));
+
+            Assert.Equal(0, folder.ExitCode);
+            Assert.Contains("ConfigMap api-config (key Api__Host, api/configmap.yaml:4)", folder.Output, StringComparison.Ordinal);
+            Assert.Contains("ConfigMap worker-config (key Worker__Host, worker/configmap.yaml:4)", folder.Output, StringComparison.Ordinal);
+            Assert.Contains("ConfigMap api-config (key Api__Host, configmap.yaml:4)", files.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Needs_manifests()
     {
         var result = await new ToolRunner().RunAsync("container");
