@@ -17,6 +17,16 @@ updates:
       # A major bump would move net10.0 onto 11.x, so take only minor and patch updates.
       - dependency-name: 'Microsoft.Extensions.*'
         update-types: ['version-update:semver-major']
+      # tests/ConfigFerret.Desktop.Tests stays on xunit.v3 3.x because Avalonia.Headless.XUnit 12.1.6 does not work
+      # with xunit 4; the other test projects are already on 4.x. Remove these two rules when Desktop.Tests moves to 4.x.
+      - dependency-name: 'xunit.v3'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'xunit.runner.visualstudio'
+        update-types: ['version-update:semver-major']
+      # Verify 33 adds a SponsorCheck licence gate that breaks the build, so tests/ConfigFerret.Tests stays on 32.x.
+      # Remove this rule if the project moves to Verify 33 or later.
+      - dependency-name: 'Verify.XunitV3'
+        versions: ['>=33']
 
   # The web app's base images (src/ConfigFerret.Web/Dockerfile).
   - package-ecosystem: docker
