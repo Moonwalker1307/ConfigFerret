@@ -416,6 +416,25 @@ public class GitOpsApplicationTests
     }
 
     [Fact]
+    public void Labels_whose_keys_differ_only_by_a_tag_keep_the_last_one()
+    {
+        // YAML holds a and !x a as two keys, but both are the label a.
+        var app = GitOpsApplication.Parse("""
+            apiVersion: argoproj.io/v1alpha1
+            kind: Application
+            metadata: {name: a}
+            spec:
+              source:
+                kustomize:
+                  commonLabels: {a: "1", !x a: "2"}
+                  commonAnnotations: {b: "1", !x b: "2"}
+            """);
+
+        Assert.Equal("2", app.Kustomize!.CommonLabels["a"]);
+        Assert.Equal("2", app.Kustomize.CommonAnnotations["b"]);
+    }
+
+    [Fact]
     public void A_single_untraced_patch_is_named_once_and_empty_overrides_add_no_note()
     {
         var one = GitOpsApplication.Parse("""

@@ -487,8 +487,17 @@ public sealed class GitOpsApplication
         };
     }
 
-    private static Dictionary<string, string> Strings(YamlNode? node) =>
-        node.Pairs().ToDictionary(p => p.Key, p => p.Value.Scalar() ?? "", StringComparer.Ordinal);
+    // YAML holds a and !x a as two keys, but both name a, so the last one wins instead of failing.
+    private static Dictionary<string, string> Strings(YamlNode? node)
+    {
+        var strings = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in node.Pairs())
+        {
+            strings[key] = value.Scalar() ?? "";
+        }
+
+        return strings;
+    }
 
     private static bool IsTrue(string? value) => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 

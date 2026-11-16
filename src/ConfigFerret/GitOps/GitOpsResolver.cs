@@ -24,6 +24,7 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     private readonly List<KubernetesManifests> _data;
     private HashSet<string>? _namedValues; // the values paths the object sets that a chart template names
     private bool _warned;
+    private bool _partlyRead; // a file or folder under the Kustomization path could not be read
 
     /// <summary>Creates a resolver for one GitOps object.</summary>
     /// <param name="application">The GitOps object.</param>
@@ -89,10 +90,11 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     /// True for a values path that a chart template names, itself, a parent or a value below it, and for a variable that
     /// a manifest under the Kustomization path names: a template reads a value for replicas or an image too, and Flux
     /// substitutes a variable anywhere, in an Ingress host or an image tag too, where no trace step can show the use.
+    /// When a file or folder under the path could not be read, every variable is taken as used.
     /// </summary>
     public bool IsUsed(SourceRef reference) => reference switch
     {
-        GitOpsVariableRef v => v.Kustomization == _app.Name && _usedVariables.Contains(v.Name),
+        GitOpsVariableRef v => v.Kustomization == _app.Name && (_partlyRead || _usedVariables.Contains(v.Name)),
         HelmValueRef h when _chart is not null => (_namedValues ??= _chart.NamedByTemplates(GitOpsValues().Select(v => v.Key))).Contains(h.Path),
         _ => false,
     };
@@ -258,11 +260,30 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             return;
         }
 
-        // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files.
-        var files = Directory.EnumerateFiles(folder, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint })
-            .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
-            .Order(StringComparer.Ordinal);
-        foreach (var file in files)
+        // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files. Each
+        // folder is read on its own, so one that cannot be read is a warning and the others are still read.
+        var enumeration = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
+        var files = new List<string>();
+        var folders = new Stack<string>([folder]);
+        while (folders.Count > 0)
+        {
+            var current = folders.Pop();
+            try
+            {
+                files.AddRange(Directory.EnumerateFiles(current, "*", enumeration)
+                    .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)));
+                foreach (var sub in Directory.EnumerateDirectories(current, "*", enumeration))
+                {
+                    folders.Push(sub);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                NotRead($"the folder {Path.GetRelativePath(root, current).Replace('\\', '/')}", ex);
+            }
+        }
+
+        foreach (var file in files.Order(StringComparer.Ordinal))
         {
             var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
             try
@@ -275,7 +296,18 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             {
                 _warnings.Add(ex.Message);
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                NotRead(relative, ex);
+            }
         }
+    }
+
+    // What was not read may name any variable, so from then on none is called unused.
+    private void NotRead(string what, Exception ex)
+    {
+        _partlyRead = true;
+        _warnings.Add($"Could not read {what}, so no variable of {_app.DisplayName} is listed as unused: {ex.Message}");
     }
 
     /// <summary>Finds the ConfigMap, Secret and env values in source manifests that hold <c>${VAR}</c> placeholders.</summary>

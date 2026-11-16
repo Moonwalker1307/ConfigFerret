@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Sources;
 using ConfigFerret.Terraform;
@@ -193,6 +194,41 @@ public sealed class TerraformTests : IDisposable
 
         var missingFolder = TerraformOutputs.Load(OutputsFile, terraformFolder: Path.Join(_root, "nope"));
         Assert.Equal([$"The Terraform folder {Path.Join(_root, "nope")} does not exist."], missingFolder.Warnings);
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public void A_tf_file_it_may_not_read_is_a_warning()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Uses Unix file modes.");
+        var locked = Path.Join(_root, "locked.tf");
+        File.WriteAllText(locked, "output \"a\" {\n  value = 1\n}\n");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.SkipWhen(CanRead(locked), "The process may read any file, for example as root.");
+
+            var outputs = TerraformOutputs.Load(OutputsFile, terraformFolder: _root);
+
+            Assert.StartsWith($"Could not read {locked}: ", Assert.Single(outputs.Warnings), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    private static bool CanRead(string path)
+    {
+        try
+        {
+            File.ReadAllText(path);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     [Fact]
