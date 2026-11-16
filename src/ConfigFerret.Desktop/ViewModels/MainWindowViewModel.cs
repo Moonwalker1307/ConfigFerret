@@ -255,7 +255,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     /// <summary>The repository or folder being shown.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasSubject), nameof(ShowWelcome))]
+    [NotifyPropertyChangedFor(nameof(HasSubject), nameof(ShowWelcome), nameof(ShowProblemsWithoutResult))]
     public partial string? SubjectTitle { get; set; }
 
     /// <summary>A line under the title, such as the branch or the folder path.</summary>
@@ -268,9 +268,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>True when nothing is open, to show the welcome panel.</summary>
     public bool ShowWelcome => SubjectTitle is null;
 
+    /// <summary>
+    /// True when a repository or folder is open but has no result to show, and there are problems that say why, such as
+    /// nothing to trace. The page then shows them in the main area, not only in the status line, with the Sources menu.
+    /// </summary>
+    public bool ShowProblemsWithoutResult => HasSubject && !HasResult && !IsBusy && HasProblems;
+
     /// <summary>True while downloading, scanning or tracing.</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(OpenFolderCommand), nameof(ExportJsonCommand), nameof(ExportTextCommand))]
+    [NotifyPropertyChangedFor(nameof(ShowProblemsWithoutResult))]
     public partial bool IsBusy { get; set; }
 
     /// <summary>What is running, for the busy overlay.</summary>
@@ -280,6 +287,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     /// <summary>True once a trace has finished.</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExportJsonCommand), nameof(ExportTextCommand))]
+    [NotifyPropertyChangedFor(nameof(ShowProblemsWithoutResult))]
     public partial bool HasResult { get; set; }
 
     /// <summary>What the scan found.</summary>
@@ -505,7 +513,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     /// <summary>Warnings and problems.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasProblems), nameof(ProblemText))]
+    [NotifyPropertyChangedFor(nameof(HasProblems), nameof(ProblemText), nameof(ShowProblemsWithoutResult))]
     public partial int ProblemCount { get; set; }
 
     /// <summary>True when the trace left notes, warnings or source problems.</summary>
@@ -1115,6 +1123,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             ShowResult(result, notes, reveal);
             ShowTracedEnvironment(choices, result.Environment);
+        }
+        else if (!HasResult)
+        {
+            // The analyzer's notes say why a source is missing, such as helm that could not render a chart, which is
+            // often why there is nothing to trace. A failure that left the rows of an earlier trace keeps its notes.
+            foreach (var note in notes.Where(n => !Problems.Any(p => string.Equals(p.Text, n, StringComparison.Ordinal))))
+            {
+                Problems.Add(new ProblemRow("info", note));
+            }
+
+            ProblemCount = Problems.Count;
         }
     }
 

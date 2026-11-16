@@ -236,6 +236,20 @@
             </StackPanel>
           </WrapPanel>
 
+          <!-- Why there is no result, such as nothing to trace: the status line alone cuts it off -->
+          <Border DockPanel.Dock="Top" Classes="card" Margin="0,12,0,10" Padding="16,12" IsVisible="{Binding ShowProblemsWithoutResult}">
+            <ItemsControl ItemsSource="{Binding Problems}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:ProblemRow">
+                  <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                    <PathIcon Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top" Data="{Binding Severity, Converter={x:Static ui:Converters.SeverityIcon}}" ui:DynamicClasses.Classes="{Binding Severity}" />
+                    <SelectableTextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Border>
+
           <!-- Stat tiles: each one filters the table. Picking the active tile again shows every row. -->
           <WrapPanel DockPanel.Dock="Top" Margin="0,8,0,2" IsVisible="{Binding HasResult}">
             <Button Classes="tilebutton" Classes.selected="{Binding IsAllTile}" Margin="0,0,10,10" Command="{Binding SelectTileCommand}" CommandParameter="All"
@@ -321,14 +335,21 @@
             </Button>
           </WrapPanel>
 
-          <!-- Search, what the repository holds, and the trace's notes -->
-          <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10" IsVisible="{Binding HasResult}">
-            <TextBox DockPanel.Dock="Left" Classes="search" Width="300" VerticalAlignment="Top" PlaceholderText="Search keys, values and sources" Text="{Binding FilterText}" Margin="0,0,12,0">
+          <!-- Search, what the repository holds, and the trace's notes. Without a result only the Sources menu, so a source
+               turned off can be turned on again. -->
+          <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <DockPanel.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                <Binding Path="HasResult" />
+                <Binding Path="ShowProblemsWithoutResult" />
+              </MultiBinding>
+            </DockPanel.IsVisible>
+            <TextBox DockPanel.Dock="Left" Classes="search" Width="300" IsVisible="{Binding HasResult}" VerticalAlignment="Top" PlaceholderText="Search keys, values and sources" Text="{Binding FilterText}" Margin="0,0,12,0">
               <TextBox.InnerLeftContent>
                 <PathIcon Data="{StaticResource IconSearch}" Width="14" Height="14" Margin="10,0,2,0" Foreground="{DynamicResource CfMuted}" />
               </TextBox.InnerLeftContent>
             </TextBox>
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top" Margin="0,8,0,0">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top" Margin="0,8,0,0" IsVisible="{Binding HasResult}">
               <TextBlock Classes="muted" Text="{Binding ShownText}" VerticalAlignment="Center" />
               <Button Classes="link" Content="Show all" Command="{Binding ClearFiltersCommand}" IsVisible="{Binding IsFiltered}" VerticalAlignment="Center"
                       ToolTip.Tip="Clear the search, the tile and every column filter" />

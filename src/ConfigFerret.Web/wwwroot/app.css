@@ -194,6 +194,7 @@ button.tile.selected { background: var(--accent-soft); border-color: var(--accen
 .problems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .problem { display: flex; gap: 10px; align-items: flex-start; user-select: text; line-height: 1.45; }
 .problem .icon { margin-top: 2px; }
+.no-result { margin-top: 16px; max-width: 760px; }
 
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 .rows { list-style: none; margin: 0; padding: 0; }

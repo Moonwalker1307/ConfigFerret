@@ -475,6 +475,82 @@ public sealed class MainWindowTests : IDisposable
         static IEnumerable<StepNode> Flatten(IEnumerable<StepNode> nodes) => nodes.SelectMany(n => Flatten(n.Children).Prepend(n));
     }
 
+    [AvaloniaFact]
+    public async Task A_folder_with_nothing_to_trace_says_so_in_the_main_area()
+    {
+        var repo = Path.Join(_temp.FullName, "notes");
+        Directory.CreateDirectory(repo);
+        File.WriteAllText(Path.Join(repo, "README.md"), "# Notes\n");
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+        var window = new MainWindow { DataContext = viewModel, Width = 1440, Height = 900 };
+        window.Show();
+
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.HasResult);
+        var problem = Assert.Single(viewModel.Problems).Text;
+        Assert.Equal(problem, viewModel.StatusText);
+        Assert.Contains("appsettings.json", problem, StringComparison.Ordinal);
+        Assert.Contains("Pick another repository", problem, StringComparison.Ordinal);
+        Assert.DoesNotContain("profile", problem, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("source", problem, StringComparison.OrdinalIgnoreCase);
+        // Shown in the main area, not only in the status line, which cuts it off.
+        Assert.Contains(window.GetVisualDescendants().OfType<SelectableTextBlock>(), t => t.Text == problem && t.IsEffectivelyVisible);
+    }
+
+    [AvaloniaFact]
+    public async Task A_repository_with_a_chart_helm_cannot_render_says_why_when_there_is_nothing_to_trace()
+    {
+        var repo = Path.Join(_temp.FullName, "charts");
+        Directory.CreateDirectory(Path.Join(repo, "chart"));
+        File.WriteAllText(Path.Join(repo, "chart", "Chart.yaml"), "name: demo\n");
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.HasResult);
+        Assert.True(viewModel.ShowProblemsWithoutResult);
+        Assert.Contains(viewModel.Problems, p => p.Severity == "error" && p.Text.StartsWith("There is nothing to trace here", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Problems, p => p.Severity == "info" && p.Text.StartsWith("Install helm", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact]
+    public async Task A_source_turned_off_can_be_turned_on_again_when_nothing_is_traced()
+    {
+        var repo = Path.Join(_temp.FullName, "pods");
+        Directory.CreateDirectory(Path.Join(repo, "k8s"));
+        File.WriteAllText(Path.Join(repo, "k8s", "pod.yaml"), "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\nspec:\n  containers:\n    - name: web\n      image: web:1\n      env:\n        - name: MODE\n          value: fast\n");
+        using var viewModel = new MainWindowViewModel(
+            new WorkspaceStore(Path.Join(_temp.FullName, "workspace.json")),
+            new InMemoryCredentialStore(),
+            analyzer: new RepositoryAnalyzer((_, _) => null),
+            downloadRoot: Path.Join(_temp.FullName, "downloads"));
+        var window = new MainWindow { DataContext = viewModel, Width = 1440, Height = 900 };
+        window.Show();
+        await viewModel.AnalyzeFolderAsync(repo);
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(viewModel.HasResult);
+
+        viewModel.Discoveries.Single(d => d.Title == "Kubernetes manifests").IsOn = false;
+        await WaitForTraceAsync(viewModel);
+
+        Assert.False(viewModel.HasResult);
+        var problem = Assert.Single(viewModel.Problems, p => p.Severity == "error").Text;
+        Assert.Contains("Sources", problem, StringComparison.Ordinal);
+        Assert.DoesNotContain("Kubernetes source", problem, StringComparison.Ordinal);
+        Assert.Contains(window.GetVisualDescendants().OfType<Button>(), b => ToolTip.GetTip(b) as string == "Turn the sources found in the repository on and off" && b.IsEffectivelyVisible);
+    }
+
     /// <summary>A save dialog that always picks the same file.</summary>
     private sealed class SaveTo(string path) : IDialogService
     {

@@ -187,7 +187,7 @@ public sealed partial class TraceRunner
         {
             if (manifests is null)
             {
-                throw new TraceSetupException("Tracing a container needs a Kubernetes source with the workload and its ConfigMaps and Secrets.");
+                throw new TraceSetupException("Tracing a container needs the Kubernetes manifests with the workload and its ConfigMaps and Secrets. Turn them on in the Sources menu if they are off.");
             }
 
             foreach (var appOnly in sources.Where(s => s is AppSettingsSource or EnvironmentVariablesSource))
@@ -501,7 +501,9 @@ public sealed partial class TraceRunner
         var apps = sources.OfType<AppSettingsSource>().ToList();
         if (apps.Count == 0)
         {
-            throw new TraceSetupException("Add an App settings source with the folder that holds appsettings.json, or switch the profile to Container to trace Kubernetes manifests on their own.");
+            throw new TraceSetupException(manifests is null
+                ? "There is nothing to trace here: no appsettings.json was found, and no Kubernetes manifests to trace a container from. A Helm chart or Kustomize overlay counts once helm or kubectl renders it. Pick another repository or folder."
+                : "No appsettings.json was found to trace an app from.");
         }
 
         // The app's environment: what the container gets from the manifests, then each environment variables source.

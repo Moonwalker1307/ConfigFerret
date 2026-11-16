@@ -114,7 +114,7 @@ public class TraceRunnerSourcesTests : IDisposable
     {
         var ex = await Assert.ThrowsAsync<TraceSetupException>(() => Run(new Profile { Mode = TraceMode.Container }));
 
-        Assert.Equal("Tracing a container needs a Kubernetes source with the workload and its ConfigMaps and Secrets.", ex.Message);
+        Assert.Equal("Tracing a container needs the Kubernetes manifests with the workload and its ConfigMaps and Secrets. Turn them on in the Sources menu if they are off.", ex.Message);
     }
 
     [Fact]

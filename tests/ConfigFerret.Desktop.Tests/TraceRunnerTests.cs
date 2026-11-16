@@ -445,7 +445,7 @@ public class TraceRunnerTests
 
         var ex = await Assert.ThrowsAsync<TraceSetupException>(() => new TraceRunner(new InMemoryCredentialStore()).RunAsync(profile, revealSecrets: false, TestContext.Current.CancellationToken));
 
-        Assert.Contains("App settings", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("No appsettings.json was found to trace an app from.", ex.Message);
     }
 
     [Fact]
