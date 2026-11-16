@@ -92,10 +92,14 @@ The messages never include the API key. Without a host, the same checks run the 
 
 Only variables whose scope fits the deployment are listed: set `Environment`, `Machine`, `Roles`, `Channel`, `Step`
 and `TenantTags` to describe it. A variable scoped on something you did not set is kept but marked as inferred, with a
-note naming the scope. Variables are ordered by how specific their scope is (step, then target, then target tag, then
-environment), and a project variable wins over a library variable set one of equal scope, so the last one is the
-value Octopus uses. Where tenant tags and channels fall in that order is a best guess, and two equally scoped values
-produce a warning.
+note naming the scope. The trace is taken to be of a deployment, so a loaded variable scoped only to runbooks is left
+out, and one scoped to the deployment process applies; when a value left out that way is sensitive, the last value is
+marked sensitive, since the configuration may have come from a runbook. Variables are ordered by how specific their
+scope is (step, then target, then target tag, then tenant tag, then environment, then channel, then process), the
+order of the [scope specificity](https://octopus.com/docs/projects/variables/getting-started) list in the Octopus
+documentation, and a project variable wins over a library variable set one of equal scope, so the last one is the
+value Octopus uses. How several scopes on one value combine is not documented; here the most specific one decides. Two
+equally scoped values produce a warning.
 
 ## API keys and sensitive values
 

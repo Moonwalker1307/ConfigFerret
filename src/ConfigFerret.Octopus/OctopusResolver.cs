@@ -6,16 +6,19 @@ namespace ConfigFerret.Octopus;
 /// </summary>
 internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOptions options) : IOriginResolver
 {
-    // Octopus picks the most specifically scoped variable. This follows its documented ranking (step, then target,
-    // then target tag, then environment); where tenant tags and channels fall is a best guess.
+    // Octopus picks the most specifically scoped variable. This follows the order on its scope specificity page
+    // (https://octopus.com/docs/projects/variables/getting-started): step, target, target tag, tenant tag, environment,
+    // channel, then the deployment or runbook process. That page does not tell target tags the step targets apart from
+    // the others here, and does not say how several scopes on one value combine; here the most specific one decides.
     private static readonly Dictionary<string, int> Weights = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Action"] = 32,
-        ["Machine"] = 16,
-        ["Role"] = 8,
-        ["TenantTag"] = 4,
-        ["Environment"] = 2,
-        ["Channel"] = 1,
+        ["Action"] = 64,
+        ["Machine"] = 32,
+        ["Role"] = 16,
+        ["TenantTag"] = 8,
+        ["Environment"] = 4,
+        ["Channel"] = 2,
+        ["ProcessOwner"] = 1,
     };
 
     private bool _warned;
@@ -56,12 +59,23 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
             return [];
         }
 
-        var candidates = variables.Find(variableName)
+        var matches = variables.Find(variableName)
             .Select(v => (Variable: v, Match: Applies(v)))
-            .Where(c => c.Match.Applies)
             .OrderBy(c => Rank(c.Variable))
             .ThenBy(c => c.Variable.IsProjectVariable) // Project variables win over library ones of equal rank.
             .ToList();
+        var candidates = matches.Where(c => c.Match.Applies).ToList();
+
+        // The trace is taken to be of a deployment, which cannot be changed, so a value left out only for being scoped
+        // to runbooks may still be the one used: when the configuration came from a runbook, values that are certain in
+        // a deployment may not apply. When it is sensitive, keep that doubt whatever outranks it, and link to it when
+        // nothing else applies, so that the layer is still redacted.
+        var runbookSecrets = matches.Where(c => c.Match.RunbookOnly && c.Variable.IsSensitive).ToList();
+        if (candidates.Count == 0)
+        {
+            candidates = runbookSecrets;
+        }
+
         if (candidates.Count == 0)
         {
             if (mapped is not null)
@@ -83,13 +97,13 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
         }
 
         // Only the last step decides whether the layer is redacted, so it carries the doubt when a sensitive value may win.
-        var mayBeSensitive = !candidates[^1].Variable.IsSensitive && SensitiveMayWin(candidates);
+        var mayBeSensitive = !candidates[^1].Variable.IsSensitive && (runbookSecrets.Count > 0 || SensitiveMayWin(candidates));
         return candidates.Select((c, i) => ToStep(c.Variable, layer, how, c.Match.Unknown, mayBeSensitive && i == candidates.Count - 1)).ToList();
     }
 
     // A candidate may be the one Octopus uses when it is scoped as specifically as the last one, or when every
     // candidate ranked above it may not apply because its scope names something that was not given.
-    private static bool SensitiveMayWin(List<(OctopusVariable Variable, (bool Applies, List<string> Unknown) Match)> candidates)
+    private static bool SensitiveMayWin(List<(OctopusVariable Variable, (bool Applies, List<string> Unknown, bool RunbookOnly) Match)> candidates)
     {
         var i = candidates.Count - 1;
         while (i >= 0)
@@ -128,11 +142,25 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
 
     private string? ByName() => options.MatchByName ? "matched by name" : null;
 
-    private (bool Applies, List<string> Unknown) Applies(OctopusVariable variable)
+    // RunbookOnly: the variable would apply but for its scope naming only runbooks.
+    private (bool Applies, List<string> Unknown, bool RunbookOnly) Applies(OctopusVariable variable)
     {
         var unknown = new List<string>();
+        var runbookOnly = false;
         foreach (var (dimension, values) in variable.Scope)
         {
+            // A trace is taken to be of a deployment, so a value scoped only to runbooks does not apply.
+            if (dimension == "ProcessOwner" && variable.Process != ProcessScope.TypeNotGiven)
+            {
+                if (variable.Process == ProcessScope.RunbooksOnly)
+                {
+                    runbookOnly = true;
+                    unknown.Add($"runbook {string.Join(", ", values)}");
+                }
+
+                continue;
+            }
+
             var context = options.Context(dimension);
             if (context is null)
             {
@@ -143,11 +171,11 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
 
             if (!values.Any(v => context.Any(c => string.Equals(c, v, StringComparison.OrdinalIgnoreCase) || v.EndsWith("/" + c, StringComparison.OrdinalIgnoreCase))))
             {
-                return (false, unknown);
+                return (false, unknown, false);
             }
         }
 
-        return (true, unknown);
+        return (!runbookOnly, unknown, runbookOnly);
     }
 
     private static int Rank(OctopusVariable variable) => variable.Scope.Keys.Sum(d => Weights.GetValueOrDefault(d));
