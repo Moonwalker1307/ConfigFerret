@@ -372,6 +372,27 @@ public class ResolverTests
         Assert.Empty(diagnostics.Warnings);
     }
 
+    [Theory]
+    [InlineData(GcpSecretVersionState.Disabled)]
+    [InlineData(GcpSecretVersionState.Destroyed)]
+    public void Does_not_count_the_value_of_a_newest_version_that_cannot_be_read_as_the_latest_value(GcpSecretVersionState state)
+    {
+        // Only a snapshot built by hand can hold the value of a version that is not enabled.
+        var secrets = new GcpSecrets("p", [new GcpSecret { Id = "S", Project = "p", Versions = [new("3", state), new("2", GcpSecretVersionState.Enabled)], ValueVersion = "3", Value = "hunter2" }]);
+
+        var step = Assert.Single(Resolve(secrets, EnvStep("S", "other")));
+
+        Assert.Null(step.Value);
+        Assert.Contains("reading latest fails", step.Note, StringComparison.Ordinal);
+        Assert.DoesNotContain("differs", step.Note, StringComparison.Ordinal);
+
+        var property = Assert.Single(Resolve(secrets, EnvStep("DB_PW", "other"), o => o.Map("DB_PW", "S", "password")));
+
+        Assert.Null(property.Value);
+        Assert.Contains("property password was not checked, because reading latest fails", property.Note, StringComparison.Ordinal);
+        Assert.DoesNotContain("only version 3 was read", property.Note, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Does_not_compare_an_older_version_as_the_latest_when_the_newest_state_is_unknown()
     {
