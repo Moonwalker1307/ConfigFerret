@@ -12,14 +12,16 @@ public sealed record ReadVerdict(bool IsRead, string Reason);
 
 /// <summary>
 /// The configuration keys an app's C# code reads, found by reading the source: <c>config["A:B"]</c>,
-/// <c>GetValue&lt;T&gt;("A:B")</c>, <c>GetSection("A")</c>, <c>GetConnectionString("Db")</c>, and sections bound to options
-/// classes with <c>Configure&lt;T&gt;</c>, <c>Bind</c>, <c>Get&lt;T&gt;</c> or <c>BindConfiguration</c>. For a bound section,
-/// only keys that match a property of the options class count as read.
+/// <c>GetValue&lt;T&gt;("A:B")</c>, <c>GetSection("A")</c>, <c>GetConnectionString("Db")</c>,
+/// <c>Environment.GetEnvironmentVariable("A__B")</c>, and sections, or the whole configuration, bound to options classes
+/// with <c>Configure&lt;T&gt;</c>, <c>Bind</c>, <c>Get&lt;T&gt;</c> or <c>BindConfiguration</c>. For a bound section, only keys
+/// that match a property of the options class count as read. A <c>Bind</c> that names no class reads its section, or the
+/// whole configuration, whole.
 /// </summary>
 /// <remarks>
 /// This reads text, not compiled code, so it can miss a read: a key built at run time, or read by a library. Such reads
 /// are counted in <see cref="DynamicReads"/>, and keys that ASP.NET Core and common libraries read themselves, such as
-/// <c>Logging</c> and <c>AllowedHosts</c>, always count as read.
+/// <c>Logging</c>, <c>AllowedHosts</c> and any <c>ASPNETCORE_</c> or <c>DOTNET_</c> variable, always count as read.
 /// </remarks>
 public sealed partial class CodeReadScanner
 {
@@ -66,10 +68,10 @@ public sealed partial class CodeReadScanner
     /// <summary>The exact keys read, such as <c>Cache:Ttl</c>.</summary>
     public IReadOnlyCollection<string> Keys => _keys;
 
-    /// <summary>Sections read as a whole, such as <c>Logging</c>.</summary>
+    /// <summary>Sections read as a whole, such as <c>Logging</c>. An empty name is the whole configuration.</summary>
     public IReadOnlyCollection<string> Sections => _sections;
 
-    /// <summary>Sections bound to an options class, and the class name.</summary>
+    /// <summary>Sections bound to an options class, and the class name. An empty name is the whole configuration.</summary>
     public IReadOnlyDictionary<string, string> BoundSections => _bound;
 
     /// <summary>
@@ -129,10 +131,20 @@ public sealed partial class CodeReadScanner
         }
 
         var segments = key.Split(':');
+
+        // The whole configuration read, or bound to a class that takes the key.
+        (string Type, string Name)? rootMissing = null;
+        string? root = null;
+        if (_sections.Contains(string.Empty)
+            || (_bound.TryGetValue(string.Empty, out root) && (rootMissing = MissingProperty(root, segments)) is null))
+        {
+            return new ReadVerdict(true, string.Empty);
+        }
+
         for (var i = 1; i <= segments.Length; i++)
         {
             var prefix = string.Join(':', segments.Take(i));
-            if (_sections.Contains(prefix) || (i == 1 && FrameworkSections.Contains(prefix, StringComparer.OrdinalIgnoreCase)))
+            if (_sections.Contains(prefix) || (i == 1 && IsFramework(prefix)))
             {
                 return new ReadVerdict(true, string.Empty);
             }
@@ -149,8 +161,24 @@ public sealed partial class CodeReadScanner
             }
         }
 
+        if (rootMissing is { } missingAtRoot)
+        {
+            return new ReadVerdict(
+                false,
+                missingAtRoot.Type == root
+                    ? $"The whole configuration is bound to {root}, which has no property {missingAtRoot.Name}"
+                    : $"The whole configuration is bound to {root}; {missingAtRoot.Type} has no property {missingAtRoot.Name}");
+        }
+
         return new ReadVerdict(false, FilesScanned == 0 ? "No C# code found to read it" : "No code reads it");
     }
+
+    // A key the host or a common library reads, or a variable such as ASPNETCORE_FORWARDEDHEADERS_ENABLED or
+    // DOTNET_gcServer that configures the host or the runtime.
+    private static bool IsFramework(string section) =>
+        FrameworkSections.Contains(section, StringComparer.OrdinalIgnoreCase)
+        || section.StartsWith("ASPNETCORE_", StringComparison.OrdinalIgnoreCase)
+        || section.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase);
 
     // The first segment the options class can't take, or null when the binder sets a property from it.
     private (string Type, string Name)? MissingProperty(string type, IReadOnlyList<string> rest)
@@ -443,6 +471,10 @@ public sealed partial class CodeReadScanner
             {
                 _keys.Add("ConnectionStrings:" + key);
             }
+            else if (m.Groups["kind"].Value == "GetEnvironmentVariable")
+            {
+                _keys.Add(key.Replace("__", ":", StringComparison.Ordinal));
+            }
             else if (m.Groups["kind"].Value == "BindConfiguration")
             {
                 var type = OptionsTypeBefore(text, m.Index);
@@ -488,6 +520,37 @@ public sealed partial class CodeReadScanner
             if (!Consumed(m.Index) && Key(m) is { } section)
             {
                 _sections.Add(section);
+            }
+        }
+
+        // The whole configuration bound to a class: Configure<T>(configuration), AddOptions<T>().Bind(configuration) and
+        // configuration.Get<T>(). A Bind names no
+        // class, so configuration.Bind(settings) reads it whole, and configuration.Bind("Smtp", smtp) reads Smtp whole.
+        // So does configuration.Get<T>() of a collection or dictionary.
+        foreach (Match m in ConfigureWhole().Matches(text))
+        {
+            Step();
+            if (m.Groups["open"].Success)
+            {
+                _sections.Add(string.Empty);
+            }
+            else
+            {
+                Bind(string.Empty, Simple(m.Groups["type"].Value));
+            }
+        }
+
+        foreach (Match m in WholeConfigurationCall().Matches(text))
+        {
+            Step();
+            covered.Add(m.Index);
+            if (m.Groups["get"].Success && !m.Groups["open"].Success)
+            {
+                Bind(string.Empty, Simple(m.Groups["get"].Value));
+            }
+            else
+            {
+                _sections.Add(m.Groups["key"].Success && Key(m) is { } section ? section : string.Empty);
             }
         }
 
@@ -1068,7 +1131,7 @@ public sealed partial class CodeReadScanner
         MatchTimeoutMilliseconds)]
     private static partial Regex ChainStep();
 
-    [GeneratedRegex(@"\b(?<kind>GetValue|GetConnectionString|BindConfiguration)\s*(?:<[^<>()]+>\s*)?\(\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    [GeneratedRegex(@"\b(?<kind>GetValue|GetConnectionString|BindConfiguration|GetEnvironmentVariable)\s*(?:<[^<>()]+>\s*)?\(\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex ValueCall();
 
     [GeneratedRegex(@"\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*(?:\?\s*)?\[\s*" + Arg + @"\s*\]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
@@ -1077,10 +1140,34 @@ public sealed partial class CodeReadScanner
     [GeneratedRegex(@"\b\w+\s*\(\s*(?:[\w.]*\.)?[Cc]onfiguration\s*,\s*" + Arg + @"\s*[,)]", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex SectionNameArgument();
 
-    // Where a read starts, as SectionCall, ValueCall and ConfigIndexer start, whatever follows. The ValueCall start also
-    // takes a type argument of any shape, such as GetValue<List<string>>(.
-    [GeneratedRegex(@"\bGet(?:Required)?Section\s*\(|\b(?:GetValue|GetConnectionString|BindConfiguration)\s*[<(]|\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*(?:\?\s*)?\[", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    // Where a read starts, as SectionCall, ValueCall, ConfigIndexer and WholeConfigurationCall start, whatever follows. The
+    // ValueCall start also takes a type argument of any shape, such as GetValue<List<string>>(. ConfigurationBinder.Bind(config, x)
+    // and config.Get(typeof(T)) are only listed.
+    [GeneratedRegex(
+        @"\bGet(?:Required)?Section\s*\(|\b(?:GetValue|GetConnectionString|BindConfiguration|GetEnvironmentVariable)\s*[<(]" +
+        @"|\b(?:[\w]*[Cc]onfig(?:uration)?|[Cc]fg|[\w]*[Ss]ection)\s*(?:\?\s*)?\[|\b(?:\w*[Cc]onfig(?:uration)?|[Cc]fg)\s*\.\s*(?:Get\s*<|Bind\s*\()" +
+        @"|\bConfigurationBinder\s*\.\s*\w+\s*\(|\.\s*Get\s*\(\s*typeof\b",
+        RegexOptions.CultureInvariant,
+        MatchTimeoutMilliseconds)]
     private static partial Regex ReadStart();
+
+    // The type argument of Configure<T> or AddOptions<T>, and the call's open bracket. A generic T, such as
+    // Dictionary<string, string>, is marked with open.
+    private const string OptionsTypeArgument = @"\s*<\s*(?<type>[\w.]+)\s*(?:(?<open><)(?>[^<>()\r\n]*)(?:<(?>[^<>()\r\n]*)>(?>[^<>()\r\n]*))?>\s*)?>\s*\(";
+
+    // Configure<T>(builder.Configuration), with or without an options name first, and AddOptions<T>().Bind(builder.Configuration),
+    // each with or without binder options after it.
+    [GeneratedRegex(
+        @"\b(?:Configure" + OptionsTypeArgument + @"\s*(?:""[^""\r\n]*""\s*,\s*)?|AddOptions" + OptionsTypeArgument + @"[^()]*\)\s*\.\s*Bind\s*\(\s*)" +
+        @"(?:[\w.]*\.)?(?:\w*[Cc]onfig(?:uration)?|[Cc]fg)\s*[,)]",
+        RegexOptions.CultureInvariant,
+        MatchTimeoutMilliseconds)]
+    private static partial Regex ConfigureWhole();
+
+    // configuration.Get<T>(), configuration.Bind(settings) and configuration.Bind("Section", settings). A generic T, such as
+    // Dictionary<string, string>, is marked with open.
+    [GeneratedRegex(@"\b(?:\w*[Cc]onfig(?:uration)?|[Cc]fg)\s*\.\s*(?:Get\s*<\s*(?<get>[\w.]+)\s*(?:(?<open><)|>\s*\()|Bind\s*\(\s*" + Arg + @"\s*(?:(?<key>,)|\)))", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
+    private static partial Regex WholeConfigurationCall();
 
     // Runs on the 200 characters before a call only, so its cost is bounded by that.
     [GeneratedRegex(@"(?:Configure\s*<\s*(?<type>[\w.]+)\s*>\s*\(\s*(?:""[^""]*""\s*,\s*)?[\w.]*\s*\.?\s*|AddOptions\s*<\s*(?<type>[\w.]+)\s*>\s*\([^()]*\)\s*\.\s*(?:Bind\s*\(\s*[\w.]*\s*\.?\s*)?)$", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
