@@ -103,12 +103,14 @@ Key Vault (`LayerKind.AzureKeyVault`):
   by its remote key (`secret/<name>` works too). A pinned version that is not the current one is noted.
 - **App Configuration Key Vault references** (certain): a reference to `https://<vault>.vault.azure.net/secrets/<name>`
   links to that secret when both sources are added.
-- **Explicit links** (certain): `Map("DB_PASS", "orders-db-password")` or `Links`.
+- **Explicit links** (certain): `Map("DB_PASS", "orders-db-password")` or `Links`. A link to a secret that is not in
+  the snapshot adds a trace warning, and the value is still hidden.
 - **Same name** (inferred, `MatchByName`): an environment variable, env entry or ConfigMap/Secret key with the secret's
   name, or with the same configuration key the Key Vault provider maps it to: `Db__Password`, `Db:Password` and
   `Db--Password` all match.
 - **Key Vault configuration provider** (inferred, `MatchConfigurationProvider`): a value set by `AddAzureKeyVault` in
-  the app links to the secret for its key.
+  the app links to the secret for its key. When no loaded secret maps to the key, for example because `SecretNames`
+  left it out, or when `MatchConfigurationProvider` is off, the value is still hidden.
 
 A linked secret that is disabled, expired or not yet valid adds a trace warning.
 

@@ -84,7 +84,7 @@ public class KeyVaultResolverTests
         Assert.Equal(string.Empty, step.Note);
 
         var diagnostics = new TraceDiagnostics();
-        Assert.Empty(Resolve(Env("DB_PASS"), o => o.Links["DB_PASS"] = " Missing ", diagnostics));
+        Assert.Equal("Azure Key Vault secret Missing (contoso-prod)", Assert.Single(Resolve(Env("DB_PASS"), o => o.Links["DB_PASS"] = " Missing ", diagnostics)).Source);
         Assert.Contains("DB_PASS is linked to Azure Key Vault secret Missing, but no such secret was loaded from contoso-prod.", diagnostics.Warnings);
 
         // A blank link falls back to matching by name.
@@ -158,10 +158,57 @@ public class KeyVaultResolverTests
 
         Assert.True(step.IsInferred);
         Assert.Equal("read by the Key Vault configuration provider (matched by key)", step.Note);
-        Assert.Empty(Resolve(Provider("AzureKeyVaultConfigurationProvider", "db:password"), o => o.MatchConfigurationProvider = false));
         Assert.Empty(Resolve(Provider("in-memory collection", "db:password")));
-        Assert.Empty(Resolve(Provider("AzureKeyVaultConfigurationProvider", "nothing")));
         Assert.Empty(Resolve(new ProvenanceStep { Kind = LayerKind.DotNetProvider, Source = "AzureKeyVaultConfigurationProvider" }));
+    }
+
+    [Fact]
+    public void Hides_a_value_from_the_Key_Vault_provider_when_no_loaded_secret_maps_to_its_key()
+    {
+        var diagnostics = new TraceDiagnostics();
+        var step = Assert.Single(Resolve(Provider("AzureKeyVaultConfigurationProvider", "Storage:Account1", "fake-marker-value"), diagnostics: diagnostics));
+
+        Assert.Equal(LayerKind.AzureKeyVault, step.Kind);
+        Assert.Equal("Azure Key Vault secret not in the snapshot of contoso-prod", step.Source);
+        Assert.Equal("read by the Key Vault configuration provider, but no loaded secret maps to this key", step.Note);
+        Assert.Null(step.Value);
+        Assert.Null(step.Reference);
+        Assert.True(step.IsSensitive);
+        Assert.True(step.IsInferred);
+        Assert.Equal(["load warning"], diagnostics.Warnings);
+
+        // A layer that is already hidden, as the core does for the provider types it knows, gets no step.
+        Assert.Empty(Resolve(Provider("AzureKeyVaultConfigurationProvider", "Storage:Account1", "fake-marker-value") with { IsSensitive = true }));
+    }
+
+    [Fact]
+    public void Hides_a_value_from_the_Key_Vault_provider_without_linking_it_when_provider_matching_is_off()
+    {
+        var step = Assert.Single(Resolve(Provider("CachedAzureKeyVaultProvider", "db:password", Value), o => o.MatchConfigurationProvider = false));
+
+        Assert.Equal(LayerKind.AzureKeyVault, step.Kind);
+        Assert.Equal("Azure Key Vault secret, not linked", step.Source);
+        Assert.Equal("read by the Key Vault configuration provider; MatchConfigurationProvider is off, so no secret is linked", step.Note);
+        Assert.Null(step.Value);
+        Assert.Null(step.Reference);
+        Assert.True(step.IsSensitive);
+        Assert.True(step.IsInferred);
+        Assert.Empty(Resolve(Provider("AzureKeyVaultConfigurationProvider", "db:password", Value) with { IsSensitive = true }, o => o.MatchConfigurationProvider = false));
+        Assert.Empty(Resolve(Provider("in-memory collection", "db:password", Value), o => o.MatchConfigurationProvider = false));
+    }
+
+    [Fact]
+    public void Hides_a_value_linked_to_a_secret_that_was_not_loaded()
+    {
+        var step = Assert.Single(Resolve(Env("STORAGE_ACCOUNT", "fake-marker-value"), o => o.Map("STORAGE_ACCOUNT", "storage-connection")));
+
+        Assert.Equal(LayerKind.AzureKeyVault, step.Kind);
+        Assert.Equal("Azure Key Vault secret storage-connection (contoso-prod)", step.Source);
+        Assert.Equal("linked explicitly, but not in the snapshot of the vault", step.Note);
+        Assert.Null(step.Value);
+        Assert.Equal(new AzureKeyVaultSecretRef("contoso-prod", "storage-connection"), step.Reference);
+        Assert.True(step.IsSensitive);
+        Assert.False(step.IsInferred);
     }
 
     [Fact]
@@ -262,6 +309,84 @@ public class KeyVaultResolverTests
         Assert.Empty(setting.EffectiveStep!.Origins);
         Assert.True(setting.IsSensitive);
         Assert.DoesNotContain(connection, report.Explain("Storage:Account1"), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hides_a_value_from_an_unknown_Key_Vault_provider_whose_secret_was_not_loaded()
+    {
+        const string connection = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=FAKE-ACCOUNT-KEY==";
+        var configuration = new ConfigurationBuilder()
+            .Add(new CachedAzureKeyVaultProvider(new() { ["Storage:Account1"] = connection }))
+            .Build();
+
+        var report = ConfigTracer.For(configuration).WithOptions(o => o.Environment = new Dictionary<string, string?>()).WithAzureKeyVault(Secrets).Trace();
+
+        var setting = report.Find("Storage:Account1")!;
+        Assert.Equal("CachedAzureKeyVaultProvider", setting.EffectiveStep!.Source);
+        Assert.True(setting.IsSensitive);
+        Assert.True(setting.EffectiveStep.IsSensitive);
+        Assert.DoesNotContain(connection, report.Explain("Storage:Account1"), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hides_a_value_from_an_unknown_Key_Vault_provider_when_provider_matching_is_off()
+    {
+        var configuration = new ConfigurationBuilder()
+            .Add(new CachedAzureKeyVaultProvider(new() { ["Storage:Account1"] = "fake-marker-value" }))
+            .Build();
+        var secrets = new AzureKeyVaultSecrets("contoso-prod", [new("Storage--Account1", "contoso-prod")]);
+
+        var report = ConfigTracer.For(configuration).WithOptions(o => o.Environment = new Dictionary<string, string?>())
+            .WithAzureKeyVault(secrets, o => o.MatchConfigurationProvider = false)
+            .Trace();
+
+        Assert.True(report.Find("Storage:Account1")!.IsSensitive);
+        Assert.DoesNotContain("fake-marker-value", report.Explain("Storage:Account1"), StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-marker-value", report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-marker-value", report.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Names_the_vault_that_holds_the_secret_when_another_vault_is_traced_too()
+    {
+        var other = new AzureKeyVaultSecrets("contoso-other", [new("Api--Key", "contoso-other")]);
+        var configuration = new ConfigurationBuilder()
+            .Add(new AzureKeyVaultConfigurationProvider(new() { ["Db:Password"] = Value }))
+            .Build();
+
+        var report = ConfigTracer.For(configuration).WithOptions(o => o.Environment = new Dictionary<string, string?>())
+            .WithAzureKeyVault(Secrets)
+            .WithAzureKeyVault(other)
+            .Trace();
+
+        var setting = report.Find("Db:Password")!;
+        Assert.Equal("Azure Key Vault secret Db--Password (contoso-prod)", Assert.Single(setting.EffectiveStep!.Origins).Source);
+        Assert.Contains("Azure Key Vault secret Db--Password (contoso-prod)", setting.Story, StringComparison.Ordinal);
+        Assert.DoesNotContain("contoso-other", report.Explain("Db:Password"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hides_an_environment_variable_linked_to_a_secret_that_was_not_loaded()
+    {
+        const string connection = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=FAKE-ACCOUNT-KEY==";
+        var variables = new Dictionary<string, string?> { ["STORAGE_ACCOUNT"] = connection };
+        var configuration = new ConfigurationBuilder().Add(new FakeEnvironmentVariables(variables)).Build();
+
+        var report = ConfigTracer.For(configuration)
+            .WithOptions(o => o.Environment = variables)
+            .WithAzureKeyVault(Secrets, o => o.Map("STORAGE_ACCOUNT", "storage-connection"))
+            .Trace();
+
+        var setting = report.Find("STORAGE_ACCOUNT")!;
+        Assert.Equal("environment variable STORAGE_ACCOUNT", setting.EffectiveStep!.Source);
+        Assert.True(setting.IsSensitive);
+        Assert.Contains("STORAGE_ACCOUNT is linked to Azure Key Vault secret storage-connection, but no such secret was loaded from contoso-prod.", report.Warnings);
+        Assert.Contains("Azure Key Vault secret storage-connection (contoso-prod)", report.Explain("STORAGE_ACCOUNT"), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.Explain("STORAGE_ACCOUNT"), StringComparison.Ordinal);
         Assert.DoesNotContain(connection, report.ToText(), StringComparison.Ordinal);
         Assert.DoesNotContain(connection, report.ToJson(), StringComparison.Ordinal);
     }

@@ -93,7 +93,8 @@ internal static partial class Targets
             {
                 foreach (var step in resolver.Resolve(layer, diagnostics))
                 {
-                    if (step.Kind != LayerKind.AzureKeyVault || step.Reference is not AzureKeyVaultSecretRef || !step.IsSensitive)
+                    // A step without a value stands for a secret that was not loaded or not linked, and may name none.
+                    if (step.Kind != LayerKind.AzureKeyVault || (step.Reference is not AzureKeyVaultSecretRef && step.Value is not null) || !step.IsSensitive)
                     {
                         throw new InvariantException($"Key Vault step for {name} has kind {step.Kind}, reference {step.Reference} and sensitive {step.IsSensitive}.");
                     }
