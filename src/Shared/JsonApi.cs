@@ -27,6 +27,15 @@ internal static class JsonApi
     // A reason that repeats this many characters of the credential in a row, or all of a shorter one, is not shown.
     private const int CredentialPartLength = 4;
 
+    // The fixed starts of well-known token formats (GitHub, GitLab, Vault, Google, Octopus). Every token of the kind
+    // starts with them, so a reason that says "github" or "glpat" gives nothing away; only the rest is compared.
+    private static readonly string[] PublicTokenPrefixes =
+    [
+        "github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
+        "glpat-", "gldt-", "glptt-", "glrt-", "glcbt-", "gloas-",
+        "hvs.", "hvb.", "hvr.", "ya29.", "API-",
+    ];
+
     private static readonly string[] ErrorMessageFields = ["message", "ErrorMessage"];
 
     /// <summary>Checks that <paramref name="uri"/> is absolute and uses HTTPS, or plain HTTP only when allowed or on loopback.</summary>
@@ -82,11 +91,28 @@ internal static class JsonApi
         string service,
         Action<HttpResponseMessage>? onSuccess,
         CancellationToken cancellationToken) =>
-        GetAsync(client, uri, addHeaders, service, onSuccess, null, cancellationToken);
+        GetAsync(client, uri, addHeaders, service, onSuccess, (string?)null, cancellationToken);
 
     /// <summary>
     /// Like <see cref="GetAsync(HttpClient, Uri, Action{HttpRequestHeaders}, string, Action{HttpResponseMessage}, CancellationToken)"/>,
-    /// and leaves the server's reason out of an error when it repeats <paramref name="credential"/> or a part of it.
+    /// and leaves the server's reason out of an error when it repeats <paramref name="credential"/> or four of its
+    /// characters in a row, ignoring case. The fixed start of a well-known token format, such as <c>github_pat_</c>,
+    /// is not compared.
+    /// </summary>
+    public static Task<JsonDocument> GetAsync(
+        HttpClient client,
+        Uri uri,
+        Action<HttpRequestHeaders> addHeaders,
+        string service,
+        Action<HttpResponseMessage>? onSuccess,
+        string? credential,
+        CancellationToken cancellationToken) =>
+        GetAsync(client, uri, addHeaders, service, onSuccess, string.IsNullOrEmpty(credential) ? [] : [credential], cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="GetAsync(HttpClient, Uri, Action{HttpRequestHeaders}, string, Action{HttpResponseMessage}, string, CancellationToken)"/>,
+    /// for a credential that is sent in more than one form, such as a token and the base64 text of a Basic header made
+    /// from it: a reason that repeats any of them is left out.
     /// </summary>
     public static async Task<JsonDocument> GetAsync(
         HttpClient client,
@@ -94,7 +120,7 @@ internal static class JsonApi
         Action<HttpRequestHeaders> addHeaders,
         string service,
         Action<HttpResponseMessage>? onSuccess,
-        string? credential,
+        IReadOnlyCollection<string> credentials,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -110,7 +136,7 @@ internal static class JsonApi
             if (!response.IsSuccessStatusCode)
             {
                 var start = await ReadStartAsync(response.Content, MaxErrorBodyBytes, timeout.Token).ConfigureAwait(false);
-                throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, start, credential), null, response.StatusCode);
+                throw new HttpRequestException(DescribeFailure(response.StatusCode, uri, service, start, credentials), null, response.StatusCode);
             }
 
             var body = await ReadBodyAsync(response.Content, uri, service, timeout.Token).ConfigureAwait(false);
@@ -259,7 +285,7 @@ internal static class JsonApi
         }
     }
 
-    private static string DescribeFailure(HttpStatusCode status, Uri uri, string service, string body, string? credential)
+    private static string DescribeFailure(HttpStatusCode status, Uri uri, string service, string body, IReadOnlyCollection<string> credentials)
     {
         var message = $"{service} returned {(int)status} {status} for {uri.AbsolutePath}.";
         if ((int)status is >= 300 and < 400)
@@ -268,12 +294,15 @@ internal static class JsonApi
         }
 
         var detail = ReadErrorMessage(body);
-        return detail is null || (!string.IsNullOrEmpty(credential) && HoldsPartOf(detail, credential)) ? message : $"{message} {detail}";
+        return detail is null || credentials.Any(c => !string.IsNullOrEmpty(c) && HoldsPartOf(detail, c)) ? message : $"{message} {detail}";
     }
 
-    // Whether text repeats credential, or a run of CredentialPartLength of its characters, in any case.
+    // Whether text repeats credential, or a run of CredentialPartLength of its characters, in any case. A well-known
+    // public prefix is left out of what is compared, unless nothing would be left.
     private static bool HoldsPartOf(string text, string credential)
     {
+        var prefix = PublicTokenPrefixes.FirstOrDefault(p => credential.Length > p.Length && credential.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+        credential = prefix is null ? credential : credential[prefix.Length..];
         var length = Math.Min(CredentialPartLength, credential.Length);
         for (var i = 0; i + length <= credential.Length; i++)
         {

@@ -106,6 +106,9 @@ so the environment one wins.
   its permissions do not include "Variables".
 - The token is sent only in the `Authorization` header, only over HTTPS, and redirects are not followed. It never
   appears in a report or an exception message.
+- When GitHub refuses a request, the error gives the reason GitHub sends, cut short and without control characters,
+  and leaves it out when it repeats the token or four of its characters in a row. The fixed start every token of a
+  kind has, such as `github_pat_` or `ghp_`, does not count, so naming github.com does not hide a reason.
 - GitHub never returns secret values, so secrets show up by name only and are marked sensitive. The usual ConfigFerret
   redaction then hides the value of every layer in that chain. A layer that a workflow line or an explicit link ties
   to a secret is marked sensitive even when the secret was not loaded (a token without "Secrets: read",

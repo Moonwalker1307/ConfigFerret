@@ -193,6 +193,22 @@ public class JsonApiTests
         Assert.Equal("Example returned 401 Unauthorized for /v1/items.", ex.Message);
     }
 
+    [Theory]
+    [InlineData("Your token's lifetime is longer than your organization allows; see https://github.com/settings/tokens", true)]
+    [InlineData("token github_pat_11AB was revoked", false)]
+    [InlineData("token ending 9fkQ was revoked", false)]
+    public async Task Compares_only_the_secret_part_of_a_token_with_a_public_prefix(string reason, bool shown)
+    {
+        // Every fine-grained GitHub token starts with github_pat_, so a reason that says github gives nothing away.
+        const string token = "github_pat_11ABfake0credential9fkQ";
+        var handler = new FakeHttpHandler().Respond("/v1/items", System.Text.Json.JsonSerializer.Serialize(new { message = reason }), HttpStatusCode.Unauthorized);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => JsonApi.GetAsync(
+            handler.Client(), Api, h => h.Add("X-Test", "1"), "Example", null, token, TestContext.Current.CancellationToken));
+
+        Assert.Equal("Example returned 401 Unauthorized for /v1/items." + (shown ? " " + reason : string.Empty), ex.Message);
+    }
+
     [Fact]
     public async Task Reads_the_body_in_the_charset_the_server_names()
     {

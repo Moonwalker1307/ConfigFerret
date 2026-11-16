@@ -115,6 +115,9 @@ equally scoped values produce a warning.
   with read-only access is best.
 - The key is sent only in the `X-Octopus-ApiKey` header, only over HTTPS (plain HTTP only to localhost or with
   `AllowUnencryptedHttp`), and redirects are not followed. It never appears in a report or an exception message.
+- When Octopus refuses a request, the error gives the reason Octopus sends, cut short and without control characters,
+  and leaves it out when it repeats the API key or four of its characters in a row; the `API-` every key starts
+  with does not count.
 - Octopus never returns sensitive values, so sensitive variables show up by name only and are marked sensitive. The
   usual ConfigFerret redaction then hides the value of every layer in that chain, and values of keys that look secret
   are hidden even when Octopus does not mark them sensitive. When the scope does not settle which value applies (two

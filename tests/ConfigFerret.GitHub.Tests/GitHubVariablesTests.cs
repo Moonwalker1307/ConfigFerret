@@ -272,6 +272,21 @@ public class GitHubVariablesTests
         Assert.Equal(3000, github.Entries.Count);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_out_a_reason_that_repeats_the_token(bool fourCharacters)
+    {
+        // A proxy or server that echoes the request's headers back must not put the token into the message.
+        var echoed = fourCharacters ? Token[^4..] : Token;
+        var handler = new FakeHttpHandler().Respond($"{Repo}/actions/variables?per_page=30&page=1", $$"""{"message":"Bad credentials: {{echoed}}"}""", HttpStatusCode.Unauthorized);
+        using var client = handler.Client();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => GitHubVariables.LoadAsync(RepositoryOnly(), client, TestContext.Current.CancellationToken));
+
+        Assert.Equal("GitHub returned 401 Unauthorized for /repos/contoso/api/actions/variables.", ex.Message);
+    }
+
     [Fact]
     public async Task Names_the_scope_and_kind_of_entries_it_could_not_read()
     {

@@ -248,6 +248,20 @@ public class VaultSecretsTests
         Assert.Contains(vault.Warnings, w => w.Contains(warning, StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Leaves_out_a_reason_that_repeats_the_token(bool fourCharacters)
+    {
+        // A proxy or server that echoes the request's headers back must not put the token into the message.
+        var echoed = fourCharacters ? Token[^4..] : Token;
+        var handler = V2().Respond("/v1/secret/metadata/orders/Db/?list=true", $$"""{"errors":["permission denied for token {{echoed}}"]}""", HttpStatusCode.Forbidden);
+
+        var vault = await Load(handler, o => o.Paths.Add("orders"));
+
+        Assert.Equal("Skipped listing orders/Db/ in HashiCorp Vault: HashiCorp Vault returned 403 Forbidden for /v1/secret/metadata/orders/Db/.", Assert.Single(vault.Warnings));
+    }
+
     [Fact]
     public async Task Skips_a_folder_the_token_cannot_list_with_a_warning()
     {

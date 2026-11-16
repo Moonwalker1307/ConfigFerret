@@ -132,7 +132,7 @@ public sealed class ConsulKeyValues
                 {
                     headers.Add("X-Consul-Token", options.Token);
                 }
-            }, "Consul", cancellationToken).ConfigureAwait(false);
+            }, "Consul", null, options.Token, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
