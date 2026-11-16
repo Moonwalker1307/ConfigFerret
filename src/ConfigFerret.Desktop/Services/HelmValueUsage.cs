@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Globalization;
+using System.IO.Enumeration;
 using System.Text;
 using System.Text.RegularExpressions;
 using ConfigFerret.Internal;
@@ -22,11 +23,11 @@ public sealed record DeadHelmValue(string Path, string File);
 /// that isn't there, the scan can't know what it reads, and no value is dead.
 /// </summary>
 /// <remarks>
-/// The chart comes from a repository someone else wrote. Links are not followed, at most 2 MB of each file is read, and
-/// at most 2,000 files each of the chart's templates, its subcharts' templates and the chart files tpl renders. Every
-/// pattern takes time linear in the text it reads, and a values file gives at most 100,000 values with paths of at most
-/// 256 characters. A pattern that still times out gives no dead values at all,
-/// because the scan no longer knows what is read.
+/// The chart comes from a repository someone else wrote. Links are not followed, at most 2 MB of each file and at most
+/// 2,000 files and 32 MB in all are read, every pattern takes time linear in the text it reads, and a values file gives
+/// at most 100,000 values with paths of at most 256 characters. When part of the chart is not read, because of a link,
+/// a limit or a folder that can't be listed, or a pattern still times out, there are no dead values at all, because the
+/// scan no longer knows what is read.
 /// </remarks>
 public static partial class HelmValueUsage
 {
@@ -34,12 +35,12 @@ public static partial class HelmValueUsage
     private const int MaxPathLength = 256;
     private const int MaxLeaves = 100_000;
     private const int MaxFiles = 2000;
+    private const long MaxScanBytes = 32 * 1024 * 1024;
     private const int MaxChartDepth = 8;
     private const int MatchTimeoutMilliseconds = 5000;
 
-    // Links are skipped: one out of the chart reads other files.
-    private static readonly EnumerationOptions AllFiles = new() { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-    private static readonly EnumerationOptions TopFiles = new() { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
+    // Every entry, so that a folder that can't be listed or a link is seen rather than left out.
+    private static readonly EnumerationOptions Entries = new() { IgnoreInaccessible = false, AttributesToSkip = 0 };
 
     /// <summary>The values in the chart's values.yaml and <paramref name="valuesFiles"/> that no template reads.</summary>
     public static IReadOnlyList<DeadHelmValue> FindDead(string chartFolder, IEnumerable<string> valuesFiles) => FindDead(chartFolder, valuesFiles, string.Empty, out _);
@@ -55,47 +56,53 @@ public static partial class HelmValueUsage
         ArgumentNullException.ThrowIfNull(valuesFiles);
         notes = [];
         var templates = Path.Combine(chartFolder, "templates");
-        if (!Directory.Exists(templates) || IsLink(templates))
+        if (!Directory.Exists(templates))
         {
             return [];
         }
 
-        var texts = ReadAll(Directory.EnumerateFiles(templates, "*", AllFiles));
-
-        // The texts of template files, the chart's own and its subcharts'. A note quotes only a name found in one of
-        // them, never one from a values file or another text that tpl renders.
-        var templateTexts = new HashSet<string>(texts, ReferenceEqualityComparer.Instance);
-
-        var files = new List<string>();
-        var defaults = Path.Combine(chartFolder, "values.yaml");
-        if (File.Exists(defaults))
-        {
-            files.Add(defaults);
-        }
-
-        files.AddRange(valuesFiles.Where(File.Exists));
-        var values = new List<(string Path, string File)>();
-        var valuesTexts = new List<string>();
-        foreach (var file in files.Distinct(StringComparer.Ordinal))
-        {
-            try
-            {
-                var text = ReadSmall(file) ?? string.Empty;
-                valuesTexts.Add(text);
-                foreach (var path in Leaves(text))
-                {
-                    values.Add((path, Display(chartFolder, file)));
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or YamlException)
-            {
-            }
-        }
-
         var chart = Printable(string.IsNullOrWhiteSpace(source) ? "Helm chart " + Path.GetFileName(Path.TrimEndingDirectorySeparator(chartFolder)) : source);
+        var budget = new Budget();
         try
         {
-            if (Subcharts(chartFolder) is not { } subcharts)
+            if (IsLink(templates))
+            {
+                throw new PartlyReadException("templates/ is a link");
+            }
+
+            var texts = ReadAll(Files(templates), chartFolder, budget);
+
+            // The texts of template files, the chart's own and its subcharts'. A note quotes only a name found in one
+            // of them, never one from a values file or another text that tpl renders.
+            var templateTexts = new HashSet<string>(texts, ReferenceEqualityComparer.Instance);
+
+            var files = new List<string>();
+            var defaults = Path.Combine(chartFolder, "values.yaml");
+            if (File.Exists(defaults))
+            {
+                files.Add(defaults);
+            }
+
+            files.AddRange(valuesFiles.Where(File.Exists));
+            var values = new List<(string Path, string File)>();
+            var valuesTexts = new List<string>();
+            foreach (var file in files.Distinct(StringComparer.Ordinal))
+            {
+                var text = Read(file, chartFolder, budget);
+                valuesTexts.Add(text);
+                try
+                {
+                    foreach (var path in Leaves(text))
+                    {
+                        values.Add((path, Display(chartFolder, file)));
+                    }
+                }
+                catch (YamlException)
+                {
+                }
+            }
+
+            if (Subcharts(chartFolder, budget) is not { } subcharts)
             {
                 notes = [$"The dependencies of {chart} in Chart.yaml, requirements.yaml or charts/ can't be read, so no Helm value is marked dead: without them a subchart's values can't be told from the chart's own."];
                 return [];
@@ -116,7 +123,7 @@ public static partial class HelmValueUsage
                 if (tpl && !chartFiles && texts.Any(t => t.Contains(".Files.", StringComparison.Ordinal)))
                 {
                     chartFiles = true;
-                    texts.AddRange(ReadAll(OtherChartFiles(chartFolder)));
+                    texts.AddRange(ReadAll(OtherChartFiles(chartFolder), chartFolder, budget));
                 }
             }
 
@@ -126,7 +133,7 @@ public static partial class HelmValueUsage
             // includes it. Read the dependencies' templates only when the chart includes one of theirs.
             if (Undefined(texts, templateTexts) is not null)
             {
-                var subchartTemplates = ReadAll(SubchartTemplates(chartFolder, 0));
+                var subchartTemplates = ReadAll(SubchartTemplates(chartFolder, 0), chartFolder, budget);
                 templateTexts.UnionWith(subchartTemplates);
                 texts.AddRange(subchartTemplates);
                 AddWhatTplRenders();
@@ -142,11 +149,27 @@ public static partial class HelmValueUsage
 
             return Dead(References(texts), values, subcharts);
         }
+        catch (PartlyReadException ex)
+        {
+            notes = [$"{chart} wasn't read in full: {Printable(ex.Message)}. So no Helm value is marked dead, as the part not read may read any of them."];
+            return [];
+        }
         catch (RegexMatchTimeoutException)
         {
             notes = [$"Reading {chart} for the values its templates read took too long, so no Helm value is marked dead."];
             return [];
         }
+    }
+
+    // Thrown when part of the chart can't be read, so the scan can't know what the templates read.
+    private sealed class PartlyReadException(string reason) : Exception(reason);
+
+    // What the scan has read so far, to keep the whole scan within MaxFiles files and MaxScanBytes bytes.
+    private sealed class Budget
+    {
+        public int Files { get; set; }
+
+        public long Bytes { get; set; }
     }
 
     // A name for a note without control or format characters, which could hide or reorder the text around it.
@@ -303,8 +326,9 @@ public static partial class HelmValueUsage
     }
 
     // The names of the chart's subcharts, from charts/ and the dependencies in Chart.yaml or requirements.yaml (apiVersion
-    // v1). Null when one of them is a link, can't be read, is too big or isn't YAML, or a pattern timed out.
-    private static List<string>? Subcharts(string chartFolder)
+    // v1). Null when charts/ is a link or can't be listed, a dependency list isn't YAML, or a pattern timed out. Chart.yaml
+    // and requirements.yaml are read with Read, so they count toward the budget and throw PartlyReadException as it does.
+    private static List<string>? Subcharts(string chartFolder, Budget budget)
     {
         var names = new List<string>();
         try
@@ -324,12 +348,7 @@ public static partial class HelmValueUsage
             {
                 if (File.Exists(chartFile))
                 {
-                    if (ReadSmall(chartFile) is not { } text)
-                    {
-                        return null;
-                    }
-
-                    if (DependencyNames(text) is not { } dependencies)
+                    if (DependencyNames(Read(chartFile, chartFolder, budget)) is not { } dependencies)
                     {
                         return null;
                     }
@@ -379,7 +398,18 @@ public static partial class HelmValueUsage
         return names;
     }
 
-    private static bool IsLink(string folder) => new DirectoryInfo(folder).LinkTarget is not null;
+    // Whether the folder is a link. When that can't be told, it is taken for one.
+    private static bool IsLink(string folder)
+    {
+        try
+        {
+            return new DirectoryInfo(folder).LinkTarget is not null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
 
     // The first template the texts include that none of them defines, for a note: its name in quotes when a template
     // file includes it, else words for it; Missing is false when its name is worked out at render time. Null when the
@@ -407,56 +437,126 @@ public static partial class HelmValueUsage
     }
 
     // The files in the templates folders of the charts under charts/, and of the charts under theirs, at most
-    // MaxChartDepth deep. Only those folders are walked; links are not followed.
+    // MaxChartDepth deep. Only those folders are walked; a link among them is given back for Read to refuse.
     private static IEnumerable<string> SubchartTemplates(string chartFolder, int depth)
     {
         var charts = Path.Combine(chartFolder, "charts");
-        if (depth >= MaxChartDepth || !Directory.Exists(charts) || IsLink(charts))
+        if (!Directory.Exists(charts))
         {
             return [];
         }
 
-        return Directory.EnumerateDirectories(charts, "*", TopFiles).SelectMany(chart =>
+        if (IsLink(charts))
         {
+            return [charts];
+        }
+
+        if (depth >= MaxChartDepth)
+        {
+            throw new PartlyReadException($"its charts are nested more than {MaxChartDepth} deep");
+        }
+
+        return Directory.EnumerateDirectories(charts, "*", Entries).SelectMany(chart =>
+        {
+            if (IsLink(chart))
+            {
+                return [chart];
+            }
+
             var templates = Path.Combine(chart, "templates");
-            var own = Directory.Exists(templates) && !IsLink(templates) ? Directory.EnumerateFiles(templates, "*", AllFiles) : [];
+            IEnumerable<string> own = !Directory.Exists(templates) ? [] : IsLink(templates) ? [templates] : Files(templates);
             return own.Concat(SubchartTemplates(chart, depth + 1));
         });
     }
 
     // The chart's files outside templates/, charts/ and .git, which a template can read with .Files.
-    private static IEnumerable<string> OtherChartFiles(string chartFolder) =>
-        Directory.EnumerateFiles(chartFolder, "*", TopFiles).Concat(
-            Directory.EnumerateDirectories(chartFolder, "*", TopFiles)
-                .Where(d => Path.GetFileName(d) is not "templates" and not "charts" and not ".git")
-                .SelectMany(d => Directory.EnumerateFiles(d, "*", AllFiles)));
+    private static FileSystemEnumerable<string> OtherChartFiles(string chartFolder) =>
+        Files(chartFolder, name => name is "templates" or "charts" or ".git");
 
-    // The texts of the first MaxFiles files, leaving out those bigger than MaxFileBytes or that can't be read.
-    private static List<string> ReadAll(IEnumerable<string> files)
+    // The files under a folder, and the links in it, which Read refuses: links are not followed. A folder directly in it
+    // that skip names is left out.
+    private static FileSystemEnumerable<string> Files(string folder, Func<string, bool>? skip = null) =>
+        new FileSystemEnumerable<string>(folder, (ref FileSystemEntry entry) => entry.ToFullPath(), new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = 0 })
+        {
+            ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory || (IsLinkEntry(ref entry) && !Skipped(ref entry, skip)),
+            ShouldRecursePredicate = (ref FileSystemEntry entry) => !IsLinkEntry(ref entry) && !Skipped(ref entry, skip),
+        };
+
+    // A link has a reparse point, but so may a folder that isn't one, such as a cloud-file folder on Windows: only an
+    // entry with a link target is a link. When the target can't be read, the entry is taken for a link.
+    private static bool IsLinkEntry(ref FileSystemEntry entry)
+    {
+        if ((entry.Attributes & FileAttributes.ReparsePoint) == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            return entry.ToFileSystemInfo().LinkTarget is not null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    private static bool Skipped(ref FileSystemEntry entry, Func<string, bool>? skip) =>
+        skip is not null && entry.Directory.SequenceEqual(entry.RootDirectory) && skip(entry.FileName.ToString());
+
+    // The texts of the files. Throws PartlyReadException when a folder can't be listed or Read refuses a file.
+    private static List<string> ReadAll(IEnumerable<string> files, string chartFolder, Budget budget)
     {
         var texts = new List<string>();
-        foreach (var file in files.Take(MaxFiles))
+        try
         {
-            try
+            foreach (var file in files)
             {
-                if (ReadSmall(file) is { } text)
-                {
-                    texts.Add(text);
-                }
+                texts.Add(Read(file, chartFolder, budget));
             }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new PartlyReadException("a folder of it can't be listed");
         }
 
         return texts;
     }
 
+    // The text of a file of the chart. Throws PartlyReadException when it is a link, is bigger than MaxFileBytes or
+    // can't be read, or when the scan would read more than MaxFiles files or MaxScanBytes bytes.
+    private static string Read(string file, string chartFolder, Budget budget)
+    {
+        if (++budget.Files > MaxFiles)
+        {
+            throw new PartlyReadException(string.Create(CultureInfo.InvariantCulture, $"it holds more than {MaxFiles:N0} files to read"));
+        }
+
+        try
+        {
+            var info = new FileInfo(file);
+            if (info.LinkTarget is not null)
+            {
+                throw new PartlyReadException($"{Display(chartFolder, file)} is a link");
+            }
+
+            budget.Bytes += info.Length;
+            if (budget.Bytes > MaxScanBytes)
+            {
+                throw new PartlyReadException($"it holds more than {MaxScanBytes / 1024 / 1024} MB to read");
+            }
+
+            return ReadSmall(file) ?? throw new PartlyReadException($"{Display(chartFolder, file)} is bigger than 2 MB");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new PartlyReadException($"{Display(chartFolder, file)} can't be read");
+        }
+    }
+
     // The text of a file, or null when it is a link or holds more than MaxFileBytes. At most MaxFileBytes + 1 bytes are
     // read whatever length the file gives: an empty one is not opened, as a device or a pipe says 0 and may never end.
+    // The buffer fits the length the file gives and grows only when the file holds more.
     private static string? ReadSmall(string file)
     {
         var info = new FileInfo(file);
@@ -470,18 +570,34 @@ public static partial class HelmValueUsage
             return string.Empty;
         }
 
-        var buffer = ArrayPool<byte>.Shared.Rent(MaxFileBytes + 1);
+        var buffer = ArrayPool<byte>.Shared.Rent((int)info.Length + 1);
         try
         {
-            int count;
+            var count = 0;
             using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1))
             {
-                count = stream.ReadAtLeast(buffer.AsSpan(0, MaxFileBytes + 1), MaxFileBytes + 1, throwOnEndOfStream: false);
-            }
+                while (true)
+                {
+                    var read = stream.Read(buffer.AsSpan(count, Math.Min(buffer.Length, MaxFileBytes + 1) - count));
+                    if (read == 0)
+                    {
+                        break;
+                    }
 
-            if (count > MaxFileBytes)
-            {
-                return null;
+                    count += read;
+                    if (count > MaxFileBytes)
+                    {
+                        return null;
+                    }
+
+                    if (count == buffer.Length)
+                    {
+                        var bigger = ArrayPool<byte>.Shared.Rent((int)Math.Min(2L * buffer.Length, MaxFileBytes + 1));
+                        buffer.AsSpan(0, count).CopyTo(bigger);
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        buffer = bigger;
+                    }
+                }
             }
 
             using var reader = new StreamReader(new MemoryStream(buffer, 0, count), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);

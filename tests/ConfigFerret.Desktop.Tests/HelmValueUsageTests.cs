@@ -86,15 +86,30 @@ public class HelmValueUsageTests
     }
 
     [Fact]
-    public void Reads_a_template_of_exactly_two_megabytes_and_skips_a_bigger_one()
+    public void Reads_a_template_of_exactly_two_megabytes_and_gives_no_dead_values_with_a_bigger_one()
     {
         using var temp = new TempFolder();
-        temp.Write("values.yaml", "a: 1\nb: 2\n");
+        temp.Write("values.yaml", "a: 1\nb: 2\nc: 3\n");
         const string Exact = "{{ .Values.a }}";
         temp.Write("templates/exact.yaml", Exact + new string(' ', 2 * 1024 * 1024 - Exact.Length));
-        temp.Write("templates/over.yaml", "{{ .Values.b }}" + new string(' ', 2 * 1024 * 1024));
+        Assert.Equal(["b", "c"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
 
-        Assert.Equal(["b"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+        temp.Write("templates/over.yaml", "{{ .Values.b }}" + new string(' ', 2 * 1024 * 1024));
+        Assert.Equal("templates/over.yaml is bigger than 2 MB", PartlyRead(temp));
+    }
+
+    // Why the chart wasn't read in full, from the note of a scan that must give no dead values.
+    private static string PartlyRead(TempFolder temp, params string[] valuesFiles)
+    {
+        var dead = HelmValueUsage.FindDead(temp.Path, valuesFiles.Select(temp.Full), "Helm chart app", out var notes);
+
+        Assert.Empty(dead);
+        var note = Assert.Single(notes);
+        const string Start = "Helm chart app wasn't read in full: ";
+        const string End = ". So no Helm value is marked dead, as the part not read may read any of them.";
+        Assert.StartsWith(Start, note, StringComparison.Ordinal);
+        Assert.EndsWith(End, note, StringComparison.Ordinal);
+        return note[Start.Length..^End.Length];
     }
 
     [Fact]
@@ -111,8 +126,108 @@ public class HelmValueUsageTests
         temp.Write("values.yaml", "a: 1\n");
         temp.Write("templates/own.yaml", "kind: ConfigMap");
         Directory.CreateSymbolicLink(temp.Full("templates/link"), outside.Path);
+        File.CreateSymbolicLink(temp.Full("templates/file.yaml"), outside.Full("linked.yaml"));
+
+        Assert.Matches("^templates/(link|file.yaml) is a link$", PartlyRead(temp));
+    }
+
+    [Fact]
+    public void A_chart_with_more_than_2000_files_to_read_has_no_dead_values()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        // values.yaml is one of them.
+        for (var i = 0; i < 1_999; i++)
+        {
+            temp.Write($"templates/t{i}.yaml", "kind: ConfigMap");
+        }
 
         Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+        temp.Write("templates/t1999.yaml", "kind: ConfigMap");
+        Assert.Equal("it holds more than 2,000 files to read", PartlyRead(temp));
+    }
+
+    [Fact]
+    public void A_chart_with_more_than_32_megabytes_to_read_has_no_dead_values()
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        for (var i = 0; i < 17; i++)
+        {
+            temp.Write($"templates/t{i}.yaml", "kind: ConfigMap\n#" + new string('x', 2_000_000));
+        }
+
+        Assert.Equal("it holds more than 32 MB to read", PartlyRead(temp));
+    }
+
+    [Theory]
+    [InlineData("Chart.yaml")]
+    [InlineData("requirements.yaml")]
+    public void Chart_yaml_and_requirements_yaml_count_toward_the_32_megabytes(string chartFile)
+    {
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        for (var i = 0; i < 16; i++)
+        {
+            temp.Write($"templates/t{i}.yaml", "kind: ConfigMap\n#" + new string('x', 2_000_000));
+        }
+
+        temp.Write(chartFile, "apiVersion: v2\n");
+        Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, []).Select(d => d.Path));
+
+        temp.Write(chartFile, "apiVersion: v2\n#" + new string('x', 1_600_000));
+        Assert.Equal("it holds more than 32 MB to read", PartlyRead(temp));
+    }
+
+    [Fact]
+    public void A_folder_that_can_t_be_listed_gives_no_dead_values()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        temp.Write("templates/hidden/cm.yaml", "{{ .Values.a }}");
+        File.SetUnixFileMode(temp.Full("templates/hidden"), UnixFileMode.None);
+        try
+        {
+            // Root can list it anyway.
+            try
+            {
+                _ = Directory.GetFiles(temp.Full("templates/hidden"));
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            Assert.Equal("a folder of it can't be listed", PartlyRead(temp));
+        }
+        finally
+        {
+            File.SetUnixFileMode(temp.Full("templates/hidden"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
+    public void A_link_among_the_templates_of_a_subchart_gives_no_dead_values()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var outside = new TempFolder();
+        outside.Write("_lib.tpl", "{{- define \"lib.x\" -}}{{ .Values.a }}{{- end }}");
+        using var temp = new TempFolder();
+        temp.Write("values.yaml", "a: 1\n");
+        temp.Write("templates/cm.yaml", "{{ include \"lib.x\" . }}");
+        temp.Write("charts/lib/Chart.yaml", "apiVersion: v2\nname: lib\n");
+        Directory.CreateSymbolicLink(temp.Full("charts/lib/templates"), outside.Path);
+
+        Assert.Equal("charts/lib/templates is a link", PartlyRead(temp));
     }
 
     [Fact]
@@ -212,14 +327,15 @@ public class HelmValueUsageTests
     }
 
     [Fact]
-    public void Skips_a_values_file_over_two_megabytes()
+    public void A_values_file_over_two_megabytes_gives_no_dead_values()
     {
+        // tpl may render a string of it that reads another value.
         using var temp = new TempFolder();
         temp.Write("values.yaml", "a: 1\n");
         temp.Write("templates/cm.yaml", "kind: ConfigMap");
         temp.Write("values-big.yaml", "b: 1\n#" + new string('x', 2 * 1024 * 1024));
 
-        Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, [temp.Full("values-big.yaml")]).Select(d => d.Path));
+        Assert.Equal("values-big.yaml is bigger than 2 MB", PartlyRead(temp, "values-big.yaml"));
     }
 
     [Fact]
@@ -287,7 +403,10 @@ public class HelmValueUsageTests
         File.CreateSymbolicLink(temp.Full("values.yaml"), outside.Full("values.yaml"));
         File.CreateSymbolicLink(temp.Full("values-eu.yaml"), outside.Full("values.yaml"));
 
-        Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, [temp.Full("values-prod.yaml"), temp.Full("values-eu.yaml")]).Select(d => d.Path));
+        Assert.Equal("values.yaml is a link", PartlyRead(temp, "values-prod.yaml", "values-eu.yaml"));
+        File.Delete(temp.Full("values.yaml"));
+        Assert.Equal("values-eu.yaml is a link", PartlyRead(temp, "values-prod.yaml", "values-eu.yaml"));
+        Assert.Equal(["a"], HelmValueUsage.FindDead(temp.Path, [temp.Full("values-prod.yaml")]).Select(d => d.Path));
 
         // Without the dependencies a subchart's values can't be told from the chart's own.
         File.CreateSymbolicLink(temp.Full("Chart.yaml"), outside.Full("Chart.yaml"));
@@ -512,6 +631,7 @@ public class HelmValueUsageTests
     [InlineData("worked out")]
     [InlineData("big Chart.yaml")]
     [InlineData("undefined in a value")]
+    [InlineData("dependencies not a list")]
     public void Says_why_a_chart_has_no_dead_values(string reason)
     {
         using var temp = new TempFolder();
@@ -532,6 +652,11 @@ public class HelmValueUsageTests
             temp.Write("Chart.yaml", "apiVersion: v2\n#" + new string('x', 2 * 1024 * 1024));
         }
 
+        if (reason == "dependencies not a list")
+        {
+            temp.Write("Chart.yaml", "apiVersion: v2\ndependencies: redis\n");
+        }
+
         // Control and format characters in a name could hide or reorder the text of the note.
         var dead = HelmValueUsage.FindDead(temp.Path, [], "Helm chart deploy/\u2066app\u001b[0m", out var notes);
 
@@ -543,6 +668,7 @@ public class HelmValueUsageTests
                 "undefined" => "The templates of Helm chart deploy/app[0m include \"base.deployment\", which isn't in the chart, so no Helm value is marked dead: that template may read any of them. Put the dependency that defines it under charts/, unpacked, to check them.",
                 "worked out" => "The templates of Helm chart deploy/app[0m include a template whose name is worked out when the chart is rendered, so no Helm value is marked dead: that template may read any of them.",
                 "undefined in a value" => "The templates of Helm chart deploy/app[0m include a template that isn't in the chart, so no Helm value is marked dead: that template may read any of them. Put the dependency that defines it under charts/, unpacked, to check them.",
+                "big Chart.yaml" => "Helm chart deploy/app[0m wasn't read in full: Chart.yaml is bigger than 2 MB. So no Helm value is marked dead, as the part not read may read any of them.",
                 _ => "The dependencies of Helm chart deploy/app[0m in Chart.yaml, requirements.yaml or charts/ can't be read, so no Helm value is marked dead: without them a subchart's values can't be told from the chart's own.",
             },
             note);
