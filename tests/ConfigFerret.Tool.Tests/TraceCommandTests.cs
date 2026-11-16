@@ -128,6 +128,8 @@ public class TraceCommandTests
     [Theory]
     [InlineData("=fake-hunter2")]
     [InlineData("fake-hunter2")]
+    [InlineData(" =fake-hunter2")]
+    [InlineData("\t =fake-hunter2")]
     public async Task Leaves_the_argument_out_of_the_error_for_an_env_without_a_name(string pair)
     {
         var result = await new ToolRunner().RunAsync([.. HelmRelease("Db:Host"), "--env", "Db__Host=x", "--env", pair]);
