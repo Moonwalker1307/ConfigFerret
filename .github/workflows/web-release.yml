@@ -142,6 +142,25 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
 
+      # The image build is not reproducible (the base images float and the tools are downloaded again), so pushing a
+      # version a second time would give its tag a different image. This stops a re-run, a manual run or a re-pushed tag
+      # before it pushes anything.
+      - name: Stop if this version is already pushed or released
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::$TAG is already released, so $IMAGE:$VERSION is not pushed again. To release a change, push a new version tag."
+            exit 1
+          fi
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" > /dev/null 2>&1; then
+            echo "::error::$IMAGE:$VERSION is already pushed but $TAG has no GitHub release, so an earlier run stopped half way. It is not pushed again. If the run that pushed it built this commit ($GITHUB_SHA), create the GitHub release for $TAG by hand, not marked as latest; otherwise push a new version tag."
+            exit 1
+          fi
+
       # The Dockerfile cross-compiles in its build stages and only copies files into the final one, so both platforms
       # build on this runner without emulation.
       - name: Build and push linux/amd64 and linux/arm64
