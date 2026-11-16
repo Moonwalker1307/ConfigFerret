@@ -209,7 +209,9 @@ public sealed partial class OctopusVariables
                 continue;
             }
 
-            var lookup = names.GetValueOrDefault(dimension.Name);
+            // Octopus names a tenant tag by its canonical name, tag set/tag, as its id, and by the tag alone as its name,
+            // which is ambiguous across tag sets; keep the canonical name, which a tag name still matches.
+            var lookup = string.Equals(dimension.Name, "TenantTag", StringComparison.OrdinalIgnoreCase) ? null : names.GetValueOrDefault(dimension.Name);
             var values = dimension.Value.EnumerateArray()
                 .Select(AsString)
                 .Where(id => !string.IsNullOrEmpty(id))

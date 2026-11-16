@@ -9,7 +9,8 @@ namespace ConfigFerret.Octopus;
 /// <param name="IsProjectVariable">True for a project variable, false for a library variable set variable.</param>
 /// <param name="Scope">
 /// The scope, by Octopus scope name (<c>Environment</c>, <c>Machine</c>, <c>Role</c>, <c>Action</c>, <c>Channel</c>,
-/// <c>TenantTag</c>, <c>ProcessOwner</c>), as display names. Empty when the variable is unscoped.
+/// <c>TenantTag</c>, <c>ProcessOwner</c>), as display names, except tenant tags, which are canonical names such as
+/// <c>Region/West</c>. Empty when the variable is unscoped.
 /// </param>
 public sealed record OctopusVariable(
     string Name,
