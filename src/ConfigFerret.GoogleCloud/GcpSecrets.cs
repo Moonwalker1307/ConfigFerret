@@ -157,6 +157,31 @@ public sealed class GcpSecrets
     // Secret Manager's own rule for a secret id: 1 to 255 letters, digits, underscores and hyphens.
     private static bool IsSecretId(string id) => id.Length is > 0 and <= 255 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
 
+    // A project is a project number (digits) or a project id: 6 to 30 lower-case letters, digits and hyphens, starting with a letter,
+    // with no trailing hyphen. The old form with a domain (example.com:my-project) puts a domain name before a colon.
+    private static bool IsProject(string project)
+    {
+        if (project.Length is > 0 and <= 19 && project.All(char.IsAsciiDigit))
+        {
+            return true;
+        }
+
+        var colon = project.IndexOf(':', StringComparison.Ordinal);
+        return colon < 0
+            ? IsProjectId(project, 6)
+            : colon is > 0 and <= 253
+                && project[..colon].All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.')
+                && project[0] != '.' && project[colon - 1] != '.'
+                && IsProjectId(project[(colon + 1)..], 1);
+    }
+
+    private static bool IsProjectId(string id, int minimumLength) =>
+        id.Length >= minimumLength && id.Length <= 30 && char.IsAsciiLetterLower(id[0]) && id[^1] != '-'
+        && id.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-');
+
+    // A location can go into a host name, and has no blanks around it.
+    private static bool IsLocation(string location) => GcpSecretManagerOptions.IsValidLocation(location) && location.Trim().Length == location.Length;
+
     // A version id is a number: digits only, and at most 19 of them, the length of the largest long.
     private static bool IsVersionId(string id) => id.Length is > 0 and <= 19 && id.All(char.IsAsciiDigit);
 
@@ -212,7 +237,7 @@ public sealed class GcpSecrets
                 if (refused > 0)
                 {
                     // Never print what a refused id was called: it came from the server.
-                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Left out {refused} Google Cloud secret(s) whose id is not a valid Secret Manager secret id."));
+                    warnings.Add(string.Create(CultureInfo.InvariantCulture, $"Left out {refused} Google Cloud secret(s) whose project, location or id is not valid for Secret Manager."));
                 }
 
                 pageToken = JsonRead.String(JsonRead.Property(root, "nextPageToken"));
@@ -353,7 +378,7 @@ public sealed class GcpSecrets
                 return null;
             }
 
-            if (!IsSecretId(secret.Id))
+            if (!IsSecretId(secret.Id) || !IsProject(secret.Project) || (secret.Location is { } location && !IsLocation(location)))
             {
                 refused++;
                 return null;

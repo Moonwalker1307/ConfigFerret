@@ -393,7 +393,75 @@ public class GcpSecretsTests
         var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{{Secret(id)}},{{Secret("Ok_1-b")}}]}"""));
 
         Assert.Equal(["Ok_1-b"], gcp.Secrets.Select(s => s.Id));
-        Assert.Equal("Left out 1 Google Cloud secret(s) whose id is not a valid Secret Manager secret id.", Assert.Single(gcp.Warnings));
+        Assert.Equal("Left out 1 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.", Assert.Single(gcp.Warnings));
+    }
+
+    [Theory]
+    [InlineData("123")]
+    [InlineData("contoso-prod")]
+    [InlineData("example.com:my-project")]
+    [InlineData("example.com:abc")]
+    [InlineData("a-b-c-d-e-f-g-h-i-j-k-l-m-n")]
+    public async Task Keeps_a_secret_of_a_project_number_or_project_id(string project)
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{"name":"projects/{{project}}/secrets/A"},{"name":"projects/{{project}}/locations/europe-west1/secrets/B"}]}"""));
+
+        Assert.Equal(["A", "B"], gcp.Secrets.Select(s => s.Id));
+        Assert.All(gcp.Secrets, s => Assert.Equal(project, s.Project));
+        Assert.Empty(gcp.Warnings);
+    }
+
+    [Theory]
+    [InlineData("bad\\nproject")]
+    [InlineData("bad\\u0007project")]
+    [InlineData("Contoso-Prod")]
+    [InlineData("1abcdef-")]
+    [InlineData("5abcdef")]
+    [InlineData("abc")]
+    [InlineData("12345678901234567890")]
+    [InlineData("example.com:")]
+    [InlineData(":my-project")]
+    [InlineData("a:b:my-project")]
+    [InlineData("exa mple.com:my-project")]
+    public async Task Leaves_out_a_secret_of_a_project_that_is_neither_a_number_nor_a_project_id(string project)
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{"name":"projects/{{project}}/secrets/A"},{{Secret("Ok")}}]}"""));
+
+        Assert.Equal(["Ok"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal("Left out 1 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.", Assert.Single(gcp.Warnings));
+    }
+
+    [Fact]
+    public async Task Leaves_out_a_secret_of_a_project_that_is_too_long()
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{"name":"projects/{{new string('p', 10000)}}/secrets/A"},{"name":"projects/{{new string('d', 300)}}.com:my-project/secrets/B"},{{Secret("Ok")}}]}"""));
+
+        Assert.Equal(["Ok"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal("Left out 2 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.", Assert.Single(gcp.Warnings));
+    }
+
+    [Theory]
+    [InlineData("bad\\nlocation")]
+    [InlineData("bad\\u0007location")]
+    [InlineData("Europe-West1")]
+    [InlineData("europe_west1")]
+    [InlineData("%20")]
+    [InlineData("a.b")]
+    public async Task Leaves_out_a_secret_of_a_location_that_cannot_be_one(string location)
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{"name":"projects/123/locations/{{location}}/secrets/A"},{{Secret("Ok")}}]}"""));
+
+        Assert.Equal(["Ok"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal("Left out 1 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.", Assert.Single(gcp.Warnings));
+    }
+
+    [Fact]
+    public async Task Leaves_out_a_secret_of_a_location_that_is_too_long_or_blank()
+    {
+        var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{"name":"projects/123/locations/{{new string('l', 10000)}}/secrets/A"},{"name":"projects/123/locations/ /secrets/B"},{{Secret("Ok")}}]}"""));
+
+        Assert.Equal(["Ok"], gcp.Secrets.Select(s => s.Id));
+        Assert.Equal("Left out 2 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.", Assert.Single(gcp.Warnings));
     }
 
     [Fact]
@@ -402,7 +470,7 @@ public class GcpSecretsTests
         var gcp = await Load(new FakeHttpHandler().Respond(List, $$"""{"secrets":[{{Secret(new string('a', 10000))}},{{Secret(new string('b', 256))}},{{Secret(new string('c', 255))}}]}"""));
 
         Assert.Equal([new string('c', 255)], gcp.Secrets.Select(s => s.Id));
-        Assert.Equal("Left out 2 Google Cloud secret(s) whose id is not a valid Secret Manager secret id.", Assert.Single(gcp.Warnings));
+        Assert.Equal("Left out 2 Google Cloud secret(s) whose project, location or id is not valid for Secret Manager.", Assert.Single(gcp.Warnings));
     }
 
     [Fact]
@@ -433,11 +501,11 @@ public class GcpSecretsTests
     }
 
     [Fact]
-    public async Task Escapes_path_segments_and_never_follows_dot_segments()
+    public async Task Escapes_the_project_of_the_options_in_the_request_path()
     {
         var handler = new FakeHttpHandler()
-            .Respond("/v1/projects/a%20b%3Fc/secrets?pageSize=250", """{"secrets":[{"name":"projects/p%2F/secrets/s"}]}""")
-            .Respond("/v1/projects/p%252F/secrets/s/versions?pageSize=25", Versions((1, "ENABLED")));
+            .Respond("/v1/projects/a%20b%3Fc/secrets?pageSize=250", """{"secrets":[{"name":"projects/123/secrets/s"}]}""")
+            .Respond("/v1/projects/123/secrets/s/versions?pageSize=25", Versions((1, "ENABLED")));
 
         var gcp = await Load(handler, o =>
         {
