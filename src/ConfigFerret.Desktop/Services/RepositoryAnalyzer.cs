@@ -93,23 +93,67 @@ public sealed partial class RepositoryAnalyzer
                 ?? choices.Environment;
         }
 
-        var chart = scan.HelmCharts.FirstOrDefault(c => c.RelativePath == choices.HelmChart) ?? (scan.HelmCharts.Count > 0 ? scan.HelmCharts[0] : null);
-        choices.HelmChart = chart?.RelativePath;
-        if (chart is not null && (choices.HelmValues is null || !chart.ValuesFiles.Contains(choices.HelmValues)))
-        {
-            choices.HelmValues = MatchEnvironment(chart.ValuesFiles, choices.Environment, f => Path.GetFileNameWithoutExtension(f));
-        }
-
-        if (choices.Kustomization is null || !scan.Kustomizations.Contains(choices.Kustomization))
-        {
-            choices.Kustomization = MatchEnvironment(scan.Kustomizations, choices.Environment, k => k) ?? (scan.Kustomizations.Count > 0 ? scan.Kustomizations[0] : null);
-        }
-
+        SuggestDeployment(scan, choices);
         if (choices.GitHubEnvironment is null || !gitHubEnvironments.Contains(choices.GitHubEnvironment))
         {
             choices.GitHubEnvironment = MatchEnvironment(gitHubEnvironments, choices.Environment, e => e);
         }
     }
+
+    /// <summary>
+    /// Fills in the chart, its values file and the Kustomize folder for the chosen app and environment. A repository can
+    /// hold a chart and an overlay for each of its apps, so the ones named most like the app win, and a choice that one of
+    /// those beats is replaced. Values files inside or next to the chart come before the rest. A Kustomize folder for the
+    /// environment comes first, among those named like the app and else among all, since overlays are often shared by
+    /// the apps and only their bases are named like one. A name holding the whole environment name beats one that only
+    /// holds its short form, which can be part of an app's name, as prod is of products.
+    /// </summary>
+    internal static void SuggestDeployment(RepositoryScan scan, AnalysisChoices choices)
+    {
+        // An app at the root is named after the folder the repository was downloaded to, which ends in a random id.
+        var app = scan.Apps.FirstOrDefault(a => a.RelativePath == choices.App);
+        var appWords = app is null || app.RelativePath == "." ? [] : Words(Path.GetFileName(app.Folder));
+        var charts = BestNamed(scan.HelmCharts, c => c.RelativePath, appWords);
+        var chart = charts.FirstOrDefault(c => c.RelativePath == choices.HelmChart) ?? charts.FirstOrDefault();
+        var chartChanged = choices.HelmChart is not null && chart?.RelativePath != choices.HelmChart;
+        choices.HelmChart = chart?.RelativePath;
+        if (chart is not null && (chartChanged || choices.HelmValues is null || !chart.ValuesFiles.Contains(choices.HelmValues)))
+        {
+            var near = chart.ValuesFiles.Where(f => IsNextToChart(chart.RelativePath, f)).ToList();
+            choices.HelmValues = MatchEnvironment(choices.Environment, f => Path.GetFileNameWithoutExtension(f), near, chart.ValuesFiles.Except(near));
+        }
+
+        var kustomizations = BestNamed(scan.Kustomizations, k => k, appWords);
+        var match = MatchEnvironment(choices.Environment, k => k, kustomizations, scan.Kustomizations);
+        var forApp = match is not null && kustomizations.Contains(match) ? match : null;
+        if (choices.Kustomization is null || !scan.Kustomizations.Contains(choices.Kustomization) || (forApp is not null && !kustomizations.Contains(choices.Kustomization)))
+        {
+            choices.Kustomization = match ?? kustomizations.FirstOrDefault();
+        }
+    }
+
+    // The items whose path shares the most words with the app's folder name, such as charts/orders for src/Orders.Api, in
+    // their order. Whole words count, so that k8s/base is not taken for an app named Database.
+    private static List<T> BestNamed<T>(IReadOnlyList<T> items, Func<T, string> path, HashSet<string> appWords)
+    {
+        int Score(T item) => Words(path(item)).Count(appWords.Contains);
+        var best = items.Count == 0 ? 0 : items.Max(Score);
+        return items.Where(i => Score(i) == best).ToList();
+    }
+
+    // A values file inside the chart's folder or in the folder that holds it, such as deploy/values-prod.yaml for deploy/chart.
+    private static bool IsNextToChart(string chart, string file)
+    {
+        static string Folder(string path) => path.LastIndexOf('/') is var slash and >= 0 ? path[..slash] : ".";
+        return chart == "." || file.StartsWith(chart + "/", StringComparison.Ordinal) || Folder(file) == Folder(chart);
+    }
+
+    private static HashSet<string> Words(string name) =>
+        new(NameWord().Matches(name).Select(m => m.Value.ToLowerInvariant()).Where(w => w.Length > 1), StringComparer.Ordinal);
+
+    // Words of a name, PascalCase ones too: OrdersApi and orders-api both give orders and api.
+    [System.Text.RegularExpressions.GeneratedRegex("[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NameWord();
 
     /// <summary>Builds the profile to trace.</summary>
     /// <param name="scan">The scanned repository.</param>
@@ -131,6 +175,11 @@ public sealed partial class RepositoryAnalyzer
         HelmChartInfo? chart = scan.HelmCharts.FirstOrDefault(c => c.RelativePath == choices.HelmChart);
         if (chart is not null)
         {
+            if (scan.HelmCharts.Count > 1)
+            {
+                notes.Add($"The repository holds {scan.HelmCharts.Count} Helm charts; traced {chart.RelativePath}.");
+            }
+
             var arguments = new List<string> { "template", "release", chart.Folder };
             var valuesFiles = new List<string>();
             if (choices.HelmValues is not null)
@@ -333,7 +382,12 @@ public sealed partial class RepositoryAnalyzer
     [System.Text.RegularExpressions.GeneratedRegex(@"AddEnvironmentVariables\(\s*(?:prefix:\s*)?""(?<prefix>[A-Za-z0-9_]+)""\s*\)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex EnvironmentPrefixCall();
 
-    private static string? MatchEnvironment(IEnumerable<string> candidates, string environment, Func<string, string> name)
+    private static string? MatchEnvironment(IEnumerable<string> candidates, string environment, Func<string, string> name) =>
+        MatchEnvironment(environment, name, candidates);
+
+    // The first candidate named for the environment, from the first group that has one. The whole name in any group comes
+    // before the short form in the first, so the prod in k8s/products does not beat k8s/overlays/production.
+    private static string? MatchEnvironment(string environment, Func<string, string> name, params IEnumerable<string>[] groups)
     {
         var env = environment.ToLowerInvariant();
         var shortName = env switch
@@ -343,8 +397,18 @@ public sealed partial class RepositoryAnalyzer
             "staging" => "stag",
             _ => env,
         };
-        return candidates.FirstOrDefault(c => name(c).Contains(env, StringComparison.OrdinalIgnoreCase))
-            ?? candidates.FirstOrDefault(c => name(c).Contains(shortName, StringComparison.OrdinalIgnoreCase));
+        foreach (var form in new[] { env, shortName })
+        {
+            foreach (var group in groups)
+            {
+                if (group.FirstOrDefault(c => name(c).Contains(form, StringComparison.OrdinalIgnoreCase)) is { } match)
+                {
+                    return match;
+                }
+            }
+        }
+
+        return null;
     }
 
     // What helm and kubectl need to start and find their own folders on Windows, Linux and macOS. Nothing else of this

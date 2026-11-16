@@ -211,6 +211,134 @@ public class RepositoryAnalyzerChoicesTests
         Assert.Null(none.Kustomization);
     }
 
+    // Two apps, each with its own chart and overlay. Every chart is offered every values file but its own values.yaml.
+    private static RepositoryScan TwoApps() => Scan(
+        apps: [App("src/Api", "Production"), App("src/Worker", "Production")],
+        charts:
+        [
+            Chart("charts/api", "charts/api/values-prod.yaml", "charts/worker/values-prod.yaml"),
+            Chart("charts/worker", "charts/api/values-prod.yaml", "charts/worker/values-prod.yaml"),
+        ],
+        kustomizations: ["deploy/api/overlays/production", "deploy/worker/overlays/production", "deploy/api/base", "deploy/worker/base"]);
+
+    [Theory]
+    [InlineData("src/Api", "charts/api", "deploy/api/overlays/production")]
+    [InlineData("src/Worker", "charts/worker", "deploy/worker/overlays/production")]
+    public void Each_app_gets_the_chart_values_file_and_overlay_named_like_it(string app, string chart, string overlay)
+    {
+        var choices = new AnalysisChoices { App = app };
+
+        RepositoryAnalyzer.SuggestChoices(TwoApps(), choices, []);
+
+        Assert.Equal((chart, $"{chart}/values-prod.yaml", overlay), (choices.HelmChart, choices.HelmValues, choices.Kustomization));
+    }
+
+    [Fact]
+    public void Picking_another_app_moves_the_chart_values_file_and_overlay_along()
+    {
+        var choices = new AnalysisChoices { App = "src/Api" };
+        RepositoryAnalyzer.SuggestChoices(TwoApps(), choices, []);
+
+        choices.App = "src/Worker";
+        RepositoryAnalyzer.SuggestChoices(TwoApps(), choices, []);
+
+        Assert.Equal(("charts/worker", "charts/worker/values-prod.yaml", "deploy/worker/overlays/production"), (choices.HelmChart, choices.HelmValues, choices.Kustomization));
+    }
+
+    [Fact]
+    public void The_charts_own_values_files_come_before_other_charts_ones()
+    {
+        var choices = new AnalysisChoices { HelmChart = "charts/worker" };
+
+        RepositoryAnalyzer.SuggestChoices(Scan(charts: TwoApps().HelmCharts.ToArray()), choices, []);
+
+        Assert.Equal("charts/worker/values-prod.yaml", choices.HelmValues);
+    }
+
+    [Theory]
+    [InlineData("src/Orders.Api", "charts/orders")]
+    [InlineData("src/OrdersApi", "charts/orders")]
+    [InlineData("src/billing", "charts/billing")]
+    [InlineData("src/Shipping", "charts/billing")]
+    public void Charts_are_matched_by_the_words_of_the_app_folder_else_the_first_is_used(string app, string expected)
+    {
+        var choices = new AnalysisChoices();
+
+        RepositoryAnalyzer.SuggestChoices(Scan(apps: [App(app)], charts: [Chart("charts/billing"), Chart("charts/orders")]), choices, []);
+
+        Assert.Equal(expected, choices.HelmChart);
+    }
+
+    [Fact]
+    public void A_base_is_not_taken_for_an_app_whose_name_ends_in_base()
+    {
+        var choices = new AnalysisChoices { App = "src/Database" };
+
+        RepositoryAnalyzer.SuggestChoices(Scan(apps: [App("src/Database")], kustomizations: ["k8s/overlays/prod", "k8s/base"]), choices, []);
+
+        Assert.Equal("k8s/overlays/prod", choices.Kustomization);
+    }
+
+    [Theory]
+    [InlineData("src/Api", "k8s/base/api")]
+    [InlineData("src/Orders", "k8s/orders")]
+    public void The_overlay_for_the_environment_wins_over_a_base_named_like_the_app(string app, string appBase)
+    {
+        // One base per app and overlays shared by them: only the base carries the app's name.
+        var scan = Scan(apps: [App(app, "Production")], kustomizations: ["k8s/overlays/production", "k8s/overlays/staging", appBase, "k8s/base/worker"]);
+        var unset = new AnalysisChoices { App = app };
+        var saved = new AnalysisChoices { App = app, Kustomization = "k8s/overlays/production" };
+
+        RepositoryAnalyzer.SuggestChoices(scan, unset, []);
+        RepositoryAnalyzer.SuggestChoices(scan, saved, []);
+
+        Assert.Equal("k8s/overlays/production", unset.Kustomization);
+        Assert.Equal("k8s/overlays/production", saved.Kustomization);
+    }
+
+    [Theory]
+    [InlineData("src/Products", "Production", "k8s/products")]
+    [InlineData("src/DevPortal", "Development", "k8s/dev-portal")]
+    public void A_base_whose_app_name_holds_the_short_environment_name_does_not_beat_the_overlay(string app, string environment, string appBase)
+    {
+        // prod is part of products and dev of dev-portal, but only the overlay is named for the environment.
+        var overlay = $"k8s/overlays/{environment.ToLowerInvariant()}";
+        var scan = Scan(apps: [App(app, environment)], kustomizations: [overlay, "k8s/overlays/staging", appBase]);
+        var unset = new AnalysisChoices { App = app, Environment = environment };
+        var saved = new AnalysisChoices { App = app, Environment = environment, Kustomization = overlay };
+
+        RepositoryAnalyzer.SuggestChoices(scan, unset, []);
+        RepositoryAnalyzer.SuggestChoices(scan, saved, []);
+
+        Assert.Equal(overlay, unset.Kustomization);
+        Assert.Equal(overlay, saved.Kustomization);
+    }
+
+    [Fact]
+    public void A_values_file_named_for_the_environment_beats_one_next_to_the_chart_named_for_the_app()
+    {
+        var choices = new AnalysisChoices { App = "src/Products", Environment = "Production" };
+
+        RepositoryAnalyzer.SuggestChoices(Scan(apps: [App("src/Products", "Production")], charts: [Chart("charts/products", "charts/products/products-values.yaml", "deploy/values-production.yaml")]), choices, []);
+
+        Assert.Equal("deploy/values-production.yaml", choices.HelmValues);
+    }
+
+    [Fact]
+    public void An_app_at_the_root_is_not_matched_by_the_name_of_the_folder_it_was_downloaded_to()
+    {
+        // A downloaded repository's folder ends in a random id, whose letters and digits would count as words.
+        foreach (var folder in new[] { "contoso_shop-be0123456789abcdef0123456789abcdef", "contoso_shop-fe0123456789abcdef0123456789abcdef" })
+        {
+            var scan = new RepositoryScan("/tmp/" + folder, [new AppFolder("/tmp/" + folder, ".", [])], [Chart("charts/be", "charts/be/values-prod.yaml"), Chart("charts/fe", "charts/fe/values-prod.yaml")], [], [], [], false);
+            var choices = new AnalysisChoices { App = ".", HelmChart = "charts/fe", HelmValues = "charts/fe/values-prod.yaml" };
+
+            RepositoryAnalyzer.SuggestChoices(scan, choices, []);
+
+            Assert.Equal(("charts/fe", "charts/fe/values-prod.yaml"), (choices.HelmChart, choices.HelmValues));
+        }
+    }
+
     [Fact]
     public void A_github_environment_that_still_exists_is_kept_and_others_are_matched()
     {
