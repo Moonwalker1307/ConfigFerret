@@ -6,14 +6,20 @@ namespace ConfigFerret;
 public sealed class TraceOptions
 {
     /// <summary>
-    /// The default pattern for keys whose values are treated as secret. Short words such as <c>pass</c>, <c>key</c>,
-    /// <c>sas</c> and <c>dsn</c> count only as a whole key segment (<c>Db:Pass</c>, <c>Jwt:Key</c>, <c>DB_PASS</c>), so
-    /// <c>Cache:KeyPrefix</c> and <c>PassThrough</c> stay visible.
+    /// The default pattern for keys whose values are treated as secret. Words such as <c>password</c>, <c>token</c> and
+    /// <c>connectionstring</c> count anywhere, also with <c>_</c> or <c>-</c> between their parts
+    /// (<c>DB_CONNECTION_STRING</c>). Short words such as <c>pass</c>, <c>key</c>, <c>sas</c> and <c>dsn</c> count only
+    /// as a whole word: a key segment (<c>Db:Pass</c>, <c>Jwt:Key</c>, <c>DB_PASS</c>) or the last word of a PascalCase
+    /// or camelCase name (<c>JwtKey</c>, <c>smtpPass</c>, <c>SentryDsn</c>). So <c>Cache:KeyPrefix</c>,
+    /// <c>KeyVaultName</c> and <c>PassThrough</c> stay visible, and so do <c>PartitionKey</c>, <c>RoutingKey</c> and
+    /// <c>PublicKey</c>, which are not secret.
     /// </summary>
     public const string DefaultSensitiveKeyPattern =
-        @"(password|passwd|pwd|passphrase|secret|token|apikey|api_key|api-key|connectionstring|connstr|credential|privatekey|private_key|accesskey|access_key"
-        + @"|sharedaccess|(signing|encryption|master|shared|account|storage|hmac|subscription)_?key|bearer"
-        + @"|(^|[^a-z])(pass|key|sas|dsn)($|[^a-z]))";
+        @"(password|passwd|pwd|passphrase|secret|token|api[_-]?key|connection[_-]?string|conn[_-]?str|credential|private[_-]?key|access[_-]?key"
+        + @"|shared[_-]?access|(signing|encryption|master|shared|account|storage|hmac|subscription)_?key|bearer"
+        + @"|(^|[^a-z])(pass|key|sas|dsn)($|[^a-z])"
+        + @"|(?-i:((?<![Pp]artition|[Rr]outing|[Pp]ublic)Key|Pass|Sas|Dsn)(?![A-Za-z]))"
+        + @"|((?<![a-z])sas|(?-i:Sas))(?-i:Ur[il](?![A-Za-z])))";
 
     /// <summary>
     /// When false (the default), values that come from Secrets, user secrets or key-per-file mounts,
