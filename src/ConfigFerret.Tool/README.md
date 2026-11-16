@@ -93,11 +93,11 @@ or as a JSON array. Repeat it to combine several runs.
    file always comes from the app folder.
 3. `{ApplicationName}.settings.json`, then `{ApplicationName}.settings.{Environment}.json`, which .NET 10 and later
    load. The name is the `AssemblyName` in the folder's project file, else the project file's name. This needs
-   exactly one `*.csproj` in the folder; otherwise these files are not looked for, and nothing says so. A name built
-   with `$(...)` falls back to the project file's name, and a name set in code is missed: pass such a file with
-   `--config` and `--config-before-env`. A project file that links out of the app folder, is over 64 MB, holds a DTD,
-   is not valid XML or can't be read is not read at all, for its `UserSecretsId` either, and the tool says so on
-   standard error.
+   exactly one `*.csproj` in the folder; otherwise these files are not looked for, and with several the tool says
+   so on standard error. A name built with `$(...)` falls back to the project file's name, and a name set in code
+   is missed: pass such a file with `--config` and `--config-before-env`. A project file that links out of the app
+   folder, is over 64 MB, holds a DTD, is not valid XML or can't be read is not read at all, for its
+   `UserSecretsId` either, and the tool says so on standard error.
 4. User secrets, in Development only, using the `UserSecretsId` in the folder's project file (or `--user-secrets-id`).
    `--no-user-secrets` turns this off.
 5. Environment variables: the `AddEnvironmentVariables` call without a prefix that the host makes, then one call per

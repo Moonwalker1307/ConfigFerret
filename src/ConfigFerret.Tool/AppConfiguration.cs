@@ -197,11 +197,18 @@ internal static partial class AppConfiguration
     /// Reads the one project file in <paramref name="directory"/>, if there is one. The checkout may come from someone
     /// else, so the file is read only when it is in the app folder, links followed, and at most
     /// <see cref="InputReader.MaxFoundFileBytes"/> long, without a DTD. Otherwise nothing is read from it, and one
-    /// warning names the file, as <paramref name="appFolder"/> was given, and the reason, but nothing in it.
+    /// warning names the file, as <paramref name="appFolder"/> was given, and the reason, but nothing in it. A folder
+    /// with several project files gives one warning too, and one with none gives nothing.
     /// </summary>
     internal static AppProject? ReadProject(string directory, string appFolder, TextWriter warnings)
     {
         var projects = Directory.GetFiles(directory, "*.csproj");
+        if (projects.Length > 1)
+        {
+            // Which one builds the app can't be told from the folder, so none is read, and no file name is given.
+            warnings.WriteLine($"configferret: {TextRenderer.Escape(appFolder)} holds several project files, so no {{ApplicationName}}.settings.json or UserSecretsId is read.");
+        }
+
         if (projects.Length != 1)
         {
             return null;
