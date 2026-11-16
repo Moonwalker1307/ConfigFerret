@@ -298,11 +298,104 @@ public sealed class GitOpsHelmChartTests : IDisposable
                 "Argo CD Application app (line 10) names the remote values file HTTP://example.test/values.yaml, which ConfigFerret does not fetch.",
                 $"Argo CD Application app (line 13) names the values file missing.yaml, which was not found under {Path.Join(_root, "chart")} or {Path.Join(_root, "chart", "..")}.",
                 $"Argo CD Application app (line 14) names the values file $values, which was not found under {Path.Join(_root, "chart", "..")}.",
-                $"Argo CD Application app (line 15) names the values file ../outside.yaml, which is outside {Path.Join(_root, "chart")}, so it was not read.",
             ],
-            chart.Warnings.Take(5));
-        Assert.StartsWith("Could not parse Helm values in broken.yaml: ", chart.Warnings[5], StringComparison.Ordinal);
-        Assert.Equal(6, chart.Warnings.Count);
+            chart.Warnings.Take(4));
+        Assert.StartsWith("Could not parse Helm values in broken.yaml: ", chart.Warnings[4], StringComparison.Ordinal);
+        Assert.Equal(5, chart.Warnings.Count);
+        Assert.Equal(["../outside.yaml"], chart.History["a"].Select(h => h.Source));
+    }
+
+    [Fact]
+    public void Reads_a_values_file_outside_the_chart_folder_that_is_inside_the_repository()
+    {
+        WriteChart("repo/charts/orders");
+        Write("repo/envs/prod/values.yaml", "db:\n  timeout: 99\n");
+        Write("outside.yaml", "db:\n  host: outside\n");
+        var repo = Path.Join(_root, "repo");
+        var app = Argo("""
+                  valueFiles: [../../envs/prod/values.yaml, ../../../outside.yaml]
+            """, "path: charts/orders");
+
+        var chart = HelmChart.ForGitOps(app, new GitOpsOptions { RepositoryRoot = repo });
+
+        Assert.Equal(["values.yaml (chart default)", "../../envs/prod/values.yaml"], chart.History["db.timeout"].Select(h => h.Source));
+        Assert.Equal("99", chart.GetValue("db.timeout"));
+        Assert.Equal("default", chart.GetValue("db.host"));
+        Assert.Equal(
+            [$"Argo CD Application app (line 8) names the values file ../../../outside.yaml, which is outside {Path.Join(repo, "charts", "orders")} and {repo}, so it was not read."],
+            chart.Warnings);
+    }
+
+    [Fact]
+    public void A_values_file_that_links_outside_the_repository_is_not_read()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        WriteChart("repo/chart");
+        Write("outside.yaml", "db:\n  host: outside\n");
+        var repo = Path.Join(_root, "repo");
+        File.CreateSymbolicLink(Path.Join(repo, "envs.yaml"), Path.Join(_root, "outside.yaml"));
+        var app = Argo("""
+                  valueFiles: [../envs.yaml]
+            """);
+
+        var chart = HelmChart.ForGitOps(app, new GitOpsOptions { RepositoryRoot = repo });
+
+        Assert.Equal("default", chart.GetValue("db.host"));
+        Assert.Equal(
+            [$"Argo CD Application app (line 8) names the values file ../envs.yaml, which is outside {Path.Join(repo, "chart")} and {repo}, so it was not read."],
+            chart.Warnings);
+    }
+
+    [Fact]
+    public void A_values_file_outside_the_repository_gives_the_same_warning_whether_or_not_it_exists()
+    {
+        WriteChart("repo/chart");
+        Write("outside.yaml", "db:\n  host: outside\n");
+        var repo = Path.Join(_root, "repo");
+        var app = Argo("""
+                  valueFiles: [../../outside.yaml, ../../missing.yaml, "bad\0.yaml"]
+            """);
+
+        var chart = HelmChart.ForGitOps(app, new GitOpsOptions { RepositoryRoot = repo });
+
+        Assert.Equal(
+            [
+                $"Argo CD Application app (line 8) names the values file ../../outside.yaml, which is outside {Path.Join(repo, "chart")} and {repo}, so it was not read.",
+                $"Argo CD Application app (line 8) names the values file ../../missing.yaml, which is outside {Path.Join(repo, "chart")} and {repo}, so it was not read.",
+                $"Argo CD Application app (line 8) names the values file bad\0.yaml, which is outside {Path.Join(repo, "chart")} and {repo}, so it was not read.",
+            ],
+            chart.Warnings);
+    }
+
+    [Fact]
+    public void A_values_file_link_outside_the_repository_gives_the_same_warning_whether_or_not_its_target_exists()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        WriteChart("repo/chart");
+        Write("outside.yaml", "db:\n  host: outside\n");
+        var repo = Path.Join(_root, "repo");
+        File.CreateSymbolicLink(Path.Join(repo, "chart", "found.yaml"), Path.Join(_root, "outside.yaml"));
+        File.CreateSymbolicLink(Path.Join(repo, "chart", "missing.yaml"), Path.Join(_root, "missing.yaml"));
+        var app = Argo("""
+                  valueFiles: [found.yaml, missing.yaml]
+            """);
+
+        var chart = HelmChart.ForGitOps(app, new GitOpsOptions { RepositoryRoot = repo });
+
+        Assert.Equal(
+            [
+                $"Argo CD Application app (line 8) names the values file found.yaml, which is outside {Path.Join(repo, "chart")} and {repo}, so it was not read.",
+                $"Argo CD Application app (line 8) names the values file missing.yaml, which is outside {Path.Join(repo, "chart")} and {repo}, so it was not read.",
+            ],
+            chart.Warnings);
     }
 
     [Fact]
