@@ -678,6 +678,62 @@ public class ComposeProjectTests
         Assert.DoesNotContain("hunter2", ConfigTracer.ForCompose(ComposeProject.Parse([("compose.yaml", "services:\n  app:\n    configs: [c]\nconfigs:\n  c: { environment: API_TOKEN }\n")]), "app").Trace().ToText(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Values_that_take_a_secret_through_a_second_variable_are_sensitive()
+    {
+        using var folder = new TempFolder();
+        folder.Write(".env", """
+            DB_PASSWORD=fake-db-password
+            DB_URL=postgres://app:${DB_PASSWORD}@db/app
+            APP_CFG=pw=${DB_PASSWORD}
+            API_TOKEN=fake-api-token
+            ENV_DIR=cfg/${API_TOKEN}
+            """);
+        var compose = folder.Write("compose.yaml", """
+            services:
+              api:
+                environment:
+                  URL: ${DB_URL}
+                configs: [app_cfg, env_cfg]
+            configs:
+              app_cfg: { content: "url=${DB_URL}" }
+              env_cfg: { environment: APP_CFG }
+            """);
+
+        var project = ComposeProject.Load(compose);
+
+        var service = Service(project, "api");
+        Assert.True(service.Layers("URL")[0].IsSensitive);
+        Assert.True(service.MountLayers("/app_cfg")[0].IsSensitive);
+        Assert.True(service.MountLayers("/env_cfg")[0].IsSensitive);
+        var report = ConfigTracer.ForCompose(project, "api").Trace();
+        foreach (var output in new[] { report.ToText(), report.ToJson() })
+        {
+            Assert.DoesNotContain("fake-db-password", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("fake-api-token", output, StringComparison.Ordinal);
+        }
+
+        folder.Write("compose.yaml", "services:\n  api:\n    env_file: ${ENV_DIR}/app.env\n");
+        var ex = Assert.Throws<FormatException>(() => ComposeProject.Load(compose));
+        Assert.Equal("compose.yaml:3: a path or a name may not refer to a variable named like a secret (ENV_DIR).", ex.Message);
+    }
+
+    [Fact]
+    public void A_secret_stays_sensitive_through_a_long_chain_of_variables()
+    {
+        using var folder = new TempFolder();
+        folder.Write(".env", "DB_PASSWORD=fake-db-password\nV1=${DB_PASSWORD}\n" + string.Concat(Enumerable.Range(2, 8).Select(i => $"V{i}=${{V{i - 1}}}\n")));
+        var compose = folder.Write("compose.yaml", "services:\n  app:\n    environment:\n      PLAIN: ${V9}\n");
+
+        var project = ComposeProject.Load(compose);
+
+        var step = Service(project).Layers("PLAIN")[0];
+        Assert.Equal("fake-db-password", step.Value);
+        Assert.True(step.IsSensitive);
+        Assert.True(step.Origins[0].IsSensitive);
+        Assert.DoesNotContain("fake-db-password", ConfigTracer.ForCompose(project, "app").Trace().ToText(), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("services:\n  app:\n    env_file: ${DB_PASSWORD}.envfile\n")]
     [InlineData("services:\n  app:\n    extends: ${API_KEY:-x}\n")]

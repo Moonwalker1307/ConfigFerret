@@ -438,9 +438,9 @@ var appReport = ConfigTracer.For(builder.Configuration).WithCompose(project, "ap
 ```
 
 Each variable lists its `env_file` lines, then its `environment` entries (a later compose file's entry wins). Each
-`${VAR}` in them points to the `.env` line or shell variable it came from. Values whose names look secret, and every
-compose `secret`, are redacted. File-based secrets are listed at `/run/secrets/<name>` without reading them unless
-`ReadSecretFiles` is set.
+`${VAR}` in them points to the `.env` line or shell variable it came from. Values whose names look secret, values that
+take a variable named like a secret through any number of `${VAR}` references, and every compose `secret`, are
+redacted. File-based secrets are listed at `/run/secrets/<name>` without reading them unless `ReadSecretFiles` is set.
 
 `DotEnvFile.Parse(text, name)` and `DotEnvFile.Load(path)` parse one dotenv file with compose's rules (`export`,
 single, double and backtick quotes, multi-line values, `\n` escapes, `#` comments, `${VAR:-default}`), keeping the
@@ -623,8 +623,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   more than 256 levels deep (an alias counts as the collection it stands for).
 - Docker Compose: a missing required `env_file`, `extends` file or `include` is a warning rather than an error, so
   the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
-  args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret
-  is rejected, since paths and names are never redacted.
+  args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret,
+  directly or through other `${VAR}` references, is rejected, since paths and names are never redacted.
 - Docker Compose: a file that a compose file names (a config's or secret's `file`, an `env_file`, an `extends` file,
   an `include` and its env files) and the project's `.env` are read only from in or below the project directory,
   after following symbolic links; an include's `project_directory` does not widen this. Others are not read and are
