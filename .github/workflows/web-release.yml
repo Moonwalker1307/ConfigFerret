@@ -88,6 +88,16 @@ jobs:
         shell: bash
         run: docker build -f src/ConfigFerret.Web/Dockerfile --build-arg VERSION="$VERSION" -t configferret-web:test .
 
+      # The release job pushes both platforms. This builds them the same way, without pushing, so a change that breaks
+      # the linux/arm64 image fails here instead of on the release tag.
+      - name: Build linux/amd64 and linux/arm64
+        shell: bash
+        run: |
+          docker buildx create --name configferret --driver docker-container --use
+          docker buildx build -f src/ConfigFerret.Web/Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$VERSION" .
+
       - name: Check the tools are in the image
         shell: bash
         run: |
