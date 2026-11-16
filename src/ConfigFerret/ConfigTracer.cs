@@ -5,6 +5,7 @@ using ConfigFerret.GitOps;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
+using ConfigFerret.Shared;
 using ConfigFerret.Terraform;
 using Microsoft.Extensions.Configuration;
 
@@ -46,7 +47,7 @@ public sealed class ConfigTracer
     public TraceOptions Options { get; private set; } = new();
 
     /// <summary>How many origin steps resolvers may add to one setting before its trace is cut off.</summary>
-    internal int MaxStepsPerSetting { get; set; } = 1_000;
+    internal int MaxStepsPerSetting { get; set; } = TraceLimits.MaxStepsPerSetting;
 
     /// <summary>How many origin steps resolvers may add to the whole trace before the settings still to come are cut off.</summary>
     internal int MaxStepsPerTrace { get; set; } = 250_000;

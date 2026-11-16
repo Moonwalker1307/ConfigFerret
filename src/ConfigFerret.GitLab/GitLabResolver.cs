@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using ConfigFerret.Shared;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.GitLab;
@@ -16,7 +17,7 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     private const int MaxDefinitions = 32;
 
     // The most CI file entries one trace step looks at: the tracer keeps no more upstream steps than this per setting.
-    private const int MaxSteps = 1_000;
+    private const int MaxSteps = TraceLimits.MaxStepsPerSetting;
 
     private readonly List<string> _fileWarnings = options.ReadConfiguredCiFiles();
     private readonly Dictionary<string, string?> _onlyScoped = new(StringComparer.Ordinal);
