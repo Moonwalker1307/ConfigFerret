@@ -664,11 +664,13 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 - Docker Compose: like compose, an included file sees the environment of the project that includes it (the shell,
   then that project's `.env`) first; its own `env_file` list, or its project directory's `.env`, only adds variables
   that are not set there. One load reads at most 1,000 included projects, counting a file again for each environment
-  it is included with, and throws beyond that. Included services join the project: one that the including file
-  declares too is merged with the included one as its base, one that two includes of one compose file bring in from
-  the same file is taken once, and a service can extend an included one. A service whose `extends` bring in more
-  than 10,000 parts of services, as a base defined in many included files can, throws, and so does a load whose
-  services' `extends` bring in more than 1,000,000 together.
+  it is included with, and at most 256 MiB of text from compose, env and mounted files, counting a file again each
+  time it is read. At most 64 MiB of that may be compose YAML (the files passed in, included files and `extends`
+  files), whose parsed trees are kept for the whole load. It throws beyond any of these. Included services join the
+  project: one that the including file declares too is merged with the included one as its base, one that two
+  includes of one compose file bring in from the same file is taken once, and a service can extend an included one.
+  A service whose `extends` bring in more than 10,000 parts of services, as a base defined in many included files
+  can, throws, and so does a load whose services' `extends` bring in more than 1,000,000 together.
 - Docker Compose: a file that a compose file names (a config's or secret's `file`, an `env_file`, an `extends` file,
   an `include` and its env files) and the project's `.env` are read only from in or below the project directory,
   after following symbolic links (a link to another drive, share or device counts as outside, unless the project
