@@ -489,14 +489,17 @@ public sealed class TraceRunner
             }
         }
 
+        // A variable whose value the manifests don't hold, such as one from a Secret outside the repository or the
+        // downward API, still sets its key in the app. It keeps a stand-in, so the key's row shows the variable as the
+        // winning layer and where its value comes from.
         var unknown = environment.Where(e => e.Value is null).Select(e => e.Key).Order(StringComparer.Ordinal).ToList();
         if (unknown.Count > 0)
         {
             notes.Add("The manifests don't hold the value of " + string.Join(", ", unknown)
-                + " (set at run time, or from a ConfigMap or Secret that isn't in the manifests). Add them in an Environment variables source to include them.");
+                + $" (set at run time, or from a ConfigMap or Secret that isn't in the manifests), so {(unknown.Count == 1 ? "it shows" : "they show")} {ManifestStandIn} instead. Add them in an Environment variables source to trace their values.");
             foreach (var name in unknown)
             {
-                environment.Remove(name);
+                environment[name] = ManifestStandIn;
             }
         }
 
@@ -712,6 +715,9 @@ public sealed class TraceRunner
 
     /// <summary>The value shown for a setting a workflow sets from a GitHub secret.</summary>
     internal const string SecretStandIn = "(GitHub secret)";
+
+    /// <summary>The value shown for a variable whose value the manifests don't hold.</summary>
+    internal const string ManifestStandIn = "(value not in the manifests)";
 
     private static bool LooksLikeAppSetting(string name, List<string> prefixes, HashSet<string> keys)
     {

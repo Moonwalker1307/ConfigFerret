@@ -543,7 +543,7 @@ public class TraceRunnerSourcesTests : IDisposable
         + "        - name: KNOWN\n          value: yes\n";
 
     [Fact]
-    public async Task Values_the_manifests_do_not_hold_are_listed_in_a_note_in_name_order_and_left_out()
+    public async Task Values_the_manifests_do_not_hold_are_listed_in_a_note_in_name_order_and_kept_with_a_stand_in()
     {
         var k8s = new KubernetesSource { Paths = [Write("k8s/pod.yaml", Pod("web", UnknownEnv))] };
 
@@ -551,10 +551,28 @@ public class TraceRunnerSourcesTests : IDisposable
 
         var note = Assert.Single(result.Notes);
         Assert.Equal(
-            "The manifests don't hold the value of ALPHA, ZED (set at run time, or from a ConfigMap or Secret that isn't in the manifests). Add them in an Environment variables source to include them.",
+            "The manifests don't hold the value of ALPHA, ZED (set at run time, or from a ConfigMap or Secret that isn't in the manifests), so they show (value not in the manifests) instead. Add them in an Environment variables source to trace their values.",
             note);
         Assert.Equal("yes", result.Report.Find("KNOWN")!.Value);
-        Assert.Null(result.Report.Find("ALPHA"));
+        Assert.Equal("(value not in the manifests)", result.Report.Find("ALPHA")!.Value);
+        Assert.Contains(result.Report.Find("ALPHA")!.EffectiveStep!.Origins, o => o.Kind == LayerKind.KubernetesConfigMap);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: db\nspec:\n  secretStoreRef:\n    name: vault\n    kind: ClusterSecretStore\n  target:\n    name: db-secret\n  data:\n    - secretKey: password\n      remoteRef:\n        key: orders/db\n        property: password\n---\n")]
+    public async Task A_setting_from_a_secret_outside_the_repository_wins_over_appsettings_and_is_protected(string externalSecret)
+    {
+        var k8s = new KubernetesSource { Paths = [Write("k8s/orders.yaml", externalSecret + DeploymentUsingSecret("db-secret"))] };
+
+        var result = await Run(ProfileOf(App("""{"Db":{"Password":""}}"""), k8s));
+
+        var password = result.Report.Find("Db:Password")!;
+        Assert.DoesNotContain("appsettings", password.EffectiveStep!.Source, StringComparison.Ordinal);
+        Assert.Contains(AllSteps(password.Steps), s => s.Kind == LayerKind.KubernetesSecret && s.Source.Contains("db-secret", StringComparison.Ordinal));
+        var finding = result.Secrets.Single(s => s.Key == "Db:Password");
+        Assert.Equal(SecretRating.Protected, finding.Rating);
+        Assert.Contains("db-secret", finding.Reason + finding.Where, StringComparison.Ordinal);
     }
 
     [Fact]
