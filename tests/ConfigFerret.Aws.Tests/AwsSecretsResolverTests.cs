@@ -1,3 +1,4 @@
+using Kralizek.Extensions.Configuration.Internal;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.Aws.Tests;
@@ -285,6 +286,26 @@ public class AwsSecretsResolverTests
     }
 
     [Fact]
+    public void Hides_a_provider_value_linked_to_a_secret_that_was_not_loaded()
+    {
+        const string value = "fake-orders-connection-value";
+        var configuration = new ConfigurationBuilder().Add(new FakeSecretsManagerSource(new() { ["Orders:Connection"] = value })).Build();
+        var tracer = ConfigTracer.For(configuration)
+            .WithOptions(o => o.Environment = new Dictionary<string, string?>())
+            .WithAwsSecretsManager(WithValues, o => o.Map("Orders:Connection", "prod/orders/missing"));
+
+        var report = tracer.Trace();
+
+        var setting = report.Find("Orders:Connection")!;
+        Assert.Empty(setting.EffectiveStep!.Origins);
+        Assert.Contains("Orders:Connection is linked to AWS secret prod/orders/missing, but no such secret was loaded.", report.Warnings);
+        Assert.True(setting.IsSensitive);
+        Assert.DoesNotContain(value, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(value, report.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain(value, report.Explain("Orders:Connection"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Checks_its_arguments()
     {
         var tracer = ConfigTracer.For(new ConfigurationBuilder().Build());
@@ -294,13 +315,8 @@ public class AwsSecretsResolverTests
     }
 }
 
-/// <summary>Stands in for Kralizek's provider: its type name holds "SecretsManager", like the real one.</summary>
+/// <summary>Stands in for Kralizek's provider: it builds a provider with the real full type name.</summary>
 internal sealed class FakeSecretsManagerSource(Dictionary<string, string?> data) : IConfigurationSource
 {
-    public IConfigurationProvider Build(IConfigurationBuilder builder) => new FakeSecretsManagerConfigurationProvider(data);
-}
-
-internal sealed class FakeSecretsManagerConfigurationProvider : ConfigurationProvider
-{
-    public FakeSecretsManagerConfigurationProvider(Dictionary<string, string?> data) => Data = new Dictionary<string, string?>(data, StringComparer.OrdinalIgnoreCase);
+    public IConfigurationProvider Build(IConfigurationBuilder builder) => new SecretsManagerConfigurationProvider(data);
 }
