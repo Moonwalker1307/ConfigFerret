@@ -400,6 +400,41 @@ public sealed class GitOpsResolverTests : IDisposable
             StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Does_not_follow_links_in_the_folder_it_deploys()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        var outside = Directory.CreateTempSubdirectory("cf-gitops-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Join(outside, "other.yaml"), "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: o}\ndata: {K: '${V}'}\n");
+            Write("cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+            Directory.CreateSymbolicLink(Path.Join(_root, "loop"), ".");
+            Directory.CreateSymbolicLink(Path.Join(_root, "extra"), outside);
+            var resolver = new GitOpsResolver(
+                GitOpsApplication.Parse("""
+                    apiVersion: kustomize.toolkit.fluxcd.io/v1
+                    kind: Kustomization
+                    metadata: {name: root}
+                    spec:
+                      postBuild:
+                        substitute: {V: x}
+                    """),
+                new GitOpsOptions { RepositoryRoot = _root });
+
+            Assert.Equal("cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
+            Assert.Empty(resolver.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("${A}", "A", null)]
     [InlineData("${A:=x}", "A", "x")]

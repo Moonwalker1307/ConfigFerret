@@ -571,6 +571,8 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   the same name is linked to that ConfigMap's template too. The note then says the values and the manifest disagree.
 - Kustomize patches that edit env entries or ConfigMap data are not traced yet.
 - Like kustomize, a generator's `envs` files must be in or below the folder of the kustomization that names them.
+- A folder of manifests, a chart's `templates` folder and the folder a GitOps app deploys are read without following
+  symbolic links: a linked file or folder below them is skipped.
   Pass `allowFilesOutsideFolder: true` to `Kustomization.Load` to lift this, like `--load-restrictor LoadRestrictionsNone`.
 - GitHub and Octopus links by name or JSON key are guesses, so they are marked `[inferred]`; a workflow `env:` line or
   `Map` makes a certain link. When a name is on both an environment variable and the Kubernetes env entry behind it,
