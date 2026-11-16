@@ -378,6 +378,88 @@ public class ComposeProjectTests
         }
     }
 
+    [Theory]
+    [InlineData("3.10", "3.1", true)]
+    [InlineData("1.0", "1", true)]
+    [InlineData("True", "true", true)]
+    [InlineData("FALSE", "false", true)]
+    [InlineData("0755", "493", true)]
+    [InlineData("0x10", "16", true)]
+    [InlineData("0o17", "15", true)]
+    [InlineData("0b101", "5", true)]
+    [InlineData("1e3", "1000", true)]
+    [InlineData("1e6", "1e+06", true)]
+    [InlineData("1.5e-7", "1.5e-07", true)]
+    [InlineData("123456.7", "123456.7", false)]
+    [InlineData("+5", "5", true)]
+    [InlineData("-0", "-0", false)]
+    [InlineData("-0.0", "-0", true)]
+    [InlineData("1_000", "1000", true)]
+    [InlineData("08", "8", true)]
+    [InlineData(".5", "0.5", true)]
+    [InlineData("-.inf", "-Inf", true)]
+    [InlineData(".NaN", "NaN", true)]
+    [InlineData("18446744073709551615", "18446744073709551615", false)]
+    [InlineData("99999999999999999999", "1e+20", true)]
+    [InlineData("0000000000000000000000000000000000000000000000000000000000000000000000010", "8", true)]
+    [InlineData("2001-01-01", "2001-01-01 00:00:00 +0000 UTC", true)]
+    [InlineData("2001-12-14t21:59:43.10Z", "2001-12-14 21:59:43.1 +0000 UTC", true)]
+    [InlineData("2001-12-14 2:59:43", "2001-12-14 02:59:43 +0000 UTC", true)]
+    [InlineData("2001-12-14T21:59:43+01:00", "2001-12-14 21:59:43 +0100 +0100", true)]
+    [InlineData("2001-13-01", "2001-13-01", false)]
+    [InlineData("'2001-01-01'", "2001-01-01", false)]
+    [InlineData("!!timestamp \"2001-01-01\"", "2001-01-01 00:00:00 +0000 UTC", true)]
+    [InlineData("1e400", "1e400", false)]
+    [InlineData("1.2.3", "1.2.3", false)]
+    [InlineData("yes", "yes", false)]
+    [InlineData("0x", "0x", false)]
+    [InlineData("\"3.10\"", "3.10", false)]
+    [InlineData("'True'", "True", false)]
+    [InlineData("!!str 3.10", "3.10", false)]
+    [InlineData("!!int 0755", "493", true)]
+    [InlineData("!!int \"0x10\"", "16", true)]
+    [InlineData("!!float 0x10", "16", true)]
+    [InlineData("!!float 1", "1", false)]
+    [InlineData("!!bool True", "true", true)]
+    public void Formats_a_typed_environment_value_the_way_compose_passes_it(string written, string value, bool formatted)
+    {
+        var project = Parse($"services:\n  app:\n    environment:\n      V: {written}\n");
+
+        var step = Assert.Single(Service(project).Layers("V"));
+        Assert.Equal(value, step.Value);
+        Assert.Equal(formatted ? "YAML reads this value as a number, a boolean or a date, so compose passes it formatted; quote it to keep the text as written" : null, step.Note);
+        Assert.Empty(Service(project).Warnings);
+    }
+
+    [Theory]
+    [InlineData("!!int 3.10", "!!int")]
+    [InlineData("!!int -0", "!!int")]
+    [InlineData("!!int 2001-01-01", "!!int")]
+    [InlineData("!!bool 1", "!!bool")]
+    [InlineData("!!bool yes", "!!bool")]
+    [InlineData("!!float 18446744073709551615", "!!float")]
+    [InlineData("!!float 1e400", "!!float")]
+    [InlineData("!!timestamp 5", "!!timestamp")]
+    public void Warns_that_compose_refuses_a_value_that_does_not_fit_its_tag(string written, string tag)
+    {
+        var project = Parse($"services:\n  app:\n    environment:\n      V: {written}\n");
+
+        var service = Service(project);
+        var step = Assert.Single(service.Layers("V"));
+        Assert.Equal(written[(tag.Length + 1)..], step.Value);
+        Assert.Null(step.Note);
+        Assert.Equal($"compose.yaml:4: the value of V in service app does not fit its tag {tag}, so docker compose refuses the file; it is shown as written.", Assert.Single(service.Warnings));
+    }
+
+    [Fact]
+    public void Keeps_the_text_of_a_list_entry_or_an_interpolated_value()
+    {
+        var project = Parse("services:\n  app:\n    environment:\n      - A=3.10\n  other:\n    environment:\n      B: ${V}\n", o => o.Variables["V"] = "3.10");
+
+        Assert.Equal("3.10", Service(project).Environment["A"]);
+        Assert.Equal("3.10", Service(project, "other").Environment["B"]);
+    }
+
     [Fact]
     public void Reset_and_override_tags_drop_what_earlier_files_set()
     {

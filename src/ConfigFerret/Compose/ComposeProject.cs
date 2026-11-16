@@ -17,7 +17,12 @@ namespace ConfigFerret.Compose;
 /// A service's environment is each <c>env_file</c> in order, then its <c>environment</c> entries, which win. A later
 /// compose file's <c>environment</c> entry wins over an earlier one's; <c>env_file</c> lists are appended, and a path
 /// listed again keeps its first place.
-/// <c>!reset</c> and <c>!override</c> tags and YAML merge keys (<c>&lt;&lt;: *anchor</c>) are applied.
+/// <c>!reset</c> and <c>!override</c> tags and YAML merge keys (<c>&lt;&lt;: *anchor</c>) are applied. Like compose, an
+/// unquoted value in the map form of <c>environment</c> that YAML reads as a number, a boolean or a date, or a value
+/// tagged <c>!!int</c>, <c>!!float</c>, <c>!!bool</c> or <c>!!timestamp</c>, is passed as Go formats it: <c>3.10</c>
+/// becomes <c>3.1</c>, <c>0755</c> becomes <c>493</c> and <c>2001-01-01</c> becomes
+/// <c>2001-01-01 00:00:00 +0000 UTC</c>. A value that does not fit its tag, which compose refuses, is kept as written
+/// with a warning.
 /// </para>
 /// <para>
 /// <c>${VAR}</c> references in the compose files are filled in from <see cref="ComposeOptions.Variables"/> (the
@@ -592,15 +597,15 @@ public sealed class ComposeProject
             return;
         }
 
-        List<(string Name, string? Value, YamlNode Node)> entries = node switch
+        List<(string Name, string? Value, YamlNode Node, bool Typed)> entries = node switch
         {
-            YamlMappingNode map => [.. MergedPairs(map, 0).Values.Select(p => MapEntry(part, p.Key, p.Value))],
-            YamlSequenceNode seq => [.. seq.Children.Select(c => SplitListEntry(part, c))],
+            YamlMappingNode map => [.. MergedPairs(map, 0).Values.Select(p => MapEntry(part, p.Key, p.Value, warnings))],
+            YamlSequenceNode seq => [.. seq.Children.Select(c => SplitListEntry(part, c)).Select(e => (e.Name, e.Value, e.Node, false))],
             _ when node.IsNull() => [],
             _ => throw new FormatException($"{Yaml.Location(part.File.Display, node)}: environment must be a mapping or a list."),
         };
 
-        foreach (var (name, value, at) in entries.Select(e => (e.Name, e.Value, Yaml.Location(part.File.Display, e.Node))))
+        foreach (var (name, value, at, typed) in entries.Select(e => (e.Name, e.Value, Yaml.Location(part.File.Display, e.Node), e.Typed)))
         {
             if (name.Length == 0)
             {
@@ -615,14 +620,42 @@ public sealed class ComposeProject
                 environment[name] = list = [];
             }
 
-            list.Add(new EnvDeclaration(name, expanded, interpolation.References, at));
+            list.Add(new EnvDeclaration(name, expanded, interpolation.References, at) { Typed = typed });
         }
     }
 
-    private static (string Name, string? Value, YamlNode Node) MapEntry(Part part, YamlScalarNode key, YamlNode value) =>
-        value is YamlScalarNode
-            ? (key.Value!, value.Scalar(), key)
-            : throw new FormatException($"{Yaml.Location(part.File.Display, value)}: the value of {key.Value} must be a string, a number or a boolean.");
+    // Like compose, a plain value that YAML reads as a number, a boolean or a date, or a value tagged !!int, !!float,
+    // !!bool or !!timestamp, is passed as compose formats it. go-yaml refuses the whole file for a value that does not
+    // fit its tag; it is kept as written here, with a warning that names the tag and not the value.
+    private static (string Name, string? Value, YamlNode Node, bool Typed) MapEntry(Part part, YamlScalarNode key, YamlNode value, List<string> warnings)
+    {
+        if (value is not YamlScalarNode scalar)
+        {
+            throw new FormatException($"{Yaml.Location(part.File.Display, value)}: the value of {key.Value} must be a string, a number or a boolean.");
+        }
+
+        if (scalar.Value is { } text && TypedTag(scalar) is (true, var tag))
+        {
+            if (ComposeScalar.Format(text, tag) is { } formatted)
+            {
+                return formatted != text ? (key.Value!, formatted, key, true) : (key.Value!, value.Scalar(), key, false);
+            }
+
+            if (tag is not null)
+            {
+                warnings.Add($"{Yaml.Location(part.File.Display, key)}: the value of {key.Value} in service {part.Service} does not fit its tag {tag.Replace("tag:yaml.org,2002:", "!!", StringComparison.Ordinal)}, so docker compose refuses the file; it is shown as written.");
+            }
+        }
+
+        return (key.Value!, value.Scalar(), key, false);
+    }
+
+    // Whether go-yaml types a scalar, and by which tag: a plain one without a tag by what it reads as, any one tagged
+    // !!int, !!float, !!bool or !!timestamp by its tag. Others, such as a quoted one, are text.
+    private static (bool Typed, string? Tag) TypedTag(YamlScalarNode scalar) =>
+        scalar.Tag.IsEmpty ? (scalar.Style == ScalarStyle.Plain, null)
+        : scalar.Tag.Value is ComposeScalar.IntTag or ComposeScalar.FloatTag or ComposeScalar.BoolTag or ComposeScalar.TimestampTag ? (true, scalar.Tag.Value)
+        : (false, null);
 
     private static (string Name, string? Value, YamlNode Node) SplitListEntry(Part part, YamlNode item)
     {
@@ -719,8 +752,13 @@ public sealed class ComposeProject
         IReadOnlyList<DotEnvReference> references;
         if (declaration.Value is not null)
         {
+            // The note never shows the value, since notes are not redacted.
             references = declaration.References;
-            step = step with { Value = declaration.Value };
+            step = step with
+            {
+                Value = declaration.Value,
+                Note = declaration.Typed ? "YAML reads this value as a number, a boolean or a date, so compose passes it formatted; quote it to keep the text as written" : null,
+            };
         }
         else if (Lookup(declaration.Name) is { } found)
         {
@@ -977,7 +1015,11 @@ public sealed class ComposeProject
 
     private sealed record EnvFileDeclaration(string Display, string? FullPath, bool Required, bool Raw, string At);
 
-    private sealed record EnvDeclaration(string Name, string? Value, IReadOnlyList<DotEnvReference> References, string At);
+    // Typed is true for a value that YAML reads as a number, a boolean or a date and that compose passes formatted.
+    private sealed record EnvDeclaration(string Name, string? Value, IReadOnlyList<DotEnvReference> References, string At)
+    {
+        public bool Typed { get; init; }
+    }
 
     private sealed record MountUse(string Name, bool IsSecret, string Path, string At);
 
