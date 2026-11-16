@@ -18,11 +18,11 @@ public class KeyVaultLoadTests
     internal static string Value(string name, string value = SecretValue, string version = "v1") =>
         $$$"""{"value":"{{{value}}}","id":"{{{Vault}}}secrets/{{{name}}}/{{{version}}}","attributes":{"enabled":true}}""";
 
-    internal static Task<AzureKeyVaultSecrets> Load(FakeAzureHandler handler, Action<AzureKeyVaultOptions>? configure = null, FakeCredential? credential = null)
+    internal static Task<AzureKeyVaultSecrets> Load(FakeAzureHandler handler, Action<AzureKeyVaultOptions>? configure = null, FakeCredential? credential = null, bool defaultRetries = false)
     {
         var options = new AzureKeyVaultOptions { VaultUri = new(Vault) };
         configure?.Invoke(options);
-        return AzureKeyVaultSecrets.LoadAsync(options, credential ?? new FakeCredential(), handler.KeyVaultOptions(), TestContext.Current.CancellationToken);
+        return AzureKeyVaultSecrets.LoadAsync(options, credential ?? new FakeCredential(), handler.KeyVaultOptions(defaultRetries), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -136,6 +136,69 @@ public class KeyVaultLoadTests
 
         Assert.Equal("Azure Key Vault contoso-prod sent a response that could not be read.", ex.Message);
         Assert.NotNull(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task A_vault_that_cannot_be_reached_throws_a_request_failure_that_names_the_vault()
+    {
+        var handler = new FakeAzureHandler().Unreachable();
+
+        var ex = await Assert.ThrowsAsync<RequestFailedException>(() => Load(handler, defaultRetries: true));
+
+        Assert.Equal("Could not reach Azure Key Vault contoso-prod.", ex.Message);
+        Assert.Equal(0, ex.Status);
+        Assert.IsType<AggregateException>(ex.InnerException);
+        Assert.Equal(new SecretClientOptions().Retry.MaxRetries + 1, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_vault_that_cannot_be_reached_for_a_value_throws_without_trying_the_other_values()
+    {
+        var handler = new FakeAzureHandler()
+            .Respond("/secrets", Page(null, Item("Db--Password"), Item("Api--Key")))
+            .Respond("/secrets/Api--Key", Value("Api--Key"))
+            .Unreachable("/secrets/Db--Password");
+
+        var ex = await Assert.ThrowsAsync<RequestFailedException>(() => Load(handler, o => o.IncludeValues = true, defaultRetries: true));
+
+        Assert.Equal("Could not reach Azure Key Vault contoso-prod.", ex.Message);
+        Assert.IsType<AggregateException>(ex.InnerException);
+        Assert.DoesNotContain("/secrets/Api--Key", handler.Paths);
+    }
+
+    [Fact]
+    public async Task A_vault_that_never_answers_throws_a_request_failure_that_names_the_vault()
+    {
+        var handler = new FakeAzureHandler().Unreachable(failure: () => new TaskCanceledException("fake network timeout"));
+
+        var ex = await Assert.ThrowsAsync<RequestFailedException>(() => Load(handler, defaultRetries: true));
+
+        Assert.Equal("Could not reach Azure Key Vault contoso-prod.", ex.Message);
+        Assert.IsType<AggregateException>(ex.InnerException);
+        Assert.Equal(new SecretClientOptions().Retry.MaxRetries + 1, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_load_cancelled_by_the_caller_after_a_failed_try_throws_a_cancellation()
+    {
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var tries = 0;
+        var handler = new FakeAzureHandler().Unreachable(failure: () =>
+        {
+            if (++tries == 1)
+            {
+                return new HttpRequestException("Name or service not known (fake-unreachable-host:443)");
+            }
+
+            cancel.Cancel();
+            return new TaskCanceledException("fake cancellation", null, cancel.Token);
+        });
+        var options = new AzureKeyVaultOptions { VaultUri = new(Vault) };
+
+        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AzureKeyVaultSecrets.LoadAsync(options, new FakeCredential(), handler.KeyVaultOptions(defaultRetries: true), cancel.Token));
+
+        Assert.Equal(cancel.Token, ex.CancellationToken);
+        Assert.Equal(2, tries);
     }
 
     [Fact]

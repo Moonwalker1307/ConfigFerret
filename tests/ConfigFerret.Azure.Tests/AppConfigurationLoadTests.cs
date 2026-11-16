@@ -32,11 +32,11 @@ public class AppConfigurationLoadTests
 
     internal static string FlagsPath(string label = "%00") => $"/kv?key=.appconfig.featureflag%2F%2A&label={label}";
 
-    internal static Task<AzureAppConfigurationSettings> Load(FakeAzureHandler handler, Action<AzureAppConfigurationOptions>? configure = null, bool connectionString = false)
+    internal static Task<AzureAppConfigurationSettings> Load(FakeAzureHandler handler, Action<AzureAppConfigurationOptions>? configure = null, bool connectionString = false, bool defaultRetries = false)
     {
         var options = connectionString ? new AzureAppConfigurationOptions { ConnectionString = ConnectionString } : new AzureAppConfigurationOptions { Endpoint = new(Endpoint) };
         configure?.Invoke(options);
-        return AzureAppConfigurationSettings.LoadAsync(options, connectionString ? null : new FakeCredential(), handler.AppConfigurationOptions(), TestContext.Current.CancellationToken);
+        return AzureAppConfigurationSettings.LoadAsync(options, connectionString ? null : new FakeCredential(), handler.AppConfigurationOptions(defaultRetries), TestContext.Current.CancellationToken);
     }
 
     private static FakeAzureHandler Handler() => new() { Challenge = false };
@@ -253,6 +253,30 @@ public class AppConfigurationLoadTests
         var ex = await Assert.ThrowsAsync<RequestFailedException>(() => Load(handler));
 
         Assert.Equal("Azure App Configuration contoso sent a response that could not be read.", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_store_that_cannot_be_reached_throws_a_request_failure_that_names_the_store()
+    {
+        var handler = Handler().Unreachable();
+
+        var ex = await Assert.ThrowsAsync<RequestFailedException>(() => Load(handler, defaultRetries: true));
+
+        Assert.Equal("Could not reach Azure App Configuration contoso.", ex.Message);
+        Assert.Equal(0, ex.Status);
+        Assert.IsType<AggregateException>(ex.InnerException);
+        Assert.Equal(new ConfigurationClientOptions().Retry.MaxRetries + 1, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_store_that_never_answers_throws_a_request_failure_that_names_the_store()
+    {
+        var handler = Handler().Unreachable(failure: () => new TaskCanceledException("fake network timeout"));
+
+        var ex = await Assert.ThrowsAsync<RequestFailedException>(() => Load(handler, defaultRetries: true));
+
+        Assert.Equal("Could not reach Azure App Configuration contoso.", ex.Message);
+        Assert.IsType<AggregateException>(ex.InnerException);
     }
 
     [Fact]
