@@ -360,7 +360,7 @@ Azure DevOps variables match by their exact name or the name scripts see (`Db.Ti
 and each step uses the environment scope that fits `Environment`, ordered instance, groups, project. Both register with
 `AddConfigFerretAzureDevOps(...)` or `AddConfigFerretGitLab(...)` and load with `WithAzureDevOpsAsync` or
 `WithGitLabAsync`, with the same startup checks as above. Secret, masked and hidden variables appear by name and are
-redacted.
+redacted. GitLab file variables and GitLab variables named like secrets (`SMTP_PASSWORD`) are redacted too.
 
 ### Inside a running pod
 

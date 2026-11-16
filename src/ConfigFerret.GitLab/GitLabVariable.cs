@@ -36,7 +36,10 @@ public sealed record GitLabVariable(
     bool IsFile = false,
     string? Description = null)
 {
-    /// <summary>True when the value is secret: a masked or hidden variable.</summary>
+    /// <summary>
+    /// True when GitLab treats the value as secret: a masked or hidden variable. A trace also redacts a file variable and
+    /// a variable whose key looks like a secret's.
+    /// </summary>
     public bool IsSensitive => IsMasked || IsHidden;
 }
 
