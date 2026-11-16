@@ -334,10 +334,7 @@ public class TraceCommandTests
     [InlineData("size", "is bigger than 64 MB")]
     public async Task Takes_the_application_name_from_the_file_name_of_a_project_it_does_not_read(string how, string reason)
     {
-        if (how == "link" && OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(how == "link" && OperatingSystem.IsWindows(), "Creating a symbolic link on Windows needs rights the tests may not have.");
 
         var root = Directory.CreateTempSubdirectory("configferret-tool-");
         try
@@ -408,10 +405,7 @@ public class TraceCommandTests
     [Fact]
     public async Task Traces_with_user_secrets_id_when_the_project_file_links_to_nothing()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link on Windows needs rights the tests may not have.");
 
         var app = Directory.CreateTempSubdirectory("configferret-app-");
         try
@@ -521,10 +515,7 @@ public class TraceCommandTests
     [Fact]
     public async Task Reads_a_settings_file_that_links_outside_the_app_folder_once_when_passed_with_config()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return; // Creating a symbolic link needs extra rights on Windows.
-        }
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link on Windows needs rights the tests may not have.");
 
         var root = Directory.CreateTempSubdirectory("configferret-tool-");
         try
