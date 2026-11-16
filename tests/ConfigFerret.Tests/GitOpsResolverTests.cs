@@ -478,6 +478,20 @@ public sealed class GitOpsResolverTests : IDisposable
     }
 
     [Fact]
+    public void Warns_once_about_a_config_map_in_the_deployed_folder_whose_name_holds_a_slash()
+    {
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a/b}\ndata: {K: '${VAR}'}\n");
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {VAR: fake-value}"), new GitOpsOptions { RepositoryRoot = _root });
+        var diagnostics = new TraceDiagnostics();
+
+        resolver.Resolve(ConfigMapKey("a/b", "K"), diagnostics);
+        resolver.Resolve(ConfigMapKey("a/b", "K"), diagnostics);
+
+        Assert.Equal(["Skipped ConfigMap a/b in apps/cm.yaml: a Kubernetes name cannot hold a slash."], resolver.Warnings);
+        Assert.Single(diagnostics.Warnings, w => w.StartsWith("Skipped ConfigMap a/b", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Warns_about_a_config_map_whose_name_holds_a_slash()
     {
         var resolver = new GitOpsResolver(
