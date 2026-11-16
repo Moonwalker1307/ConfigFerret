@@ -32,6 +32,23 @@ public class AppConfigurationResolverTests
     }
 
     [Fact]
+    public void Names_a_feature_flag_by_its_key_when_it_has_no_FeatureManagement_prefix()
+    {
+        var settings = new AzureAppConfigurationSettings("contoso",
+        [
+            new("Beta", null, "contoso") { Kind = AzureAppConfigurationSettingKind.FeatureFlag, Enabled = true },
+            new(".appconfig.featureflag/Gamma", null, "contoso") { Kind = AzureAppConfigurationSettingKind.FeatureFlag, ConfigurationKey = "featuremanagement:Gamma", Enabled = false },
+        ]);
+        var resolver = new AzureAppConfigurationResolver(settings, new AzureAppConfigurationTraceOptions());
+
+        var beta = Assert.Single(resolver.Resolve(Provider("AzureAppConfigurationProvider", "Beta", "True"), new TraceDiagnostics()));
+        var gamma = Assert.Single(resolver.Resolve(Provider("AzureAppConfigurationProvider", "FeatureManagement:Gamma", "False"), new TraceDiagnostics()));
+
+        Assert.Equal("Azure App Configuration feature flag Beta (contoso)", beta.Source);
+        Assert.Equal("Azure App Configuration feature flag Gamma (contoso)", gamma.Source);
+    }
+
+    [Fact]
     public void Links_an_environment_variable_to_every_label_lowest_first()
     {
         var chain = Resolve(Env("DB__TIMEOUT", "60"));

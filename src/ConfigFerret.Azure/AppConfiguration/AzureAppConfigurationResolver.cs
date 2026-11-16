@@ -117,7 +117,11 @@ internal sealed class AzureAppConfigurationResolver(AzureAppConfigurationSetting
                     : $"Key Vault reference to {setting.SecretId}; the secret is not read here");
                 break;
             case AzureAppConfigurationSettingKind.FeatureFlag:
-                source = $"Azure App Configuration feature flag {setting.ConfigurationKey[FeatureManagement.Length..]}";
+                // A snapshot built by hand may give a flag any configuration key, not only FeatureManagement:<name>.
+                var name = setting.ConfigurationKey.StartsWith(FeatureManagement, StringComparison.OrdinalIgnoreCase)
+                    ? setting.ConfigurationKey[FeatureManagement.Length..]
+                    : setting.ConfigurationKey;
+                source = $"Azure App Configuration feature flag {name}";
                 notes.Add(DescribeFlag(setting.Enabled, setting.Filters));
                 break;
             default:
