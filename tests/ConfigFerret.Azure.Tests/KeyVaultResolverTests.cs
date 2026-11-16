@@ -1,3 +1,4 @@
+using Azure.Extensions.AspNetCore.Configuration.Secrets;
 using ConfigFerret.Sources;
 using Microsoft.Extensions.Configuration;
 using static ConfigFerret.Azure.Tests.TestLayers;
@@ -245,6 +246,24 @@ public class KeyVaultResolverTests
         Assert.All(loaded.Entries, e => Assert.True(e.IsSensitive));
         Assert.All(loaded.Entries, e => Assert.Equal("contoso-prod", e.Location));
         Assert.Equal("disabled", loaded.Entries.Single(e => e.Name == "Api--Key").Detail);
+    }
+
+    [Fact]
+    public void Hides_a_value_from_the_Key_Vault_provider_whose_secret_was_not_loaded()
+    {
+        const string connection = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=FAKE-ACCOUNT-KEY==";
+        var configuration = new ConfigurationBuilder()
+            .Add(new AzureKeyVaultConfigurationProvider(new() { ["Storage:Account1"] = connection }))
+            .Build();
+
+        var report = ConfigTracer.For(configuration).WithOptions(o => o.Environment = new Dictionary<string, string?>()).WithAzureKeyVault(Secrets).Trace();
+
+        var setting = report.Find("Storage:Account1")!;
+        Assert.Empty(setting.EffectiveStep!.Origins);
+        Assert.True(setting.IsSensitive);
+        Assert.DoesNotContain(connection, report.Explain("Storage:Account1"), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.ToText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(connection, report.ToJson(), StringComparison.Ordinal);
     }
 
     [Fact]
