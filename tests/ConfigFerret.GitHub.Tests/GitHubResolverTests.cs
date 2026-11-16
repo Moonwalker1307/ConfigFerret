@@ -112,9 +112,23 @@ public class GitHubResolverTests
     {
         var diagnostics = new TraceDiagnostics();
 
-        Assert.Empty(Resolve(EnvStep("X", "1"), o => o.Map("X", "MISSING", GitHubVariableKind.Secret), diagnostics));
+        var step = Assert.Single(Resolve(EnvStep("X", "1"), o => o.Map("X", "MISSING", GitHubVariableKind.Secret), diagnostics));
 
         Assert.Contains("secrets.MISSING", Assert.Single(diagnostics.Warnings), StringComparison.Ordinal);
+        Assert.Equal("GitHub secret MISSING", step.Source);
+        Assert.True(step.IsSensitive);
+        Assert.False(step.IsInferred);
+        Assert.Null(step.Value);
+        Assert.Null(step.Reference);
+        Assert.Equal("the secret was not loaded", step.Note);
+    }
+
+    [Fact]
+    public void Says_which_workflow_line_links_to_a_secret_that_was_not_loaded()
+    {
+        var step = Assert.Single(Resolve(EnvStep("X", "1"), o => o.AddWorkflowText("env:\n  X: ${{ secrets.MISSING }}\n", "deploy.yml")));
+
+        Assert.Equal("deploy.yml line 2 sets X from ${{ secrets.MISSING }}; the secret was not loaded", step.Note);
     }
 
     [Fact]
@@ -164,6 +178,60 @@ public class GitHubResolverTests
             Environment.SetEnvironmentVariable(prefix + "DB_TIMEOUT", null);
             Environment.SetEnvironmentVariable(prefix + "DB_PASSWORD", null);
         }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Redacts_a_value_linked_to_a_secret_that_was_not_loaded(bool fromWorkflow)
+    {
+        const string prefix = "CFGHUNLOADED_";
+        const string secret = "hunter2";
+        var url = $"postgres://app:{secret}@db/prod";
+        Environment.SetEnvironmentVariable(prefix + "Database__Url", url);
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+
+            var report = ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [prefix + "Database__Url"] = url })
+                .WithGitHub(new GitHubVariables([]), o =>
+                {
+                    if (fromWorkflow)
+                    {
+                        o.AddWorkflowText($"env:\n  {prefix}Database__Url: ${{{{ secrets.DATABASE_URL }}}}\n", "deploy.yml");
+                    }
+                    else
+                    {
+                        o.Map(prefix + "Database__Url", "DATABASE_URL", GitHubVariableKind.Secret);
+                    }
+                })
+                .Trace();
+
+            Assert.DoesNotContain(secret, report.ToText(), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, report.ToJson(), StringComparison.Ordinal);
+            var setting = report.Find("Database:Url")!;
+            Assert.True(setting.IsSensitive);
+            Assert.Equal("***", setting.Value);
+            var origin = Assert.Single(Assert.Single(setting.Steps).Origins);
+            Assert.Equal("GitHub secret DATABASE_URL", origin.Source);
+            Assert.True(origin.IsSensitive);
+            Assert.Null(origin.Value);
+            Assert.All(Flatten(setting.Steps), s =>
+            {
+                Assert.DoesNotContain(secret, s.Value ?? string.Empty, StringComparison.Ordinal);
+                Assert.DoesNotContain(secret, s.Note ?? string.Empty, StringComparison.Ordinal);
+            });
+            Assert.Contains(report.Warnings, w => w.Contains("secrets.DATABASE_URL", StringComparison.Ordinal));
+            Assert.All(report.Warnings, w => Assert.DoesNotContain(secret, w, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(prefix + "Database__Url", null);
+        }
+
+        static IEnumerable<ProvenanceStep> Flatten(IEnumerable<ProvenanceStep> steps) =>
+            steps.SelectMany(s => Flatten(s.Origins).Prepend(s));
     }
 
     [Fact]

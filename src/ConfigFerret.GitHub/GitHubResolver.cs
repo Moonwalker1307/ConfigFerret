@@ -41,7 +41,9 @@ internal sealed class GitHubResolver(GitHubVariables variables, GitHubTraceOptio
             {
                 var what = mapping.Kind == GitHubVariableKind.Secret ? "secrets" : "vars";
                 diagnostics.Warn($"{name} is linked to {what}.{mapping.VariableName}{(mapping.Where is null ? string.Empty : $" ({mapping.Where})")}, but no such GitHub {(mapping.Kind == GitHubVariableKind.Secret ? "secret" : "variable")} was loaded.");
-                return [];
+
+                // The value still comes from a secret, so keep a step that makes the layer sensitive.
+                return mapping.Kind == GitHubVariableKind.Secret ? [NotLoadedSecret(mapping)] : [];
             }
         }
         else if (options.MatchByName)
@@ -59,6 +61,16 @@ internal sealed class GitHubResolver(GitHubVariables variables, GitHubTraceOptio
 
         return found.Select(v => ToStep(v, layer, mapping)).ToList();
     }
+
+    // A secret the token could not list, an environment secret without Environment, or IncludeSecrets = false.
+    private static ProvenanceStep NotLoadedSecret(GitHubMapping mapping) => new()
+    {
+        Kind = LayerKind.GitHubActions,
+        Source = $"GitHub secret {mapping.VariableName}",
+        IsSensitive = true,
+        Note = (mapping.Where is null ? string.Empty : $"{mapping.Where} sets {mapping.Name} from ${{{{ secrets.{mapping.VariableName} }}}}; ")
+            + "the secret was not loaded",
+    };
 
     private static ProvenanceStep ToStep(GitHubVariable variable, ProvenanceStep layer, GitHubMapping? mapping)
     {

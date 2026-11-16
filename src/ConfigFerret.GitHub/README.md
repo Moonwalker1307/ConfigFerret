@@ -96,7 +96,9 @@ so the environment one wins.
 - The token is sent only in the `Authorization` header, only over HTTPS, and redirects are not followed. It never
   appears in a report or an exception message.
 - GitHub never returns secret values, so secrets show up by name only and are marked sensitive. The usual ConfigFerret
-  redaction then hides the value of every layer in that chain.
+  redaction then hides the value of every layer in that chain. A layer that a workflow line or an explicit link ties
+  to a secret is marked sensitive even when the secret was not loaded (a token without "Secrets: read",
+  `IncludeSecrets = false`, or an environment secret without `Environment`); the trace then also warns.
 - Organization entries need an organization-owned repository; when they cannot be read, the trace carries a warning
   instead of failing.
 
