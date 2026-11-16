@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 
 namespace ConfigFerret.AzureDevOps.Tests;
@@ -310,6 +311,67 @@ public class AzureDevOpsResolverTests
             Environment.SetEnvironmentVariable(prefix + "TIMEOUT_ALIAS", null);
         }
     }
+
+    [Fact]
+    public void Follows_a_variable_that_refers_to_itself_to_the_other_levels_once()
+    {
+        const string prefix = "CFADOSELF_";
+        var yaml = new StringBuilder($"variables:\n- name: {prefix}VERSION\n  value: '1.0'\nstages:\n");
+        for (var i = 0; i < 5; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"- stage: service_{i}\n  variables:\n  - name: {prefix}VERSION\n    value: $({prefix}VERSION)\n");
+        }
+
+        var groups = new AzureDevOpsVariableGroups("contoso/api", [new(1, "release", AzureDevOpsGroupType.Vsts, null, null, null, [new(prefix + "VERSION", "1.2.3", false, "release", 1)])]);
+
+        var setting = TraceOne(prefix, "VERSION", "1.2.3", groups, yaml.ToString()).Find("VERSION")!;
+
+        var chain = Assert.Single(setting.Steps).Origins;
+        Assert.Equal(["1.2.3", "1.0", .. Enumerable.Repeat($"$({prefix}VERSION)", 5)], chain.Select(s => s.Value));
+        Assert.All(chain.Skip(2), stage =>
+        {
+            Assert.Equal(["1.2.3", "1.0"], stage.Origins.Select(s => s.Value));
+            Assert.Equal([false, true], stage.Origins.Select(s => s.IsInferred));
+        });
+        Assert.Equal(18, Count(setting.Steps));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Keeps_the_trace_small_when_many_stages_refer_to_the_variable_itself()
+    {
+        // Without leaving the self references out, each of the 40 stages leads to the 39 others, for each level followed.
+        const string prefix = "CFADOLOOP_";
+        var yaml = new StringBuilder($"variables:\n  {prefix}PATH: /usr/bin\nstages:\n");
+        for (var i = 0; i < 40; i++)
+        {
+            yaml.Append(CultureInfo.InvariantCulture, $"- stage: s{i}\n  variables:\n  - name: {prefix}PATH\n    value: $({prefix}PATH)\n");
+        }
+
+        var report = await Task.Run(() => TraceOne(prefix, "PATH", "/usr/bin", new AzureDevOpsVariableGroups("contoso/api", []), yaml.ToString()), TestContext.Current.CancellationToken);
+
+        var steps = report.Find("PATH")!.Steps;
+        Assert.Equal(41, Assert.Single(steps).Origins.Count);
+        Assert.Equal(82, Count(steps));
+    }
+
+    private static ProvenanceReport TraceOne(string prefix, string key, string value, AzureDevOpsVariableGroups groups, string pipeline)
+    {
+        Environment.SetEnvironmentVariable(prefix + key, value);
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            return ConfigTracer.For(configuration)
+                .WithOptions(o => o.Environment = new Dictionary<string, string?> { [prefix + key] = value })
+                .WithAzureDevOps(groups, o => o.AddPipelineText(pipeline, "azure-pipelines.yml"))
+                .Trace();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(prefix + key, null);
+        }
+    }
+
+    private static int Count(IEnumerable<ProvenanceStep> steps) => steps.Sum(s => 1 + Count(s.Origins));
 
     [Fact]
     public void Ends_a_variables_block_at_the_next_key_and_reads_inline_and_template_forms()

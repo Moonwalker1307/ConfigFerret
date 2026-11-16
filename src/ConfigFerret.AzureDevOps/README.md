@@ -90,7 +90,11 @@ The messages never include the token.
   marked as inferred.
 
 Pipeline files also add their own variables: `- name: N` with `value: V`, and `N: V` in mapping form, at the pipeline,
-stage or job level. A variable whose whole value is `$(Other)` is traced on to `Other`.
+stage or job level. A variable whose whole value is `$(Other)` is traced on to `Other`, leaving out the pipeline
+variables that are themselves `Other: $(Other)`, since they cannot supply a value. A variable that refers to itself
+(`Version: $(Version)` in a stage) is traced on to the other `Version` variables, once: the ones in pipeline files are
+marked as inferred, since which one Azure Pipelines expands the reference to is not certain, and variable group
+variables are listed as usual.
 
 When several groups or pipeline variables set the same name, they are listed lowest priority first, in the order the
 pipeline's `variables:` lists them (`- group: X` lines and variables), so the last one wins, the same as Azure Pipelines.
