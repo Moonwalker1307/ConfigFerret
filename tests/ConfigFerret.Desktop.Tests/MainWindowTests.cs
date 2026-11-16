@@ -307,9 +307,11 @@ public sealed class MainWindowTests : IDisposable
     }
 
     [Theory]
-    [InlineData("[]")]
-    [InlineData("\"ferret-fan\"")]
-    public async Task An_answer_that_is_not_a_user_is_shown_instead_of_ending_the_app(string body)
+    [InlineData("[]", "did not say who")]
+    [InlineData("\"ferret-fan\"", "did not say who")]
+    [InlineData("""{"login":"\ud800"}""", "not valid UTF-16")]
+    [InlineData("<html>", "not JSON")]
+    public async Task An_answer_that_is_not_a_user_is_shown_instead_of_ending_the_app(string body, string expected)
     {
         var credentials = new InMemoryCredentialStore();
         using var viewModel = CreateViewModel(new FakeGitHub().Json("/user", body), credentials);
@@ -319,7 +321,7 @@ public sealed class MainWindowTests : IDisposable
 
         Assert.Null(viewModel.GitHubLogin);
         Assert.Null(credentials.Read(MainWindowViewModel.GitHubAccountName));
-        Assert.Contains("did not say who", viewModel.ConnectionError, StringComparison.Ordinal);
+        Assert.Contains(expected, viewModel.ConnectionError, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -347,6 +349,95 @@ public sealed class MainWindowTests : IDisposable
 
         Assert.False(viewModel.IsOctopusConnected);
         Assert.Contains("no default space", viewModel.ConnectionError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_answer_larger_than_the_limit_is_refused_instead_of_buffered()
+    {
+        const long limit = ConfigFerret.Shared.JsonApi.MaxResponseBytes;
+        using var handler = new LargeAnswerHandler(2 * limit);
+        using var viewModel = CreateViewModel(handler, new InMemoryCredentialStore());
+        viewModel.GitHubTokenInput = "fake-token";
+
+        await viewModel.ConnectGitHubCommand.ExecuteAsync(null);
+
+        Assert.Null(viewModel.GitHubLogin);
+        Assert.NotNull(viewModel.ConnectionError);
+        Assert.True(handler.BytesRead <= limit + (1024 * 1024), $"{handler.BytesRead} bytes were read");
+    }
+
+    /// <summary>Answers every request with a JSON user padded to more than <paramref name="padding"/> bytes, sent without a length.</summary>
+    private sealed class LargeAnswerHandler(long padding) : HttpMessageHandler
+    {
+        private readonly List<PaddedJsonStream> _answers = [];
+
+        /// <summary>How much of the answers was read, all requests together.</summary>
+        public long BytesRead => _answers.Sum(a => a.Position);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(Answer());
+
+        // The client that sent the request owns the answer and disposes it.
+        private HttpResponseMessage Answer()
+        {
+            var answer = new PaddedJsonStream(padding);
+            _answers.Add(answer);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StreamContent(answer) };
+        }
+    }
+
+    /// <summary>{"login":"ferret-fan","padding":"xxx…"}, made as it is read, so the test holds no copy of it.</summary>
+    private sealed class PaddedJsonStream(long padding) : Stream
+    {
+        private static readonly byte[] Start = "{\"login\":\"ferret-fan\",\"padding\":\""u8.ToArray();
+        private static readonly byte[] End = "\"}"u8.ToArray();
+        private readonly long _length = Start.Length + padding + End.Length;
+        private long _position;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            var count = (int)Math.Min(buffer.Length, _length - _position);
+            for (var i = 0; i < count; i++, _position++)
+            {
+                buffer[i] = _position < Start.Length ? Start[_position]
+                    : _position >= _length - End.Length ? End[_position - (_length - End.Length)]
+                    : (byte)'x';
+            }
+
+            return count;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer, offset, count));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
 

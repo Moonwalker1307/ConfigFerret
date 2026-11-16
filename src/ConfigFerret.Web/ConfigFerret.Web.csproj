@@ -35,6 +35,7 @@
     <Compile Include="../ConfigFerret.Desktop/Services/**/*.cs" Link="Desktop/Services/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../ConfigFerret.Desktop/ViewModels/**/*.cs" Link="Desktop/ViewModels/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../ConfigFerret.Desktop/Credentials/**/*.cs" Link="Desktop/Credentials/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Shared/JsonApi.cs" Link="Shared/JsonApi.cs" />
   </ItemGroup>
 
   <!-- The logo and icon, served from the root of the site. -->

@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace ConfigFerret.Shared;
 
 /// <summary>
-/// Small GET-and-parse helper shared by the ConfigFerret.GitHub and ConfigFerret.Octopus packages (compiled into each).
+/// Small GET-and-parse helper shared by the ConfigFerret source packages and the desktop and web app (compiled into each).
 /// Credentials go only into request headers, never into URLs, exceptions or logs.
 /// </summary>
 internal static class JsonApi
@@ -94,15 +94,7 @@ internal static class JsonApi
             }
 
             onSuccess?.Invoke(response);
-
-            try
-            {
-                return JsonDocument.Parse(body);
-            }
-            catch (JsonException ex)
-            {
-                throw new HttpRequestException($"{service} returned a response that is not JSON for {uri.AbsolutePath}.", ex);
-            }
+            return Parse(body, uri, service);
         }
         catch (OperationCanceledException ex) when (IsTimeout(ex, timeout, cancellationToken))
         {
@@ -112,13 +104,33 @@ internal static class JsonApi
         }
     }
 
+    /// <summary>
+    /// Parses the body <paramref name="service"/> returned for <paramref name="uri"/>, and throws
+    /// <see cref="HttpRequestException"/> when it is not JSON. For callers that send their requests themselves.
+    /// </summary>
+    public static JsonDocument Parse(string body, Uri uri, string service)
+    {
+        try
+        {
+            return JsonDocument.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new HttpRequestException($"{service} returned a response that is not JSON for {uri.AbsolutePath}.", ex);
+        }
+    }
+
     // Our own timer, or HttpClient's, which reports its Timeout as a cancellation with a TimeoutException inside. A
     // cancellation by the caller's token is left as it is.
     private static bool IsTimeout(OperationCanceledException ex, CancellationTokenSource timeout, CancellationToken cancellationToken) =>
         !cancellationToken.IsCancellationRequested && (timeout.IsCancellationRequested || ex.InnerException is TimeoutException);
 
-    // Reads the body like ReadAsStringAsync, but stops at MaxResponseBytes instead of buffering whatever the server sends.
-    private static async Task<string> ReadBodyAsync(HttpContent content, Uri uri, string service, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads <paramref name="content"/> like ReadAsStringAsync, but stops with <see cref="HttpRequestException"/> at
+    /// <see cref="MaxResponseBytes"/> instead of buffering whatever the server sends, and reads a charset .NET does not
+    /// know as UTF-8 instead of failing. For callers that send their requests themselves.
+    /// </summary>
+    public static async Task<string> ReadBodyAsync(HttpContent content, Uri uri, string service, CancellationToken cancellationToken)
     {
         var tooLarge = $"{service} returned a response for {uri.AbsolutePath} that is larger than {MaxResponseBytes / (1024 * 1024)} MB.";
         if (content.Headers.ContentLength > MaxResponseBytes)

@@ -146,6 +146,17 @@ public class OctopusAccountTests
         Assert.Equal(0, elsewhere.Requests);
     }
 
+    /// <summary>Names a charset .NET does not know in every answer.</summary>
+    private sealed class UnknownCharset(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            response.Content.Headers.ContentType!.CharSet = "nope";
+            return response;
+        }
+    }
+
     private sealed class Loopback : IDisposable
     {
         private readonly System.Net.Sockets.TcpListener _listener = new(IPAddress.Loopback, 0);
@@ -281,6 +292,41 @@ public class OctopusAccountTests
         var handler = Handler().Respond("/api/Spaces-1/projects/all", body);
 
         Assert.Empty(await Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("""[{"Name":"\ud800","Slug":"orders"}]""")]
+    [InlineData("""[{"Name":"Orders","\udc00":true}]""")]
+    public async Task Refuses_an_answer_whose_text_is_not_valid(string body)
+    {
+        var handler = Handler().Respond("/api/Spaces-1/projects/all", body);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("not valid UTF-16", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reads_an_answer_whose_charset_is_unknown_as_utf8()
+    {
+        using var handler = new UnknownCharset(Handler().Respond("/api/Spaces-1/projects/all", """[{"Name":"Orders","Slug":"orders"}]"""));
+        using var http = new HttpClient(handler);
+        var account = new OctopusAccount(http, new Uri("https://octopus.example.test/"), ApiKey, null);
+
+        var project = Assert.Single(await account.ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("Orders", project.Name);
+    }
+
+    [Fact]
+    public async Task Says_so_when_the_answer_is_not_json()
+    {
+        var handler = new FakeHttpHandler().Respond("/api/spaces/all", $"<html>{ApiKey}</html>");
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).ListProjectsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("Octopus returned a response that is not JSON for /api/spaces/all", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(ApiKey, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

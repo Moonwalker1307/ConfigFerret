@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using ConfigFerret.Shared;
 
 namespace ConfigFerret.Desktop.Services;
 
@@ -256,12 +257,24 @@ public sealed class GitHubAccount
         }
     }
 
+    // The body is read and checked as in the GitHub package: an answer larger than JsonApi.MaxResponseBytes, not JSON,
+    // or holding text JsonElement cannot read ends as HttpRequestException, and an unknown charset is read as UTF-8.
     private async Task<JsonDocument> GetJsonAsync(string path, CancellationToken cancellationToken)
     {
         using var response = await SendAsync(path, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, path);
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var uri = new Uri(_apiBase, path);
+        var document = JsonApi.Parse(await JsonApi.ReadBodyAsync(response.Content, uri, "GitHub", cancellationToken).ConfigureAwait(false), uri, "GitHub");
+        try
+        {
+            JsonApi.RequireValidText(document, "GitHub", uri);
+            return document;
+        }
+        catch
+        {
+            document.Dispose();
+            throw;
+        }
     }
 
     // Sends a GET and follows up to MaxRedirects redirects itself. The token goes only to the API's own origin, and a

@@ -434,6 +434,50 @@ public class GitHubAccountTests
     }
 
     [Theory]
+    [InlineData("/user", """{"login":"\ud800"}""")]
+    [InlineData("/user", """{"\ud800":1,"login":"ferret-fan"}""")]
+    [InlineData("/user/repos?per_page=100&page=1&sort=pushed&affiliation=owner,collaborator,organization_member", """[{"full_name":"contoso/orders","description":"\ud800"}]""")]
+    public async Task Refuses_an_answer_whose_text_is_not_valid(string path, string body)
+    {
+        var handler = new FakeHttpHandler().Respond("/user", """{"login":"ferret-fan"}""").Respond(path, body);
+        var account = Account(handler);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await account.GetLoginAsync(TestContext.Current.CancellationToken);
+            await account.ListRepositoriesAsync(TestContext.Current.CancellationToken);
+        });
+
+        Assert.Contains("not valid UTF-16", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("nope")]
+    [InlineData("utf-16")]
+    public async Task Reads_an_answer_in_the_charset_it_names_or_else_as_utf8(string charset)
+    {
+        using var http = new HttpClient(new RedirectingHandler(_ =>
+        {
+            var content = new StringContent("""{"login":"ferret-fan"}""", charset == "utf-16" ? Encoding.Unicode : Encoding.UTF8, "application/json");
+            content.Headers.ContentType!.CharSet = charset;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        }));
+
+        Assert.Equal("ferret-fan", await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).GetLoginAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Says_so_when_the_answer_is_not_json()
+    {
+        var handler = new FakeHttpHandler().Respond("/user", $"<html>{Token}</html>");
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => Account(handler).GetLoginAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("GitHub returned a response that is not JSON for /user", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("{}")]
     [InlineData("""{"environments":{"name":"staging"}}""")]
     [InlineData("""{"environments":"staging"}""")]
