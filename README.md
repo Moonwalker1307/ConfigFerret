@@ -654,6 +654,13 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   the rest can still be traced. Only `secrets`, `configs`, `env_file` and `environment` are read; profiles, `build`
   args and labels are not. A path or name in a compose file that takes its value from a variable named like a secret,
   directly or through other `${VAR}` references, is rejected, since paths and names are never redacted.
+- Docker Compose: like compose, an unquoted value in the map form of `environment` that YAML reads as a number, a
+  boolean or a date, or a value tagged `!!int`, `!!float`, `!!bool` or `!!timestamp`, is shown as compose passes it
+  (`3.10` as `3.1`, `0755` as `493`, `2001-01-01` as `2001-01-01 00:00:00 +0000 UTC`), with a note; quote it to keep
+  the text. Compose before about spring 2023 (compose-go v1.12 and older) passed a date as written. Compose prints
+  the machine's own zone name when a date's offset matches it (`+0100 CET`), where the trace prints the offset twice
+  (`+0100 +0100`). A value that does not fit its tag, such as `!!int 3.10`, is shown as written with a warning, since
+  compose refuses the file.
 - Docker Compose: like compose, an included file sees the environment of the project that includes it (the shell,
   then that project's `.env`) first; its own `env_file` list, or its project directory's `.env`, only adds variables
   that are not set there. One load reads at most 1,000 included projects, counting a file again for each environment
