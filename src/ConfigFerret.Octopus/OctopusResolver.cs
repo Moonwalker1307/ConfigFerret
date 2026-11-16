@@ -82,7 +82,37 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
             }
         }
 
-        return candidates.Select(c => ToStep(c.Variable, layer, how, c.Match.Unknown)).ToList();
+        // Only the last step decides whether the layer is redacted, so it carries the doubt when a sensitive value may win.
+        var mayBeSensitive = !candidates[^1].Variable.IsSensitive && SensitiveMayWin(candidates);
+        return candidates.Select((c, i) => ToStep(c.Variable, layer, how, c.Match.Unknown, mayBeSensitive && i == candidates.Count - 1)).ToList();
+    }
+
+    // A candidate may be the one Octopus uses when it is scoped as specifically as the last one, or when every
+    // candidate ranked above it may not apply because its scope names something that was not given.
+    private static bool SensitiveMayWin(List<(OctopusVariable Variable, (bool Applies, List<string> Unknown) Match)> candidates)
+    {
+        var i = candidates.Count - 1;
+        while (i >= 0)
+        {
+            var top = candidates[i].Variable;
+            var certain = false;
+            for (; i >= 0 && Rank(candidates[i].Variable) == Rank(top) && candidates[i].Variable.IsProjectVariable == top.IsProjectVariable; i--)
+            {
+                if (candidates[i].Variable.IsSensitive)
+                {
+                    return true;
+                }
+
+                certain |= candidates[i].Match.Unknown.Count == 0;
+            }
+
+            if (certain)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private (string? Name, string? How) Target(ProvenanceStep layer) => layer.Reference switch
@@ -122,7 +152,7 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
 
     private static int Rank(OctopusVariable variable) => variable.Scope.Keys.Sum(d => Weights.GetValueOrDefault(d));
 
-    private static ProvenanceStep ToStep(OctopusVariable variable, ProvenanceStep layer, string? how, List<string> unknown)
+    private static ProvenanceStep ToStep(OctopusVariable variable, ProvenanceStep layer, string? how, List<string> unknown, bool mayBeSensitive)
     {
         var notes = new List<string>();
         if (how is not null)
@@ -162,13 +192,18 @@ internal sealed class OctopusResolver(OctopusVariables variables, OctopusTraceOp
             notes.Add($"type {variable.Type}");
         }
 
+        if (mayBeSensitive)
+        {
+            notes.Add("another value that may apply instead is sensitive");
+        }
+
         return new ProvenanceStep
         {
             Kind = LayerKind.OctopusDeploy,
             Source = $"Octopus variable {variable.Name}",
             Location = variable.IsProjectVariable ? $"project {variable.SetName}" : variable.SetName,
             Value = variable.Value,
-            IsSensitive = variable.IsSensitive,
+            IsSensitive = variable.IsSensitive || mayBeSensitive,
             IsInferred = how is not null || unknown.Count > 0,
             Note = string.Join("; ", notes),
             Reference = new OctopusVariableRef(variable.SetName, variable.Name),
