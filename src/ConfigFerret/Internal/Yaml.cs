@@ -23,7 +23,7 @@ internal static class Yaml
         var stream = new YamlStream();
         try
         {
-            RejectUnsafeAliases(text);
+            RejectUnsafeAliasesAndNesting(text);
             using var reader = new StringReader(text);
             stream.Load(reader);
         }
@@ -95,17 +95,30 @@ internal static class Yaml
     }
 
     /// <summary>
-    /// Rejects an alias that comes before its anchor, and an alias inside the node its anchor is on.
-    /// YAML does not allow the first. Both make a stack overflow, which ends the process, so they have to be
-    /// caught before the document is loaded (found by fuzzing): YamlDotNet's representation model overflows on a
-    /// forward alias used as a mapping key, and walking a node that contains itself never ends.
+    /// The most levels collections may nest, counting what an alias stands for as if it were written out. Loading
+    /// and every walk over the nodes recurse once per level, and a stack overflow ends the process. A level takes
+    /// about half a kilobyte of stack, so 256 levels fit well inside a 512 KB stack, which is smaller than the
+    /// default thread stack on Windows, Linux and macOS. Kubernetes manifests and Helm values rarely nest more than
+    /// 20 levels.
     /// </summary>
-    private static void RejectUnsafeAliases(string text)
+    internal const int MaxNestingDepth = 256;
+
+    /// <summary>
+    /// Rejects an alias that comes before its anchor, an alias inside the node its anchor is on, and collections
+    /// nested more than <see cref="MaxNestingDepth"/> levels deep.
+    /// YAML does not allow the first. All three make a stack overflow, which ends the process, so they have to be
+    /// caught before the document is loaded (the first two found by fuzzing): YamlDotNet's representation model
+    /// overflows on a forward alias used as a mapping key and on deep nesting, and walking a node that contains
+    /// itself never ends.
+    /// </summary>
+    private static void RejectUnsafeAliasesAndNesting(string text)
     {
         using var reader = new StringReader(text);
         var parser = new Parser(reader);
         var current = new Dictionary<AnchorName, int>(); // the latest definition of each anchor
         var open = new Stack<int>(); // definitions of the collections being read, 0 for none
+        var deepest = new Stack<int>(); // the deepest level reached inside each collection being read
+        var heights = new Dictionary<int, int>(); // the levels each anchored collection spans, aliases written out
         var nextId = 1;
         while (parser.MoveNext())
         {
@@ -118,6 +131,15 @@ internal static class Yaml
                     throw new YamlException(alias.Start, alias.End, $"The alias *{alias.Value} is used before its anchor &{alias.Value} is defined.");
                 case AnchorAlias alias when open.Contains(current[alias.Value]):
                     throw new YamlException(alias.Start, alias.End, $"The alias *{alias.Value} is inside the node its anchor &{alias.Value} is on, so the node would contain itself.");
+                case AnchorAlias alias when deepest.Count > 0:
+                    var level = open.Count + heights.GetValueOrDefault(current[alias.Value]);
+                    if (level > MaxNestingDepth)
+                    {
+                        throw new YamlException(alias.Start, alias.End, string.Create(CultureInfo.InvariantCulture, $"The alias *{alias.Value} makes the collections in this YAML nest more than {MaxNestingDepth} levels deep."));
+                    }
+
+                    deepest.Push(Math.Max(deepest.Pop(), level));
+                    break;
                 case MappingStart or SequenceStart:
                     var start = (NodeEvent)parser.Current;
                     var definition = 0;
@@ -128,9 +150,26 @@ internal static class Yaml
                     }
 
                     open.Push(definition);
+                    if (open.Count > MaxNestingDepth)
+                    {
+                        throw new YamlException(start.Start, start.End, string.Create(CultureInfo.InvariantCulture, $"The collections in this YAML nest more than {MaxNestingDepth} levels deep."));
+                    }
+
+                    deepest.Push(open.Count);
                     break;
                 case MappingEnd or SequenceEnd:
-                    open.Pop();
+                    var reached = deepest.Pop();
+                    var ended = open.Pop();
+                    if (ended != 0)
+                    {
+                        heights[ended] = reached - open.Count;
+                    }
+
+                    if (deepest.Count > 0)
+                    {
+                        deepest.Push(Math.Max(deepest.Pop(), reached));
+                    }
+
                     break;
                 case NodeEvent { Anchor.IsEmpty: false } scalar:
                     current[scalar.Anchor] = nextId++;

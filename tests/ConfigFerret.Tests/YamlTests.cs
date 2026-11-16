@@ -92,4 +92,69 @@ public class YamlTests
 
         Assert.Equal("{image: api, replicas: 2}", Yaml.Render(doc.Get("staging")));
     }
+
+    [Theory]
+    [InlineData("flow sequences")]
+    [InlineData("flow mappings")]
+    [InlineData("block sequences")]
+    [InlineData("block mappings")]
+    [InlineData("an alias")]
+    public void Accepts_collections_nested_as_deep_as_the_limit(string style)
+    {
+        var text = Nested(style, Yaml.MaxNestingDepth);
+
+        // Loading and walking the nodes recurse once per level, so the limit has to fit a small thread stack.
+        OnSmallStack(() => Assert.NotNull(Yaml.Render(Doc(text))));
+    }
+
+    [Theory]
+    [InlineData("flow sequences")]
+    [InlineData("flow mappings")]
+    [InlineData("block sequences")]
+    [InlineData("block mappings")]
+    [InlineData("an alias")]
+    public void Rejects_collections_nested_deeper_than_the_limit(string style)
+    {
+        var text = Nested(style, Yaml.MaxNestingDepth + 1);
+
+        var ex = Assert.Throws<YamlDotNet.Core.YamlException>(() => Yaml.LoadDocuments(text));
+        Assert.Contains($"nest more than {Yaml.MaxNestingDepth} levels deep", ex.Message, StringComparison.Ordinal);
+    }
+
+    // YAML whose collections nest depth levels deep, counting what an alias stands for as if it were written out.
+    private static string Nested(string style, int depth) => style switch
+    {
+        "flow sequences" => new string('[', depth) + new string(']', depth),
+        "flow mappings" => string.Concat(Enumerable.Repeat("{a: ", depth)) + "1" + new string('}', depth),
+        "block sequences" => string.Concat(Enumerable.Repeat("- ", depth)) + "x\n",
+        "block mappings" => string.Concat(Enumerable.Range(0, depth).Select(i => new string(' ', i) + "a:\n")) + new string(' ', depth) + "x\n",
+        // Neither part nests more than half as deep, but b holds a copy of a at its innermost level.
+        "an alias" => $"a: &a {Nested("flow sequences", depth / 2)}\nb: {new string('[', depth - 1 - (depth / 2))}*a{new string(']', depth - 1 - (depth / 2))}\n",
+        _ => throw new ArgumentOutOfRangeException(nameof(style)),
+    };
+
+    // A 512 KB stack, smaller than the default on any platform the tests run on.
+    private static void OnSmallStack(Action action)
+    {
+        Exception? error = null;
+        var thread = new Thread(
+            () =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+            },
+            512 * 1024);
+        thread.Start();
+        thread.Join();
+        if (error is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
+        }
+    }
 }

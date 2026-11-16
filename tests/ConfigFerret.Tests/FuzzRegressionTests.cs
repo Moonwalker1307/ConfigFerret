@@ -99,6 +99,19 @@ public class FuzzRegressionTests
         Assert.Equal("5", HelmChart.FromText([("values.yaml", yaml)]).GetValue("a.c"));
     }
 
+    [Theory]
+    [InlineData("[", "]")]
+    [InlineData("{a: ", "}")]
+    [InlineData("- ", "")]
+    public void Yaml_nested_100000_levels_deep_throws_FormatException(string open, string close)
+    {
+        // YamlDotNet's representation model overflowed the stack on this, which ends the process.
+        var yaml = "a:\n  " + string.Concat(Enumerable.Repeat(open, 100_000)) + "x" + string.Concat(Enumerable.Repeat(close, 100_000)) + "\n";
+
+        Assert.Throws<FormatException>(() => HelmChart.FromText([("values.yaml", yaml)]));
+        Assert.Throws<FormatException>(() => KubernetesManifests.Parse(yaml));
+    }
+
     [Fact]
     public void Yaml_of_exactly_1024_characters_does_not_stall_the_scanner()
     {
