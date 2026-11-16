@@ -111,6 +111,33 @@ public sealed partial class HelmChart
     internal bool IsSensitivePath(string path) =>
         _history.TryGetValue(path, out var steps) && steps.Count > 0 && IsSensitiveSource(steps[^1].Source);
 
+    /// <summary>The values paths whose effective value comes from a Secret, sorted for <see cref="HoldsSensitive"/>.</summary>
+    internal string[] SensitivePaths()
+    {
+        var paths = _history.Keys.Where(IsSensitivePath).ToArray();
+        Array.Sort(paths, StringComparer.Ordinal);
+        return paths;
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/>, or a path below it, is in <paramref name="sensitivePaths"/>. A template that
+    /// renders a parent, for example with <c>toJson</c>, renders every value below it. The paths below sort right
+    /// after <c>path.</c>, so one search finds them. Parents are never written out: that would cost the square of a
+    /// path's length.
+    /// </summary>
+    internal static bool HoldsSensitive(string[] sensitivePaths, string path)
+    {
+        if (Array.BinarySearch(sensitivePaths, path, StringComparer.Ordinal) >= 0)
+        {
+            return true;
+        }
+
+        var prefix = path + ".";
+        var next = Array.BinarySearch(sensitivePaths, prefix, StringComparer.Ordinal);
+        next = next < 0 ? ~next : next;
+        return next < sensitivePaths.Length && sensitivePaths[next].StartsWith(prefix, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// True when <paramref name="path"/> is <paramref name="root"/> or in it, after following symbolic links. Paths
     /// come from the manifest, and Argo CD and Flux read nothing outside the checkout.

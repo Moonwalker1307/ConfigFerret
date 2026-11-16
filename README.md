@@ -580,8 +580,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
 ## Limits
 
 - Helm links are found by scanning templates for `.Values.x.y` on lines that set an env `value:` or a data key,
-  so they are marked `[inferred]`. Values used through `with`, `range`, `include` or helpers are not linked yet.
-  Subchart values are not traced yet.
+  so they are marked `[inferred]`. Values used through `with`, `range`, `include` or helpers are not linked yet. A
+  line that mixes `.Values.x` with `include`, `tpl` or a helper is linked to `x` only, so what the helper adds is not
+  seen, and the value is hidden only when `x` or a value below it comes from a Secret. Subchart values are not traced
+  yet.
 - Helm links match env entries and data keys by name, so an env entry that overrides a templated ConfigMap key of
   the same name is linked to that ConfigMap's template too. The note then says the values and the manifest disagree.
 - `Kustomization.Load` throws when bases and components nest more than 100 deep, when it would read more than 10,000
@@ -611,8 +613,10 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   patch on `/data/...`). Patch files, env patches, Flux `spec.patches` and `postRenderers` are not traced.
 - A Flux `${VAR}` link needs the source manifests under `spec.path` in the checkout, and matches the rendered
   ConfigMap, Secret or workload by the name in Git, so a kustomize `namePrefix` there breaks it. A value with several
-  placeholders links to the source line only, and the `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation is
-  not read. `${VAR}` inside a HelmRelease's values is not linked.
+  placeholders links to the source line only, and is redacted when a loaded Secret fills one of them; when the
+  `substituteFrom` Secret was not loaded, nothing says it holds a secret and the value is shown. The
+  `kustomize.toolkit.fluxcd.io/substitute: disabled` annotation is not read. `${VAR}` inside a HelmRelease's values
+  is not linked.
 - Terraform links by name are guesses, so they are marked `[inferred]`. Only state format version 4 is read, and only
   its outputs. A `.tf` output block is found only when `output "name" {` starts a line.
 - YAML whose aliases expand to more than 10 million characters is rejected, and so is YAML whose collections nest

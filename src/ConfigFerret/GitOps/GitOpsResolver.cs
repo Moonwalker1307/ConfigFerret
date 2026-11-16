@@ -19,6 +19,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
     private readonly List<string> _warnings = [];
     private readonly List<KubernetesData?> _substituteFrom = [];
     private readonly Dictionary<(char Kind, string Object, string Key), SubstitutionTemplate> _templates = [];
+    private readonly Dictionary<string, bool> _fromSecret = new(StringComparer.Ordinal); // whether the value that wins for a variable is from a Secret
     private readonly List<KubernetesManifests> _data;
     private bool _warned;
 
@@ -197,6 +198,16 @@ internal sealed partial class GitOpsResolver : IOriginResolver
             }
 
             _substituteFrom.Add(data);
+            foreach (var name in data?.Data.Keys ?? [])
+            {
+                _fromSecret[name] = from.IsSecret;
+            }
+        }
+
+        // The inline substitute wins over substituteFrom, and a later substituteFrom over an earlier one.
+        foreach (var substitution in _app.Substitutions)
+        {
+            _fromSecret[substitution.Name] = false;
         }
 
         if (_app.Substitutions.Count == 0 && _app.SubstituteFrom.Count == 0)
@@ -269,8 +280,10 @@ internal sealed partial class GitOpsResolver : IOriginResolver
             return [];
         }
 
-        var secret = key.Kind == 's';
         var names = template.Variables.Select(v => v.Name).Distinct(StringComparer.Ordinal).ToList();
+
+        // With several variables the step links to none of them, so it is secret itself when a Secret fills one of them.
+        var secret = key.Kind == 's' || names.Any(n => _fromSecret.GetValueOrDefault(n));
         var placeholders = string.Join(", ", names.Select(n => $"${{{n}}}"));
         var note = $"{_app.DisplayName} replaces {placeholders} after kustomize build";
         SourceRef? reference = null;
