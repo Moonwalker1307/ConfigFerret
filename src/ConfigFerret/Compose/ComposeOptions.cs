@@ -42,6 +42,12 @@ public sealed class ComposeOptions
     /// </summary>
     public bool AllowFilesOutsideProject { get; set; }
 
+    // The most parts of services that one service's extends may bring in, lowered by tests.
+    internal int MaxExtendedParts { get; set; } = 10_000;
+
+    // The most parts of services that the extends of all services of one load may bring in, lowered by tests.
+    internal int MaxLoadExtendedParts { get; set; } = 1_000_000;
+
     internal ComposeOptions Copy(string? projectDirectory, IEnumerable<string> envFiles)
     {
         var copy = new ComposeOptions
@@ -50,6 +56,8 @@ public sealed class ComposeOptions
             UseProcessEnvironment = UseProcessEnvironment,
             ReadSecretFiles = ReadSecretFiles,
             AllowFilesOutsideProject = AllowFilesOutsideProject,
+            MaxExtendedParts = MaxExtendedParts,
+            MaxLoadExtendedParts = MaxLoadExtendedParts,
         };
         foreach (var file in envFiles)
         {
