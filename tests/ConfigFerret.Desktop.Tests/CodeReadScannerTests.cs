@@ -1003,12 +1003,14 @@ public class CodeReadScannerTests
     public void A_type_keyword_followed_by_long_whitespace_does_not_backtrack_for_seconds()
     {
         // Found by fuzzing: the adjacent \s* in the type declaration pattern made each run of blanks cost a power of its length.
-        var source = string.Concat(Enumerable.Repeat("class A" + new string(' ', 120) + "x\n", 20));
+        // The scan takes a few milliseconds. The old pattern took about a minute and a half of processor time on these
+        // lines, so the limit leaves room for a slow, busy machine and still fails for a pattern that backtracks again.
+        var source = string.Concat(Enumerable.Repeat("class A" + new string(' ', 200) + "x\n", 20));
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
         Scan(source);
 
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"Took {watch.Elapsed.TotalSeconds:0.0}s.");
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"Took {watch.Elapsed.TotalSeconds:0.0}s.");
     }
 
     [Fact]
@@ -1266,8 +1268,11 @@ public sealed class HostileCodeFiles
 public class CodeReadScannerHostileFileTests
 {
     // Each of these took far longer than the limit, up to days, before the patterns and the loops around them were made
-    // linear. Now each takes well under a second, so the limit leaves room for a slow, busy machine. The scan runs on a
-    // thread of its own, so a thread pool kept busy by other tests doesn't delay its start.
+    // linear. Now each takes about a second, and under four on a machine kept busy by other builds, while a quadratic
+    // scan of an input of millions of characters would take many minutes to hours. The limit is a minute, so a slow runner
+    // that runs several test assemblies at once stays under it and a scan that is no longer linear does not, which is why
+    // most inputs hold a million characters or more. The scan runs on a thread of its own, so a thread pool kept busy by
+    // other tests doesn't delay its start.
     [Theory]
     [InlineData("blanks after a base list colon")]
     [InlineData("base lists with where clauses that never open a body")]
@@ -1307,7 +1312,7 @@ public class CodeReadScannerHostileFileTests
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var scan = Task.Factory.StartNew(() => CodeReadScanner.FromSources([("File0.cs", source)]), TestContext.Current.CancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)) == scan;
+        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken)) == scan;
 
         Assert.True(finished, $"Scanning {source.Length} characters of {shape} took longer than {watch.Elapsed.TotalSeconds:0}s.");
         Assert.Equal(1, (await scan).FilesScanned);
@@ -1355,20 +1360,20 @@ public class CodeReadScannerHostileFileTests
         "blanks after a base list colon" => "class A : " + new string(' ', 20_000),
         "base lists with where clauses that never open a body" => Repeat("class A : B where ", 3_000_000),
         "type parameter lists that never close" => Repeat("class A<", 3_000_000),
-        "a long line of public words in a class" => "class A {" + Repeat("public a ", 200_000),
+        "a long line of public words in a class" => "class A {" + Repeat("public a ", 1_000_000),
         "attributes that never close in a class" => "class A {" + Repeat("[a ", 3_000_000),
-        "many attributes in a class" => "class A {" + Repeat("[a] ", 200_000),
-        "a record parameter followed by blanks" => "record A(a" + new string(' ', 200_000) + ");",
-        "GetSection calls that never close" => Repeat("GetSection(", 200_000),
-        "GetValue calls that never close" => Repeat("GetValue(", 200_000),
-        "indexers that never close" => Repeat("config[", 200_000),
-        "blanks after GetValue" => "GetValue" + new string(' ', 200_000),
-        "blanks after a config variable" => "config" + new string(' ', 200_000),
-        "blanks after a GetSection call" => "config.GetSection(\"A\")" + new string(' ', 200_000),
+        "many attributes in a class" => "class A {" + Repeat("[a] ", 1_000_000),
+        "a record parameter followed by blanks" => "record A(a" + new string(' ', 1_000_000) + ");",
+        "GetSection calls that never close" => Repeat("GetSection(", 1_000_000),
+        "GetValue calls that never close" => Repeat("GetValue(", 1_000_000),
+        "indexers that never close" => Repeat("config[", 1_000_000),
+        "blanks after GetValue" => "GetValue" + new string(' ', 1_000_000),
+        "blanks after a config variable" => "config" + new string(' ', 1_000_000),
+        "blanks after a GetSection call" => "config.GetSection(\"A\")" + new string(' ', 1_000_000),
         "generic GetValue calls that never close" => Repeat("GetValue<", 2_000_000),
         "many reads the scanner cannot work out" => Repeat("config[x];\n", 1_000_000),
-        "classes nested without end" => Repeat("class A {", 400_000),
-        "public words before a brace again and again" => "class A {" + Repeat("public " + new string('a', 390) + " ", 3_000_000),
+        "classes nested without end" => Repeat("class A {", 2_000_000),
+        "public words before a brace again and again" => "class A {" + Repeat("public " + new string('a', 390) + " ", 9_000_000),
         "configuration key names that never close" => "class A {" + Repeat("[ConfigurationKeyName(\"", 3_000_000),
         "a long chain of base classes" => string.Concat(Enumerable.Range(0, 40_000).Select(i => $"class C{i} : C{i + 1} {{ }}\n")),
         "many GetSection calls" => Repeat("GetSection(\"a\")", 3_000_000),
