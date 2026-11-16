@@ -33,19 +33,20 @@ public sealed class Kustomization
     /// </summary>
     public IReadOnlyDictionary<string, GeneratedData> Secrets { get; }
 
-    /// <summary>Loads the kustomization in <paramref name="directory"/> and all its bases.</summary>
+    /// <summary>Loads the kustomization in <paramref name="directory"/> and all its bases and components.</summary>
     /// <param name="directory">The folder that holds the kustomization file.</param>
     /// <param name="allowFilesOutsideFolder">
     /// Like kustomize, a generator's env files must sit in or below the folder of the kustomization that names them,
     /// after following symbolic links. Pass true to read them from anywhere, as
     /// <c>kustomize build --load-restrictor LoadRestrictionsNone</c> does. Bases and resources may be anywhere either way.
     /// </param>
-    /// <exception cref="InvalidOperationException">An env file is outside its kustomization's folder, or the bases form a cycle.</exception>
+    /// <exception cref="InvalidOperationException">An env file is outside its kustomization's folder, or the bases or components form a cycle.</exception>
     public static Kustomization Load(string directory, bool allowFilesOutsideFolder = false)
     {
         ArgumentNullException.ThrowIfNull(directory);
         var root = Path.GetFullPath(directory);
-        var state = LoadDirectory(root, allowFilesOutsideFolder, []);
+        var state = new List<GeneratedData>();
+        LoadDirectory(root, allowFilesOutsideFolder, [], state);
 
         // Show kustomization files relative to the closest folder that holds all of them.
         var files = state.SelectMany(g => g.Keys.Values).SelectMany(h => h).Select(h => h.Kustomization).Distinct().ToList();
@@ -84,7 +85,11 @@ public sealed class Kustomization
         return null;
     }
 
-    private static List<GeneratedData> LoadDirectory(string directory, bool allowFilesOutsideFolder, HashSet<string> visiting)
+    /// <summary>
+    /// Applies the kustomization in <paramref name="directory"/> to <paramref name="state"/>: an empty list for a base,
+    /// or the list of the kustomization that names it as a component.
+    /// </summary>
+    private static void LoadDirectory(string directory, bool allowFilesOutsideFolder, HashSet<string> visiting, List<GeneratedData> state)
     {
         if (!visiting.Add(directory))
         {
@@ -105,28 +110,26 @@ public sealed class Kustomization
             throw new FormatException($"Could not parse {file}: {ex.Message}", ex);
         }
 
-        var state = new List<GeneratedData>();
-        foreach (var resource in doc.Get("resources").Items().Concat(doc.Get("bases").Items()).Concat(doc.Get("components").Items()))
+        foreach (var child in Folders(doc.Get("resources").Items().Concat(doc.Get("bases").Items()), directory))
         {
-            var rel = resource.Scalar();
-            if (rel is null)
+            var resources = new List<GeneratedData>();
+            LoadDirectory(child, allowFilesOutsideFolder, visiting, resources);
+            foreach (var generated in resources)
             {
-                continue;
-            }
-
-            var child = Path.GetFullPath(Path.Combine(directory, rel));
-            if (Directory.Exists(child))
-            {
-                foreach (var generated in LoadDirectory(child, allowFilesOutsideFolder, visiting))
-                {
-                    state.RemoveAll(g => g.Name == generated.Name && g.IsSecret == generated.IsSecret);
-                    state.Add(generated);
-                }
+                state.RemoveAll(g => g.Name == generated.Name && g.IsSecret == generated.IsSecret);
+                state.Add(generated);
             }
         }
 
         ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, allowFilesOutsideFolder, state);
         ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, allowFilesOutsideFolder, state);
+
+        // Like kustomize, a component works on what this kustomization holds after its resources and generators, so its
+        // generators merge into those objects and its namePrefix renames them; this kustomization's own prefix comes after.
+        foreach (var component in Folders(doc.Get("components").Items(), directory))
+        {
+            LoadDirectory(component, allowFilesOutsideFolder, visiting, state);
+        }
 
         var prefix = doc.Str("namePrefix") ?? "";
         var suffix = doc.Str("nameSuffix") ?? "";
@@ -139,8 +142,11 @@ public sealed class Kustomization
         }
 
         visiting.Remove(directory);
-        return state;
     }
+
+    /// <summary>The entries that name a folder, as full paths. Files and URLs are skipped.</summary>
+    private static IEnumerable<string> Folders(IEnumerable<YamlNode> entries, string directory) =>
+        entries.Select(e => e.Scalar()).OfType<string>().Select(rel => Path.GetFullPath(Path.Combine(directory, rel))).Where(Directory.Exists);
 
     private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, bool allowFilesOutsideFolder, List<GeneratedData> state)
     {

@@ -237,6 +237,80 @@ public sealed class KustomizationGeneratorTests : IDisposable
     }
 
     [Fact]
+    public void A_component_merges_into_the_generators_of_the_kustomization_that_names_it()
+    {
+        Write("base/kustomization.yaml", """
+            configMapGenerator:
+              - name: app-config
+                literals: [A=1, B=2]
+            """);
+        Write("components/feature/kustomization.yaml", """
+            apiVersion: kustomize.config.k8s.io/v1alpha1
+            kind: Component
+            configMapGenerator:
+              - name: app-config
+                behavior: merge
+                literals: [B=3]
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../base]
+            components: [../components/feature]
+            """);
+
+        var config = Assert.Single(Load().ConfigMaps).Value;
+
+        Assert.Equal("app-config", config.Name);
+        Assert.Equal(["1"], config.Keys["A"].Select(h => h.Value));
+        Assert.Equal(["2", "3"], config.Keys["B"].Select(h => h.Value));
+        Assert.Equal(["base/kustomization.yaml", "components/feature/kustomization.yaml"], config.Keys["B"].Select(h => h.Kustomization));
+        Assert.Equal("merge (literal)", config.Keys["B"][1].How);
+    }
+
+    [Fact]
+    public void A_component_runs_after_its_parents_generators_and_before_its_parents_prefix()
+    {
+        Write("base/kustomization.yaml", """
+            configMapGenerator:
+              - name: cfg
+                literals: [A=1]
+            """);
+        Write("feature/kustomization.yaml", """
+            kind: Component
+            namePrefix: feature-
+            configMapGenerator:
+              - name: cfg
+                behavior: merge
+                literals: [A=3]
+              - name: extra
+                literals: [E=1]
+            """);
+        Write("app/kustomization.yaml", """
+            resources: [../base]
+            components: [../feature]
+            namePrefix: prod-
+            configMapGenerator:
+              - name: cfg
+                behavior: merge
+                literals: [A=2]
+            """);
+        var k = Load();
+
+        Assert.Equal(["prod-feature-cfg", "prod-feature-extra"], k.ConfigMaps.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["1", "2", "3"], k.ConfigMaps["prod-feature-cfg"].Keys["A"].Select(h => h.Value));
+    }
+
+    [Fact]
+    public void Reports_a_cycle_of_components()
+    {
+        Write("app/kustomization.yaml", "resources: [../base]\ncomponents: [../one]\n");
+        Write("base/kustomization.yaml", "configMapGenerator:\n  - name: c\n    literals: [A=1]\n");
+        Write("one/kustomization.yaml", "kind: Component\ncomponents: [../two]\n");
+        Write("two/kustomization.yaml", "kind: Component\ncomponents: [../one]\n");
+
+        Assert.Contains("Kustomization cycle at", Assert.Throws<InvalidOperationException>(() => Load()).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Resolver_lists_each_kustomization_step_for_a_key()
     {
         Write("app/kustomization.yaml", """
