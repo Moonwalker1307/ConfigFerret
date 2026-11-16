@@ -40,9 +40,9 @@ internal static class AzureOptionsChecks
             return;
         }
 
-        if (CredentialGuard.FindAppSettingsFile(configuration, secretKey) is { } file)
+        if (CredentialGuard.CheckSource(configuration, secretKey) is { } source)
         {
-            failures.Add(CredentialGuard.InAppSettings(secretKey, file));
+            failures.Add(source);
         }
 
         if (AzureAuth.Check(tenantId, clientId, clientSecret, secretKey) is { } problem)

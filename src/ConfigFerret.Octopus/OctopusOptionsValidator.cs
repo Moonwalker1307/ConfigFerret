@@ -34,9 +34,9 @@ internal sealed class OctopusOptionsValidator(string sectionPath, IConfiguration
         {
             failures.Add(CredentialGuard.Missing(keyKey));
         }
-        else if (CredentialGuard.FindAppSettingsFile(configuration, keyKey) is { } file)
+        else if (CredentialGuard.CheckSource(configuration, keyKey) is { } source)
         {
-            failures.Add(CredentialGuard.InAppSettings(keyKey, file));
+            failures.Add(source);
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);

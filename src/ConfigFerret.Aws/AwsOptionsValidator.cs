@@ -30,9 +30,8 @@ internal sealed class AwsOptionsValidator<TOptions>(string sectionPath, IConfigu
 
         failures.AddRange(CredentialSettings
             .Select(setting => CredentialGuard.Key(sectionPath, setting))
-            .Select(key => (Key: key, File: CredentialGuard.FindAppSettingsFile(configuration, key)))
-            .Where(found => found.File is not null)
-            .Select(found => CredentialGuard.InAppSettings(found.Key, found.File!)));
+            .Select(key => CredentialGuard.CheckSource(configuration, key))
+            .OfType<string>());
 
         if (AwsClients.CheckServiceUrl(options.ServiceUrl, CredentialGuard.Key(sectionPath, nameof(options.ServiceUrl))) is { } url)
         {

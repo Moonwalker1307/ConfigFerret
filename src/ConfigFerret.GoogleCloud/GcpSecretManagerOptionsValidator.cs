@@ -32,9 +32,8 @@ internal sealed class GcpSecretManagerOptionsValidator(string sectionPath, IConf
 
         failures.AddRange(new[] { nameof(options.AccessToken), nameof(options.CredentialsJson) }
             .Select(setting => CredentialGuard.Key(sectionPath, setting))
-            .Select(key => (Key: key, File: CredentialGuard.FindAppSettingsFile(configuration, key)))
-            .Where(found => found.File is not null)
-            .Select(found => CredentialGuard.InAppSettings(found.Key, found.File!)));
+            .Select(key => CredentialGuard.CheckSource(configuration, key))
+            .OfType<string>());
 
         if (!string.IsNullOrWhiteSpace(options.CredentialsFile) && !File.Exists(options.CredentialsFile.Trim()))
         {

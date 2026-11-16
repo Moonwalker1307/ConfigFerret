@@ -43,9 +43,8 @@ internal sealed class AzureDevOpsOptionsValidator(string sectionPath, IConfigura
         }
 
         failures.AddRange(new[] { patKey, bearerKey }
-            .Select(key => (Key: key, File: CredentialGuard.FindAppSettingsFile(configuration, key)))
-            .Where(found => found.File is not null)
-            .Select(found => CredentialGuard.InAppSettings(found.Key, found.File!)));
+            .Select(key => CredentialGuard.CheckSource(configuration, key))
+            .OfType<string>());
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
