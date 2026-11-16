@@ -139,6 +139,25 @@ public class TraceCommandTests
         Assert.Contains("--env number 2", result.Error, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("trace", "TOKEN=fake-s3cret")]
+    [InlineData("trace", "--token=fake-s3cret")]
+    [InlineData("unused", "TOKEN=fake-s3cret")]
+    [InlineData("container", "TOKEN=fake-s3cret")]
+    public async Task Leaves_out_a_pair_that_no_env_took(string command, string pair)
+    {
+        string[] args = command == "container"
+            ? ["container", "-m", Path.Join(ToolRunner.Golden("helm-release"), "rendered.yaml"), "-w", "orders", pair]
+            : [command, .. HelmRelease()[1..], "--env", "Db__Host=x", pair];
+
+        var result = await new ToolRunner().RunAsync(args);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.DoesNotContain("fake-s3cret", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("fake-s3cret", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Give each variable its own --env", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Never_reads_the_tools_own_environment_into_the_trace()
     {
