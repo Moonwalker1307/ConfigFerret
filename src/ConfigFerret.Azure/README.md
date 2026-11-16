@@ -187,7 +187,9 @@ difference; a flattened value is compared as text.
   `KeyFilter`, is not seen, so the values those providers set are not linked to their secrets or key-values. `Links`
   cannot fix this: it is read for environment variables, env entries and ConfigMap/Secret keys, never for values set by
   a configuration provider. A value from the Key Vault provider is still hidden.
-- Feature flags with filters are linked by name only; their filter settings are not traced.
+- The keys the provider writes for a feature flag's filters lead to the flag, and its step names the filters, but a
+  filter's parameters are not read: the step for `Beta:EnabledFor:0:Parameters:Value` holds no value and is not
+  compared with the value seen.
 - A feature flag with variants, an allocation or telemetry is written by the provider in the newer layout,
   `feature_management:feature_flags:<i>:...`, numbered in load order, and not as `FeatureManagement:<name>`. Such flags
   are listed (`Find`, links, unused entries) but set no key that is traced, and one trace warning gives their number.
