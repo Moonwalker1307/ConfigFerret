@@ -49,7 +49,7 @@ internal sealed class AppOptions
 
     public Option<string?> Environment { get; } = new("--environment", "-e")
     {
-        Description = "The hosting environment, which picks appsettings.{Environment}.json. Defaults to ASPNETCORE_ENVIRONMENT or DOTNET_ENVIRONMENT from the app's variables, else Production.",
+        Description = "The hosting environment, which picks appsettings.{Environment}.json. Defaults to --environment in the app's command line, else DOTNET_ENVIRONMENT, else ASPNETCORE_ENVIRONMENT from the app's variables, else Production.",
         HelpName = "name",
     };
 

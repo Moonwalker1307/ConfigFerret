@@ -85,8 +85,12 @@ or as a JSON array. Repeat it to combine several runs.
 1. Environment variables starting with `ASPNETCORE_`, then those starting with `DOTNET_`, with the prefix removed, so
    `ASPNETCORE_URLS` sets the key `URLS`.
 2. `appsettings.json`, then `appsettings.{Environment}.json`. The environment is `--environment`, else
-   `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT` from the app's variables, else `Production`. A name with a
-   slash or backslash in it is refused, so the settings file always comes from the app folder.
+   `--environment` in the app's command line, else `DOTNET_ENVIRONMENT`, else `ASPNETCORE_ENVIRONMENT` from the
+   app's variables, else `Production`. A worker app built with `Host.CreateApplicationBuilder` ignores
+   `ASPNETCORE_ENVIRONMENT`, and an app built with `Host.CreateDefaultBuilder(...).ConfigureWebHostDefaults(...)`
+   lets `ASPNETCORE_ENVIRONMENT` win over both others (and `ASPNETCORE_` variables over `DOTNET_` ones); pass
+   `--environment` for them. A name with a slash or a character a file name can't have is refused, so the settings
+   file always comes from the app folder.
 3. `{ApplicationName}.settings.json`, then `{ApplicationName}.settings.{Environment}.json`, which .NET 10 and later
    load. The name is the `AssemblyName` in the folder's project file, else the project file's name. This needs
    exactly one `*.csproj` in the folder; otherwise these files are not looked for, and nothing says so. A name built
