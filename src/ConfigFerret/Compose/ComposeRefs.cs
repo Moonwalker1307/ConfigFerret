@@ -27,6 +27,20 @@ public sealed record ComposeEnvironmentRef(string Service, string Name) : Source
 /// <param name="IsSecret">True for a secret, false for a config.</param>
 public sealed record ComposeMountRef(string Name, bool IsSecret) : SourceRef;
 
+/// <summary>
+/// A service's compose <c>environment</c> entry that a <c>${VAR}</c> or bare key in one of its <c>env_file</c>s took its
+/// value from.
+/// </summary>
+/// <param name="Service">The service.</param>
+/// <param name="Name">The variable.</param>
+/// <param name="At">Where the entry is written, such as <c>compose.yaml:5</c>.</param>
+/// <param name="References">The entry's own <c>${VAR}</c> references.</param>
+internal sealed record ComposeEnvironmentOrigin(string Service, string Name, string At, IReadOnlyList<DotEnvReference> References)
+{
+    /// <summary>True when the entry's name looks like a secret, or its value takes one through any number of hops.</summary>
+    public bool IsSensitive { get; } = ComposeSteps.IsSensitiveName(Name) || References.Any(ComposeSteps.IsSensitive);
+}
+
 /// <summary>Builds the provenance steps shared by the dotenv and Compose resolvers.</summary>
 internal static class ComposeSteps
 {
@@ -46,7 +60,8 @@ internal static class ComposeSteps
     public static bool IsSensitiveName(string name) => Sensitive.IsMatch(name);
 
     /// <summary>True when a <c>${VAR}</c> reference names a variable that looks like a secret, or the entry that set it takes its value from one through any number of <c>${VAR}</c> hops.</summary>
-    public static bool IsSensitive(DotEnvReference reference) => IsSensitiveName(reference.Name) || (reference.From is { } entry && IsSensitive(entry));
+    public static bool IsSensitive(DotEnvReference reference) =>
+        IsSensitiveName(reference.Name) || reference.Environment is { IsSensitive: true } || (reference.From is { } entry && IsSensitive(entry));
 
     /// <summary>True when a dotenv entry's name looks like a secret, or its value takes one through any number of <c>${VAR}</c> hops.</summary>
     public static bool IsSensitive(DotEnvEntry entry)
@@ -67,7 +82,7 @@ internal static class ComposeSteps
             while (!sensitive && deeper is null && next < current.References.Count)
             {
                 var reference = current.References[next++];
-                if (IsSensitiveName(reference.Name))
+                if (IsSensitiveName(reference.Name) || reference.Environment is { IsSensitive: true })
                 {
                     sensitive = true;
                 }
@@ -187,6 +202,24 @@ internal static class ComposeSteps
         if (reference.From is { } entry)
         {
             return Entry(entry, entry.File, how, depth + 1, budget) with { IsEffective = true };
+        }
+
+        if (reference.Environment is { } environment)
+        {
+            // The same kind, source, location and reference as the entry's own step.
+            var origins = References(environment.References, environment.At, depth + 1, budget, out var cut);
+            return new ProvenanceStep
+            {
+                Kind = LayerKind.DockerCompose,
+                Source = $"compose service {environment.Service} env {environment.Name}",
+                Location = environment.At,
+                Value = reference.Value,
+                IsSensitive = environment.IsSensitive,
+                IsEffective = true,
+                Note = Join(how, cut ? CutNote : null),
+                Reference = new ComposeEnvironmentRef(environment.Service, environment.Name),
+                Origins = origins,
+            };
         }
 
         return new ProvenanceStep

@@ -307,6 +307,59 @@ public class ComposeProjectTests
     }
 
     [Fact]
+    public void An_env_file_sees_the_service_environment_after_the_project_environment()
+    {
+        using var folder = new TempFolder();
+        folder.Write("app.env", "URL=postgres://${HOST}/x\nPORT\nNAME=${DB_NAME}\n");
+        folder.Write(".env", "DB_NAME=from-dotenv\n");
+        var compose = folder.Write("compose.yaml", """
+            services:
+              api:
+                image: x
+                environment:
+                  HOST: db.internal
+                  PORT: 5432
+                  DB_NAME: from-service
+                env_file: app.env
+            """);
+
+        var project = ComposeProject.Load(compose);
+
+        var service = Service(project, "api");
+        Assert.Equal("postgres://db.internal/x", service.Environment["URL"]);
+        Assert.Equal("from-dotenv", service.Environment["NAME"]);
+        Assert.Empty(service.Warnings);
+        var origin = Assert.Single(service.Layers("URL")[0].Origins);
+        Assert.Equal((LayerKind.DockerCompose, "compose service api env HOST", "compose.yaml:5", "db.internal"), (origin.Kind, origin.Source, origin.Location, origin.Value));
+        Assert.Equal(new ComposeEnvironmentRef("api", "HOST"), origin.Reference);
+        Assert.Equal("interpolated as ${HOST} in app.env line 1", origin.Note);
+        Assert.Equal("5432", service.Layers("PORT")[0].Value);
+        var port = Assert.Single(service.Layers("PORT")[0].Origins);
+        Assert.Equal((LayerKind.DockerCompose, "compose.yaml:6"), (port.Kind, port.Location));
+        Assert.Equal(new ComposeEnvironmentRef("api", "PORT"), port.Reference);
+    }
+
+    [Fact]
+    public void A_secret_from_the_service_environment_stays_hidden_in_an_env_file()
+    {
+        using var folder = new TempFolder();
+        folder.Write("app.env", "URL=postgres://app:${PASS}@db/x\n");
+        var compose = folder.Write("compose.yaml", "services:\n  api:\n    environment:\n      PASS: ${DB_PASSWORD}\n    env_file: app.env\n");
+        var options = new ComposeOptions();
+        options.Variables["DB_PASSWORD"] = "fake-db-password";
+
+        var service = Service(ComposeProject.Load([compose], options), "api");
+
+        Assert.Equal("postgres://app:fake-db-password@db/x", service.Environment["URL"]);
+        Assert.True(service.Layers("URL")[0].IsSensitive);
+        var origin = Assert.Single(service.Layers("URL")[0].Origins);
+        Assert.Equal(new ComposeEnvironmentRef("api", "PASS"), origin.Reference);
+        Assert.True(origin.IsSensitive);
+        Assert.True(Assert.Single(origin.Origins).IsSensitive);
+        Assert.DoesNotContain(service.Warnings, w => w.Contains("fake-db-password", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void An_env_file_listed_again_keeps_its_first_place()
     {
         using var folder = new TempFolder();

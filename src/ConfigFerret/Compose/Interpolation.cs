@@ -6,7 +6,11 @@ namespace ConfigFerret.Compose;
 /// <summary>Where an interpolated variable's value came from: a dotenv entry, or the variables passed in (the shell).</summary>
 /// <param name="Value">The value.</param>
 /// <param name="Entry">The dotenv entry that set it, or null when it came from the variables passed in.</param>
-internal sealed record LookupResult(string Value, DotEnvEntry? Entry);
+internal sealed record LookupResult(string Value, DotEnvEntry? Entry)
+{
+    /// <summary>The compose <c>environment</c> entry that set it, for an <c>env_file</c> of that service.</summary>
+    public ComposeEnvironmentOrigin? Environment { get; init; }
+}
 
 /// <summary>
 /// Expands <c>$VAR</c>, <c>${VAR}</c>, <c>${VAR:-default}</c>, <c>${VAR-default}</c>, <c>${VAR:?error}</c>,
@@ -185,7 +189,7 @@ internal sealed class Interpolation(Func<string, LookupResult?> lookup, string w
             return;
         }
 
-        _references.Add(new DotEnvReference(name, found?.Entry, found is not null, usedDefault) { Value = found?.Value });
+        _references.Add(new DotEnvReference(name, found?.Entry, found is not null, usedDefault) { Value = found?.Value, Environment = found?.Environment });
     }
 
     // The closing brace of a reference whose body starts at start, counting nested ${...}.
