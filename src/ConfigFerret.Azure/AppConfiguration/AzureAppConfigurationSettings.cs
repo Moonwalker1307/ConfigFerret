@@ -87,7 +87,10 @@ public sealed class AzureAppConfigurationSettings
     public static Task<AzureAppConfigurationSettings> LoadAsync(AzureAppConfigurationOptions options, CancellationToken cancellationToken = default) =>
         LoadAsync(options, null, new ConfigurationClientOptions(), cancellationToken);
 
-    /// <summary>Reads the key-values from <see cref="AzureAppConfigurationOptions.Endpoint"/>, signing in with <paramref name="credential"/>.</summary>
+    /// <summary>
+    /// Reads the key-values from <see cref="AzureAppConfigurationOptions.Endpoint"/>, signing in with <paramref name="credential"/>.
+    /// Without an endpoint, signs in with the connection string when there is one, and <paramref name="credential"/> is not used.
+    /// </summary>
     /// <exception cref="RequestFailedException">App Configuration could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
     public static Task<AzureAppConfigurationSettings> LoadAsync(AzureAppConfigurationOptions options, TokenCredential credential, CancellationToken cancellationToken = default)
@@ -98,8 +101,9 @@ public sealed class AzureAppConfigurationSettings
 
     /// <summary>
     /// Reads the key-values with your own client options, for example a proxy, retry settings, or a <c>Transport</c>
-    /// (<c>new HttpClientTransport(httpClient)</c>) that answers from a test handler. With a null
-    /// <paramref name="credential"/>, signs in with the connection string, the service principal or <c>DefaultAzureCredential</c>.
+    /// (<c>new HttpClientTransport(httpClient)</c>) that answers from a test handler. Without an endpoint, or with a null
+    /// <paramref name="credential"/>, signs in with the connection string when there is one. Otherwise it signs in with
+    /// <paramref name="credential"/>, the service principal or <c>DefaultAzureCredential</c>.
     /// </summary>
     /// <exception cref="RequestFailedException">App Configuration could not be reached, refused the request or sent a response that could not be read.</exception>
     /// <exception cref="global::Azure.Identity.AuthenticationFailedException">Signing in failed.</exception>
@@ -140,7 +144,8 @@ public sealed class AzureAppConfigurationSettings
 
     internal static (ConfigurationClient Client, string Store) CreateClient(AzureAppConfigurationOptions options, TokenCredential? credential, ConfigurationClientOptions clientOptions)
     {
-        if (credential is null && !string.IsNullOrWhiteSpace(options.ConnectionString))
+        // A credential needs an endpoint, so a connection string alone is used whatever credential the app registered.
+        if (!string.IsNullOrWhiteSpace(options.ConnectionString) && (credential is null || options.Endpoint is null))
         {
             var endpoint = ReadEndpoint(options.ConnectionString);
             try

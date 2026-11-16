@@ -17,8 +17,8 @@ public sealed class AzureAppConfigurationSource : IConfigSource
     private readonly TokenCredential? _credential;
 
     /// <summary>
-    /// Creates a source from options. Without <paramref name="credential"/>, it signs in as the options say: with the
-    /// connection string, the service principal or <c>DefaultAzureCredential</c>.
+    /// Creates a source from options. Without <paramref name="credential"/>, or without an endpoint, it signs in as the
+    /// options say: with the connection string, the service principal or <c>DefaultAzureCredential</c>.
     /// </summary>
     public AzureAppConfigurationSource(AzureAppConfigurationOptions options, AzureAppConfigurationTraceOptions? traceOptions = null, TokenCredential? credential = null)
     {

@@ -39,8 +39,8 @@ public static class AzureServiceCollectionExtensions
     /// <paramref name="configuration"/> (for example <c>builder.Configuration.GetSection("ConfigFerret:AzureAppConfiguration")</c>),
     /// checks them when the host starts, and registers <see cref="AzureAppConfigurationSource"/>. With an endpoint it
     /// signs in with a <see cref="TokenCredential"/> registered in the container, else the service principal in the
-    /// section, else <c>DefaultAzureCredential</c>. Startup fails if a connection string or client secret is in an
-    /// appsettings file.
+    /// section, else <c>DefaultAzureCredential</c>. With a connection string it uses that, even when a credential is
+    /// registered. Startup fails if a connection string or client secret is in an appsettings file.
     /// </summary>
     public static IServiceCollection AddConfigFerretAzureAppConfiguration(this IServiceCollection services, IConfiguration configuration)
     {
