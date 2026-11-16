@@ -806,6 +806,9 @@ public sealed class GitOpsResolverTests : IDisposable
 
             Assert.Equal("cm.yaml", Assert.Single(resolver.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
             Assert.Empty(resolver.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+            Assert.Equal(
+                ["Flux Kustomization root: 1 link under . leads out of it and was not followed, so it was not read and no variable is listed as unused."],
+                resolver.Warnings);
         }
         finally
         {
@@ -912,6 +915,28 @@ public sealed class GitOpsResolverTests : IDisposable
         metadata: {"{"}name: out{"}"}
         {spec}
         """, "out.yaml");
+
+    [Fact]
+    public void Links_out_of_the_folder_count_as_not_read()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a symbolic link needs extra rights on Windows.");
+        Write("apps/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        Write("outside/extra.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: o}\ndata: {K: '${UNUSED}'}\n");
+        File.CreateSymbolicLink(Path.Join(_root, "apps", "extra.yaml"), Path.Join(_root, "outside", "extra.yaml"));
+        Directory.CreateSymbolicLink(Path.Join(_root, "apps", "more"), Path.Join(_root, "outside"));
+
+        // A link to a place inside the folder is read under its own name, and a dangling one leads nowhere.
+        Directory.CreateSymbolicLink(Path.Join(_root, "apps", "loop"), ".");
+        File.CreateSymbolicLink(Path.Join(_root, "apps", "gone.yaml"), Path.Join(_root, "missing.yaml"));
+
+        var resolver = new GitOpsResolver(Kustomization("    substitute: {V: x, UNUSED: y}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Equal(
+            ["Flux Kustomization apps: 2 links under apps lead out of it and were not followed, so they were not read and no variable is listed as unused."],
+            resolver.Warnings);
+        Assert.Empty(resolver.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+        AssertNoneUnused(resolver);
+    }
 
     [Fact]
     public void A_dangling_link_in_the_folder_it_deploys_is_skipped_like_any_link()

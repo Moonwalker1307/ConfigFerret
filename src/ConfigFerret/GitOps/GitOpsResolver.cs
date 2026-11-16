@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Enumeration;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
 using ConfigFerret.Kustomize;
@@ -263,13 +264,14 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             return;
         }
 
-        // Links are skipped: a link to a parent folder never ends, and one out of the folder reads other files. Each
+        // Links are not followed: a link to a parent folder never ends, and one out of the folder reads other files. Each
         // folder is read on its own, so one that cannot be read is a warning and the others are still read. The scan
         // stops at the limits, since the folder may hold anything.
         var limits = options.ScanLimits;
         var top = Relative(root, folder);
-        var enumeration = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.ReparsePoint };
+        var enumeration = new EnumerationOptions { IgnoreInaccessible = false, AttributesToSkip = FileAttributes.None };
         var files = new List<string>();
+        var links = new List<string>();
         var entries = 0;
         var tooDeep = false;
         var folders = new Stack<(string Path, int Depth)>([(folder, 0)]);
@@ -278,34 +280,37 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
             var (current, depth) = folders.Pop();
             try
             {
-                foreach (var file in Directory.EnumerateFiles(current, "*", enumeration))
+                var found = new FileSystemEnumerable<(string Path, bool IsFolder, bool IsLink)>(
+                    current,
+                    (ref FileSystemEntry e) => (e.ToFullPath(), e.IsDirectory, (e.Attributes & FileAttributes.ReparsePoint) != 0),
+                    enumeration);
+                foreach (var (path, isFolder, isLink) in found)
                 {
                     if (++entries > limits.Entries)
                     {
                         break;
                     }
 
-                    if (file.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                    if (isLink)
                     {
-                        files.Add(file);
+                        // A file or folder link, or a Windows junction.
+                        links.Add(path);
                     }
-                }
-
-                foreach (var sub in Directory.EnumerateDirectories(current, "*", enumeration))
-                {
-                    if (++entries > limits.Entries)
+                    else if (!isFolder)
                     {
-                        break;
+                        if (path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                        {
+                            files.Add(path);
+                        }
                     }
-
-                    if (depth < limits.Depth)
+                    else if (depth < limits.Depth)
                     {
-                        folders.Push((sub, depth + 1));
+                        folders.Push((path, depth + 1));
                     }
                     else if (!tooDeep)
                     {
                         tooDeep = true;
-                        Limit(string.Create(CultureInfo.InvariantCulture, $"{Relative(root, sub)} is more than {limits.Depth} folders below {top}, so it was not read"));
+                        Limit(string.Create(CultureInfo.InvariantCulture, $"{Relative(root, path)} is more than {limits.Depth} folders below {top}, so it was not read"));
                     }
                 }
             }
@@ -319,6 +324,16 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
                 Limit(string.Create(CultureInfo.InvariantCulture, $"{top} holds more than {limits.Entries} files and folders, so the rest were not read"));
                 break;
             }
+        }
+
+        // A link to a place in the folder is read there under its own name, and a dangling one leads nowhere. What any
+        // other link leads to was not read.
+        var outside = links.Count(l => LeadsSomewhere(l) && !LeadsInto(l, folder));
+        if (outside > 0)
+        {
+            Limit(outside == 1
+                ? $"1 link under {top} leads out of it and was not followed, so it was not read"
+                : string.Create(CultureInfo.InvariantCulture, $"{outside} links under {top} lead out of it and were not followed, so they were not read"));
         }
 
         long bytes = 0;
@@ -361,6 +376,32 @@ internal sealed class GitOpsResolver : IOriginResolver, IKnowsUses
     {
         _partlyRead = true;
         _warnings.Add($"{_app.DisplayName}: {what} and no variable is listed as unused.");
+    }
+
+    // On Unix File.Exists is true for a dangling link itself, so the target is looked at.
+    private static bool LeadsSomewhere(string link)
+    {
+        try
+        {
+            return new FileInfo(link).ResolveLinkTarget(returnFinalTarget: true) is { } target
+                && (File.Exists(target.FullName) || Directory.Exists(target.FullName));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false; // for example a loop of links
+        }
+    }
+
+    private static bool LeadsInto(string link, string folder)
+    {
+        try
+        {
+            return Kustomization.IsInFolder(link, folder, orFolder: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
