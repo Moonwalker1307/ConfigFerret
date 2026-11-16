@@ -112,7 +112,9 @@ Key Vault (`LayerKind.AzureKeyVault`):
   the app links to the secret for its key. When no loaded secret maps to the key, for example because `SecretNames`
   left it out, or when `MatchConfigurationProvider` is off, the value is still hidden.
 
-A linked secret that is disabled, expired or not yet valid adds a trace warning.
+A linked secret that is disabled adds a trace warning that it cannot be read. One that is expired or not yet valid adds
+a trace warning with the date: for secrets those dates are informational, so Key Vault still returns the secret and the
+Key Vault configuration provider still loads it.
 
 App Configuration (`LayerKind.AzureAppConfiguration`):
 

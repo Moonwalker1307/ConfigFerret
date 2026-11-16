@@ -158,6 +158,8 @@ internal sealed class AzureKeyVaultResolver(AzureKeyVaultSecrets secrets, AzureK
             .Select(s => (s, ToStep(s, layer, inferred: true, ["matched by configuration key"])))];
     }
 
+    // For secrets, Key Vault's expiry and not-before dates are informational: a get still works outside them, and the
+    // Key Vault configuration provider skips only disabled secrets. So only a disabled secret cannot be read.
     private void WarnIfUnusable(AzureKeyVaultSecret secret, ProvenanceStep layer, TraceDiagnostics diagnostics)
     {
         var who = layer.ConfigurationKey ?? LayerNames.Of(layer) ?? layer.Source;
@@ -168,11 +170,11 @@ internal sealed class AzureKeyVaultResolver(AzureKeyVaultSecrets secrets, AzureK
         }
         else if (secret.ExpiresOn is { } expires && expires <= now)
         {
-            diagnostics.Warn($"Azure Key Vault secret {secret.Name} ({secret.Vault}), linked to {who}, expired on {expires:yyyy-MM-dd}, so it cannot be read.");
+            diagnostics.Warn($"Azure Key Vault secret {secret.Name} ({secret.Vault}), linked to {who}, expired on {expires:yyyy-MM-dd}; Key Vault still returns it and the Key Vault configuration provider still loads it.");
         }
         else if (secret.NotBefore is { } notBefore && notBefore > now)
         {
-            diagnostics.Warn($"Azure Key Vault secret {secret.Name} ({secret.Vault}), linked to {who}, is not valid until {notBefore:yyyy-MM-dd}, so it cannot be read yet.");
+            diagnostics.Warn($"Azure Key Vault secret {secret.Name} ({secret.Vault}), linked to {who}, is not valid until {notBefore:yyyy-MM-dd}; Key Vault already returns it and the Key Vault configuration provider loads it.");
         }
     }
 
