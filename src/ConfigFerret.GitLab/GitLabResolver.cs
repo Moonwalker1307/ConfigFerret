@@ -248,15 +248,12 @@ internal sealed partial class GitLabResolver(GitLabVariables variables, GitLabTr
     // such as db-$SUFFIX, a variable that refers to itself, or a reference that leads to several definitions.
     private object? Comes(GitLabCiVariable variable, string? view, int depth)
     {
-        // A value that may be secret is never taken to agree with another.
-        if (MaySecretItself(variable.Name))
-        {
-            return null;
-        }
-
+        // A value written in a variable that may be secret is never taken to agree with another. A reference is
+        // followed whatever its name: the GitLab variable it comes to is the same only as itself, and links that agree
+        // stay sensitive when any of them may be.
         if (GitLabTraceOptions.ReferenceTarget(variable.Value) is not { } target)
         {
-            return variable.Value.Contains('$', StringComparison.Ordinal) ? null : variable.Value;
+            return MaySecretItself(variable.Name) || variable.Value.Contains('$', StringComparison.Ordinal) ? null : variable.Value;
         }
 
         return depth >= MaxReferences || string.Equals(target, variable.Name, StringComparison.Ordinal)
