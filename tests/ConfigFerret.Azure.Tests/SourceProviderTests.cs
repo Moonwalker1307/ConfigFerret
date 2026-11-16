@@ -157,6 +157,18 @@ public class SourceProviderTests
         Assert.True(fromConnection.TraceOptions.MatchByName);
     }
 
+    [Fact]
+    public void App_Configuration_provider_reads_no_label_among_other_labels()
+    {
+        var source = (AzureAppConfigurationSource)new AzureAppConfigurationSourceProvider().Create(Values(
+            ("Endpoint", "https://contoso.azconfig.io"),
+            ("Labels", "\\0\nproduction"),
+            ("FeatureFlagLabels", " (No label) \nproduction\n\\0x")));
+
+        Assert.Equal(["", "production"], source.Options.Labels);
+        Assert.Equal(["", "production", "\\0x"], source.Options.FeatureFlagLabels);
+    }
+
     [Theory]
     [InlineData(null, null, "Endpoint is not set.")]
     [InlineData("https://contoso.azconfig.io", AppConfigurationLoadTests.ConnectionString, "Both Endpoint and ConnectionString are set.")]

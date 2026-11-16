@@ -22,11 +22,11 @@ public sealed class AzureAppConfigurationSourceProvider : IConfigSourceProvider
     [
         new(nameof(AzureAppConfigurationOptions.Endpoint), "Endpoint", SourceSettingKind.Url, Help: "The store address, for example https://contoso.azconfig.io. Leave empty to use a connection string."),
         new(nameof(AzureAppConfigurationOptions.KeyFilter), "Key filter", Help: "Keys to read, for example Orders:*. Empty reads every key."),
-        new(nameof(AzureAppConfigurationOptions.Labels), "Labels", SourceSettingKind.Lines, Help: "Labels to read, one per line, in the order the app selects them; the last one wins. Empty reads keys with no label."),
+        new(nameof(AzureAppConfigurationOptions.Labels), "Labels", SourceSettingKind.Lines, Help: "Labels to read, one per line, in the order the app selects them; the last one wins. Write \\0 or (no label) for no label. Empty reads keys with no label only."),
         new(nameof(AzureAppConfigurationOptions.TrimKeyPrefixes), "Trimmed key prefixes", SourceSettingKind.Lines, Help: "Key prefixes the app trims (TrimKeyPrefix), one per line."),
         new(nameof(AzureAppConfigurationOptions.IncludeKeyVaultReferences), "Include Key Vault references", SourceSettingKind.Boolean, Help: "Also list Key Vault references. The secrets themselves are not read.", DefaultValue: "true"),
         new(nameof(AzureAppConfigurationOptions.IncludeFeatureFlags), "Include feature flags", SourceSettingKind.Boolean, Help: "Also list feature flags, as FeatureManagement:<name>.", DefaultValue: "true"),
-        new(nameof(AzureAppConfigurationOptions.FeatureFlagLabels), "Feature flag labels", SourceSettingKind.Lines, Help: "Labels to read feature flags with, one per line, as the app gives them to UseFeatureFlags. Empty reads flags with no label, whatever the labels above."),
+        new(nameof(AzureAppConfigurationOptions.FeatureFlagLabels), "Feature flag labels", SourceSettingKind.Lines, Help: "Labels to read feature flags with, one per line, as the app gives them to UseFeatureFlags. Write \\0 or (no label) for no label. Empty reads flags with no label only, whatever the labels above."),
         new(nameof(AzureAppConfigurationTraceOptions.MatchByName), "Match by name", SourceSettingKind.Boolean, Help: "Link environment variables and ConfigMap or Secret keys to key-values with the same key.", DefaultValue: "true"),
         new(nameof(AzureAppConfigurationOptions.TenantId), "Tenant ID", Help: "The Microsoft Entra tenant. Optional."),
         new(nameof(AzureAppConfigurationOptions.ClientId), "Client ID", Help: "A service principal, or the managed or workload identity to use. Optional."),
@@ -51,12 +51,12 @@ public sealed class AzureAppConfigurationSourceProvider : IConfigSourceProvider
         };
         foreach (var label in AzureAuth.ReadLines(values, nameof(AzureAppConfigurationOptions.Labels)))
         {
-            options.Labels.Add(label);
+            options.Labels.Add(ReadLabel(label));
         }
 
         foreach (var label in AzureAuth.ReadLines(values, nameof(AzureAppConfigurationOptions.FeatureFlagLabels)))
         {
-            options.FeatureFlagLabels.Add(label);
+            options.FeatureFlagLabels.Add(ReadLabel(label));
         }
 
         foreach (var prefix in AzureAuth.ReadLines(values, nameof(AzureAppConfigurationOptions.TrimKeyPrefixes)))
@@ -77,4 +77,8 @@ public sealed class AzureAppConfigurationSourceProvider : IConfigSourceProvider
         var trace = new AzureAppConfigurationTraceOptions { MatchByName = AzureAuth.ReadBoolean(values, nameof(AzureAppConfigurationTraceOptions.MatchByName), true) };
         return new AzureAppConfigurationSource(options, trace);
     }
+
+    // Empty lines are dropped from a list, so a person writes no label as the two characters \0 or as "(no label)".
+    private static string ReadLabel(string line) =>
+        line == "\\0" || string.Equals(line, "(no label)", StringComparison.OrdinalIgnoreCase) ? string.Empty : line;
 }
