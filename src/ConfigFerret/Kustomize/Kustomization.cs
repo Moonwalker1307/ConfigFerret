@@ -52,10 +52,14 @@ public sealed class Kustomization
     /// <param name="allowFilesOutsideFolder">
     /// Like kustomize, a generator's env files must sit in or below the folder of the kustomization that names them,
     /// after following symbolic links. Pass true to read them from anywhere, as
-    /// <c>kustomize build --load-restrictor LoadRestrictionsNone</c> does. Bases and resources may be anywhere either way.
+    /// <c>kustomize build --load-restrictor LoadRestrictionsNone</c> does. Bases, resources and components may be anywhere
+    /// on the drive, share or device that the kustomization naming them is on or really lies on; one on another, or behind
+    /// a link to another, is read only with true too. Looking at it could already reach another host, such as the server
+    /// of a UNC path, with the user's credentials.
     /// </param>
     /// <exception cref="InvalidOperationException">
-    /// An env file is outside its kustomization's folder, a <c>merge</c> or <c>replace</c> generator without a
+    /// An env file is outside its kustomization's folder, a base, resource or component is on another drive, share or
+    /// device, a <c>merge</c> or <c>replace</c> generator without a
     /// <c>namespace</c> of its own fits more than one generated object by its current or an earlier name, or the bases and
     /// components form a cycle. Also when they nest more than 100 deep, when reading them takes more than 10,000
     /// kustomizations, when one kustomization or env file holds more than 16 MiB of text, or when all the kustomization and
@@ -142,7 +146,10 @@ public sealed class Kustomization
             throw new FormatException($"Could not parse {file}: {ex.Message}", ex);
         }
 
-        foreach (var child in Folders(doc.Get("resources").Items().Concat(doc.Get("bases").Items()), directory))
+        // The drive, share or device this folder really lies on, which is not always the one it is written on, such as a
+        // checkout behind a junction to another drive.
+        var realRoot = allowFilesOutsideFolder ? null : RealPath(directory, anyRoot: true) is { } real ? Path.GetPathRoot(real) : null;
+        foreach (var child in Folders(doc.Get("resources").Items().Concat(doc.Get("bases").Items()), directory, allowFilesOutsideFolder, realRoot))
         {
             var resources = new List<GeneratedData>();
             LoadDirectory(child, allowFilesOutsideFolder, visiting, resources, budget);
@@ -153,12 +160,12 @@ public sealed class Kustomization
             }
         }
 
-        ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, allowFilesOutsideFolder, state, budget);
-        ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, allowFilesOutsideFolder, state, budget);
+        ApplyGenerators(doc.Get("configMapGenerator"), isSecret: false, directory, display, allowFilesOutsideFolder, realRoot, state, budget);
+        ApplyGenerators(doc.Get("secretGenerator"), isSecret: true, directory, display, allowFilesOutsideFolder, realRoot, state, budget);
 
         // Like kustomize, a component works on what this kustomization holds after its resources and generators, so its
         // generators merge into those objects and its namePrefix renames them; this kustomization's own prefix comes after.
-        foreach (var component in Folders(doc.Get("components").Items(), directory))
+        foreach (var component in Folders(doc.Get("components").Items(), directory, allowFilesOutsideFolder, realRoot))
         {
             LoadDirectory(component, allowFilesOutsideFolder, visiting, state, budget);
         }
@@ -176,9 +183,39 @@ public sealed class Kustomization
         visiting.Remove(directory);
     }
 
-    /// <summary>The entries that name a folder, as full paths. Files and URLs are skipped.</summary>
-    private static IEnumerable<string> Folders(IEnumerable<YamlNode> entries, string directory) =>
-        entries.Select(e => e.Scalar()).OfType<string>().Select(rel => Path.GetFullPath(Path.Combine(directory, rel))).Where(Directory.Exists);
+    /// <summary>
+    /// The entries that name a folder, as full paths. Files and URLs are skipped. Unless files outside the folder may be
+    /// read, an entry that <see cref="MayLookAt"/> refuses throws before anything looks at it.
+    /// </summary>
+    private static IEnumerable<string> Folders(IEnumerable<YamlNode> entries, string directory, bool allowFilesOutsideFolder, string? realRoot)
+    {
+        foreach (var rel in entries.Select(e => e.Scalar()).OfType<string>())
+        {
+            var path = Path.GetFullPath(Path.Combine(directory, rel));
+            if (!allowFilesOutsideFolder && !MayLookAt(path, directory, realRoot))
+            {
+                throw new InvalidOperationException(
+                    $"The entry {rel} named in {directory} is on another drive, share or device, or a link along it leads to one or can't be followed, " +
+                    "so it is not looked at; pass allowFilesOutsideFolder: true to read it.");
+            }
+
+            if (Directory.Exists(path))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    // True when a path named in the kustomization in directory may be looked at on disk: it is written on the root
+    // (drive, share or device) that folder is written on or really lies on, and every link along it stays on those two.
+    // Only the text of the path and links on those roots are looked at to tell.
+    internal static bool MayLookAt(string path, string directory, string? realRoot)
+    {
+        var full = Path.GetFullPath(path);
+        var written = Path.GetPathRoot(Path.GetFullPath(directory)) ?? "";
+        return (IsOnRoot(full, written) || (realRoot is not null && IsOnRoot(full, realRoot)))
+            && RealPath(full, alsoRoot: realRoot ?? written) is not null;
+    }
 
     // Reads a text file and counts it against what one Load may read. Stops early on a device such as /dev/zero.
     private static string ReadText(string path, Budget budget)
@@ -205,7 +242,7 @@ public sealed class Kustomization
         return text.ToString();
     }
 
-    private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, bool allowFilesOutsideFolder, List<GeneratedData> state, Budget budget)
+    private static void ApplyGenerators(YamlNode? generators, bool isSecret, string directory, string display, bool allowFilesOutsideFolder, string? realRoot, List<GeneratedData> state, Budget budget)
     {
         foreach (var generator in generators.Items())
         {
@@ -217,7 +254,7 @@ public sealed class Kustomization
             }
 
             var behavior = generator.Str("behavior") ?? "create";
-            var entries = ReadEntries(generator, directory, allowFilesOutsideFolder, budget);
+            var entries = ReadEntries(generator, directory, allowFilesOutsideFolder, realRoot, budget);
 
             // Like kustomize, merge and replace also find an object by a name it had before a namePrefix or nameSuffix,
             // and refuse to pick one when several fit.
@@ -269,7 +306,11 @@ public sealed class Kustomization
         }
     }
 
-    private static List<(string Key, string? Value, int Line, string Kind)> ReadEntries(YamlNode generator, string directory, bool allowFilesOutsideFolder, Budget budget)
+    private static InvalidOperationException EnvFileOutside(string rel, string directory) => new(
+        $"The env file {rel} named in {directory} is outside that folder. kustomize refuses this by default; " +
+        "pass allowFilesOutsideFolder: true to read it anyway.");
+
+    private static List<(string Key, string? Value, int Line, string Kind)> ReadEntries(YamlNode generator, string directory, bool allowFilesOutsideFolder, string? realRoot, Budget budget)
     {
         var entries = new List<(string, string?, int, string)>();
         foreach (var literal in generator.Get("literals").Items())
@@ -288,7 +329,13 @@ public sealed class Kustomization
                 continue;
             }
 
+            // An env file on another root is refused before anything looks at it, so even a missing one is refused.
             var path = Path.Combine(directory, rel);
+            if (!allowFilesOutsideFolder && !MayLookAt(path, directory, realRoot))
+            {
+                throw EnvFileOutside(rel, directory);
+            }
+
             if (!File.Exists(path))
             {
                 continue;
@@ -296,9 +343,7 @@ public sealed class Kustomization
 
             if (!allowFilesOutsideFolder && !IsInFolder(path, directory))
             {
-                throw new InvalidOperationException(
-                    $"The env file {rel} named in {directory} is outside that folder. kustomize refuses this by default; " +
-                    "pass allowFilesOutsideFolder: true to read it anyway.");
+                throw EnvFileOutside(rel, directory);
             }
 
             var lineNo = 0;
