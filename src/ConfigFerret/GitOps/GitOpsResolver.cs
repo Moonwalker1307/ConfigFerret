@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using ConfigFerret.Helm;
 using ConfigFerret.Kubernetes;
+using ConfigFerret.Kustomize;
 using ConfigFerret.Sources;
 
 namespace ConfigFerret.GitOps;
@@ -32,7 +33,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         _data = new[] { application.Data, options.Data, fileData }.OfType<KubernetesManifests>().ToList();
         _app = application;
         _warnings.AddRange(application.Notes.Select(n => $"{application.DisplayName}: {n}."));
-        if (HasChart(application, options))
+        if (HasChart(application, options, _warnings))
         {
             _chart = HelmChart.Build(application, options, _data);
             _helm = new HelmResolver(_chart);
@@ -110,7 +111,7 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         return entries;
     }
 
-    private static bool HasChart(GitOpsApplication application, GitOpsOptions options)
+    private static bool HasChart(GitOpsApplication application, GitOpsOptions options, List<string> warnings)
     {
         if (application.HelmSources.Count > 0)
         {
@@ -126,7 +127,28 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         var folder = !string.IsNullOrWhiteSpace(options.ChartFolder) ? options.ChartFolder
             : !string.IsNullOrWhiteSpace(options.RepositoryRoot) ? Path.Join(options.RepositoryRoot, application.Path)
             : null;
-        return folder is not null && File.Exists(Path.Join(folder, "Chart.yaml"));
+        if (folder is null)
+        {
+            return false;
+        }
+
+        // Checked before it is looked at, so that whether a chart is found never tells what exists outside the checkout.
+        var chartFile = Path.Join(folder, "Chart.yaml");
+        if (string.IsNullOrWhiteSpace(options.ChartFolder))
+        {
+            if (!HelmChart.IsInRoot(folder, options.RepositoryRoot!))
+            {
+                warnings.Add($"The source path {application.Path} of {application.DisplayName} is outside the repository checkout, so it was not read.");
+                return false;
+            }
+
+            if (!Kustomization.IsInFolder(chartFile, options.RepositoryRoot!))
+            {
+                return false;
+            }
+        }
+
+        return File.Exists(chartFile);
     }
 
     private List<ProvenanceStep> ResolvePatches(ConfigMapKeyRef cm)
@@ -189,7 +211,15 @@ internal sealed partial class GitOpsResolver : IOriginResolver
         }
 
         var root = Path.GetFullPath(options.RepositoryRoot);
-        var folder = Path.GetFullPath(Path.Join(root, _app.Path ?? "."));
+        var folder = Path.Join(root, _app.Path ?? ".");
+        if (!HelmChart.IsInRoot(folder, root))
+        {
+            _warnings.Add($"The folder {_app.Path} that {_app.DisplayName} deploys is outside the repository checkout, so it was not read.");
+            return;
+        }
+
+        folder = Path.GetFullPath(folder);
+
         if (!Directory.Exists(folder))
         {
             _warnings.Add($"The folder {folder} that {_app.DisplayName} deploys does not exist.");

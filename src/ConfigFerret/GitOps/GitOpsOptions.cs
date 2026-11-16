@@ -15,6 +15,8 @@ public sealed class GitOpsOptions
     /// <summary>
     /// The local checkout of the Git repository the object deploys from. Values files are looked up under the chart
     /// folder first and then here, and Argo CD <c>$ref/</c> values files and Flux Kustomization paths are resolved here.
+    /// A source path or Kustomization path that leads outside it, with <c>..</c> or a symbolic link, is not read, and
+    /// neither is a chart file in the checkout that links outside it.
     /// </summary>
     public string? RepositoryRoot { get; set; }
 

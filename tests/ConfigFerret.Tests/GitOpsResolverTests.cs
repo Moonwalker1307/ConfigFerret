@@ -435,6 +435,105 @@ public sealed class GitOpsResolverTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Does_not_read_a_source_path_or_kustomization_path_outside_the_repository()
+    {
+        Write("outside/Chart.yaml", "name: c\n");
+        Write("outside/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: o}\ndata: {K: '${V}'}\n");
+        var options = new GitOpsOptions { RepositoryRoot = Directory.CreateDirectory(Path.Join(_root, "repo")).FullName };
+
+        var argo = new GitOpsResolver(OutsidePath("argoproj.io/v1alpha1", "Application", "spec: {source: {path: ../outside}}"), options);
+        Assert.Null(argo.Chart);
+        Assert.Equal(["The source path ../outside of Argo CD Application out is outside the repository checkout, so it was not read."], argo.Warnings);
+
+        var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: ../outside, postBuild: {substitute: {V: x}}}"), options);
+        Assert.Empty(flux.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+        Assert.Equal(["The folder ../outside that Flux Kustomization out deploys is outside the repository checkout, so it was not read."], flux.Warnings);
+    }
+
+    [Fact]
+    public void Does_not_read_a_kustomization_path_that_links_outside_the_repository()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        Write("outside/cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: o}\ndata: {K: '${V}'}\n");
+        var repo = Directory.CreateDirectory(Path.Join(_root, "repo")).FullName;
+        Directory.CreateSymbolicLink(Path.Join(repo, "linked"), Path.Join(_root, "outside"));
+
+        var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: ./linked, postBuild: {substitute: {V: x}}}"), new GitOpsOptions { RepositoryRoot = repo });
+
+        Assert.Empty(flux.Resolve(ConfigMapKey("o", "K"), new TraceDiagnostics()));
+        Assert.Equal(["The folder ./linked that Flux Kustomization out deploys is outside the repository checkout, so it was not read."], flux.Warnings);
+    }
+
+    [Fact]
+    public void A_chart_yaml_that_links_outside_never_makes_a_chart_whether_or_not_its_target_exists()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        Write("outside/Chart.yaml", "name: c\n");
+        var repo = Directory.CreateDirectory(Path.Join(_root, "repo")).FullName;
+        foreach (var (folder, target) in new[] { ("found", "Chart.yaml"), ("missing", "missing.yaml") })
+        {
+            Directory.CreateDirectory(Path.Join(repo, folder));
+            File.CreateSymbolicLink(Path.Join(repo, folder, "Chart.yaml"), Path.Join(_root, "outside", target));
+        }
+
+        var options = new GitOpsOptions { RepositoryRoot = repo };
+        var found = new GitOpsResolver(OutsidePath("argoproj.io/v1alpha1", "Application", "spec: {source: {path: found}}"), options);
+        var missing = new GitOpsResolver(OutsidePath("argoproj.io/v1alpha1", "Application", "spec: {source: {path: missing}}"), options);
+
+        Assert.Null(found.Chart);
+        Assert.Null(missing.Chart);
+        Assert.Equal(found.Warnings, missing.Warnings);
+    }
+
+    [Fact]
+    public void A_path_that_is_not_a_path_is_outside_the_repository()
+    {
+        var options = new GitOpsOptions { RepositoryRoot = _root };
+
+        var argo = new GitOpsResolver(OutsidePath("argoproj.io/v1alpha1", "Application", "spec: {source: {path: \"apps\\0\"}}"), options);
+        Assert.Null(argo.Chart);
+        Assert.Equal(["The source path apps\0 of Argo CD Application out is outside the repository checkout, so it was not read."], argo.Warnings);
+
+        var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: \"apps\\0\", postBuild: {substitute: {V: x}}}"), options);
+        Assert.Equal(["The folder apps\0 that Flux Kustomization out deploys is outside the repository checkout, so it was not read."], flux.Warnings);
+
+        var release = new GitOpsResolver(OutsidePath("helm.toolkit.fluxcd.io/v2", "HelmRelease", "spec: {chart: {spec: {chart: \"charts\\0\", sourceRef: {kind: GitRepository, name: repo}}}}"), options);
+        Assert.Equal(["The chart folder charts\0 for Flux HelmRelease out is outside the repository checkout, so it was not read."], release.Warnings);
+    }
+
+    [Fact]
+    public void A_kustomization_path_that_links_to_the_repository_root_is_read()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating a symbolic link needs extra rights on Windows.
+        }
+
+        Write("cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata: {K: '${V}'}\n");
+        Directory.CreateSymbolicLink(Path.Join(_root, "linked"), ".");
+
+        var flux = new GitOpsResolver(OutsidePath("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "spec: {path: ./linked, postBuild: {substitute: {V: x}}}"), new GitOpsOptions { RepositoryRoot = _root });
+
+        Assert.Empty(flux.Warnings);
+        Assert.Equal("linked/cm.yaml", Assert.Single(flux.Resolve(ConfigMapKey("c", "K"), new TraceDiagnostics())).Source);
+    }
+
+    private static GitOpsApplication OutsidePath(string apiVersion, string kind, string spec) => GitOpsApplication.Parse($"""
+        apiVersion: {apiVersion}
+        kind: {kind}
+        metadata: {"{"}name: out{"}"}
+        {spec}
+        """, "out.yaml");
+
     [Theory]
     [InlineData("${A}", "A", null)]
     [InlineData("${A:=x}", "A", "x")]
