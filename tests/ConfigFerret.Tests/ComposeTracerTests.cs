@@ -213,6 +213,17 @@ public class ComposeTracerTests
     }
 
     [Fact]
+    public async Task Dotenv_source_flags_an_entry_that_takes_a_secret_through_another_variable()
+    {
+        using var folder = new TempFolder();
+        var file = folder.Write("app.envfile", "DB_PASSWORD=fake-db-password\nDB_URL=postgres://app:${DB_PASSWORD}@db/app\nURL=${DB_URL}\nHOST=db\n");
+
+        var loaded = await new DotEnvSource([file]).LoadAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["DB_PASSWORD", "DB_URL", "URL"], loaded.Entries.Where(e => e.IsSensitive).Select(e => e.Name));
+    }
+
+    [Fact]
     public async Task Compose_source_links_one_service_and_lists_its_entries()
     {
         using var folder = new TempFolder();

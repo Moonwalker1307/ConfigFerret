@@ -37,7 +37,7 @@ public sealed class DotEnvSource : IConfigSource
             .SelectMany(f => f.Entries)
             .GroupBy(e => new DotEnvEntryRef(e.Path ?? e.File, e.Name))
             .Select(g => (Reference: g.Key, Entry: g.Last()))
-            .Select(e => new SourceEntry(e.Entry.Name, e.Reference, ComposeSteps.IsSensitiveName(e.Entry.Name), $"line {e.Entry.Line}", e.Entry.File));
+            .Select(e => new SourceEntry(e.Entry.Name, e.Reference, ComposeSteps.IsSensitive(e.Entry), $"line {e.Entry.Line}", e.Entry.File));
         return Task.FromResult(new LoadedConfigSource(DisplayName, new DotEnvResolver(layers), entries, layers.Warnings));
     }
 }
