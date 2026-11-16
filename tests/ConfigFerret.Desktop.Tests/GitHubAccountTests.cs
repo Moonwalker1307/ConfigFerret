@@ -56,6 +56,37 @@ public class GitHubAccountTests
         Assert.Single(handler.Requests);
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"full_name":"no-slash"}""")]
+    [InlineData("""{"full_name":"contoso/same"}""")]
+    public async Task Stops_at_a_full_page_that_adds_no_repository(string item)
+    {
+        var page = "[" + string.Join(",", Enumerable.Repeat(item, 100)) + "]";
+        var handler = EndlessPages(_ => page);
+
+        using var http = new HttpClient(handler);
+
+        var repositories = await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).ListRepositoriesAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(repositories.Count <= 1);
+        Assert.True(handler.Requests.Count <= 2, $"{handler.Requests.Count} requests");
+    }
+
+    [Fact]
+    public async Task Asks_for_no_more_pages_than_the_list_can_hold()
+    {
+        // Every page is full but holds one usable repository.
+        var handler = EndlessPages(page => "[" + string.Join(",", Enumerable.Repeat("{}", 99)) + $$""",{"full_name":"contoso/repo{{page}}"}]""");
+
+        using var http = new HttpClient(handler);
+
+        var repositories = await new GitHubAccount(http, GitHubAccount.DefaultApiBase, Token).ListRepositoriesAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(20, handler.Requests.Count);
+        Assert.Equal(20, repositories.Count);
+    }
+
     [Fact]
     public async Task Reads_the_repository_details_and_fills_in_missing_ones()
     {
@@ -563,6 +594,23 @@ public class GitHubAccountTests
         $"/user/repos?per_page=100&page={page}&sort=pushed&affiliation=owner,collaborator,organization_member";
 
     private static GitHubAccount Account(FakeHttpHandler handler) => new(handler.Client(), GitHubAccount.DefaultApiBase, Token);
+
+    // Answers each page of the repository list with page(number), and gives up with an error after 50 requests so a
+    // list that never ends fails the test instead of hanging it.
+    private static RedirectingHandler EndlessPages(Func<int, string> page)
+    {
+        var requests = 0;
+        return new RedirectingHandler(request =>
+        {
+            if (++requests > 50)
+            {
+                return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            }
+
+            var number = int.Parse(System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query)["page"]!, System.Globalization.CultureInfo.InvariantCulture);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(page(number), Encoding.UTF8, "application/json") };
+        });
+    }
 
     private static string Repositories(int count, int start)
     {

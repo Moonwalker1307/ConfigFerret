@@ -42,6 +42,7 @@ public sealed class GitHubAccount
     private const long TarOverheadPerEntry = 4096;
     private const int MaxRedirects = 5;
     private const int MaxRepositories = 2000;
+    private const int RepositoriesPerPage = 100;
     private readonly HttpClient _http;
     private readonly Uri _apiBase;
     private readonly string _token;
@@ -74,14 +75,21 @@ public sealed class GitHubAccount
         return Text(document.RootElement, "login") ?? throw new HttpRequestException("GitHub did not say who the token belongs to.");
     }
 
-    /// <summary>Every repository the user owns, collaborates on or can read through an organization, most recently pushed first.</summary>
+    /// <summary>
+    /// Every repository the user owns, collaborates on or can read through an organization, most recently pushed first:
+    /// each once, and at most the first 2000.
+    /// </summary>
     public async Task<IReadOnlyList<RepositoryInfo>> ListRepositoriesAsync(CancellationToken cancellationToken = default)
     {
         var result = new List<RepositoryInfo>();
-        for (var page = 1; result.Count < MaxRepositories; page++)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // No more pages than the list can hold, and none after a page that adds nothing, so a server that keeps sending
+        // full pages of entries without a usable name, or of the same repositories, cannot keep the list loading.
+        for (var page = 1; page <= MaxRepositories / RepositoriesPerPage && result.Count < MaxRepositories; page++)
         {
             using var document = await GetJsonAsync(
-                $"user/repos?per_page=100&page={page}&sort=pushed&affiliation=owner,collaborator,organization_member",
+                $"user/repos?per_page={RepositoriesPerPage}&page={page}&sort=pushed&affiliation=owner,collaborator,organization_member",
                 cancellationToken).ConfigureAwait(false);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
             {
@@ -89,10 +97,11 @@ public sealed class GitHubAccount
             }
 
             var count = 0;
+            var added = 0;
             foreach (var repo in document.RootElement.EnumerateArray())
             {
                 count++;
-                if (Text(repo, "full_name") is not { } fullName || !fullName.Contains('/', StringComparison.Ordinal))
+                if (Text(repo, "full_name") is not { } fullName || !fullName.Contains('/', StringComparison.Ordinal) || !seen.Add(fullName))
                 {
                     continue;
                 }
@@ -105,9 +114,10 @@ public sealed class GitHubAccount
                     repo.TryGetProperty("private", out var priv) && priv.ValueKind == JsonValueKind.True,
                     Text(repo, "language") ?? string.Empty,
                     pushed));
+                added++;
             }
 
-            if (count < 100)
+            if (count < RepositoriesPerPage || added == 0)
             {
                 break;
             }
