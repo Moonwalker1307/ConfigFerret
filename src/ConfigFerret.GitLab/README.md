@@ -109,6 +109,32 @@ the variable whose environment scope fits `Environment` best is used: the exact 
 job with no environment. A key that is set only for scopes that do not apply becomes a trace warning. When a CI file
 line or an explicit link ties a layer to such a key and it is masked, the layer is still marked sensitive.
 
+A job gets the global variables and its own, never another job's, and a CI file link counts for the job it is in.
+What is set outside jobs, in hidden jobs (`.name`) and in `default:` counts for every job, since `extends:` is not
+read. Variables from `workflow:` `rules:` apply only when their rule matches, which the trace cannot tell, so they and
+the global variables they would replace are inferred alternatives, never certain. `Environment` also picks the jobs: a
+job whose own `environment:` names another environment (`environment: staging`, `environment:` with `name: staging`,
+or `environment: { name: staging }`) is left out. A hidden job never is, since a job that extends it can name another
+environment. A job with no environment of its own, one that gets it through `extends:`, one whose environment name
+has a variable in it (`review/$CI_COMMIT_REF_SLUG`), and one whose `environment:` is an alias, a tag such as
+`!reference` or an anchor, which are not read, count for every environment. A variable followed from a job is looked
+up in that job.
+
+Once a name has a CI file link, every job that counts and may set it is followed: the links in jobs, in hidden jobs and
+outside jobs, and the jobs that set the name in `variables:` without a link for it. When they come to different values,
+every one of them is listed as an inferred step and a warning names the jobs; the same goes for jobs that set a name to
+different values in `variables:`. A value that is a reference is compared by what it comes to in its own job (the same
+CI file value or the same GitLab variable). One the trace cannot compare, such as a masked value, a variable named like
+a secret, `db-$SUFFIX` or a reference with several definitions, keeps them alternatives, and the warning then says the
+values cannot be compared rather than that they differ. None of the alternatives is then compared with the value seen
+here, and the one that comes to that value goes last (the tracer marks the last step effective), also when it is reached
+through a whole-value reference such as `ALIAS: $TIMEOUT`. When any of them may hold a secret, all of them are marked
+sensitive.
+
+One trace step looks at no more than 1,000 CI file variables, the most upstream steps the tracer keeps for a setting.
+Past that, the jobs not reached are left out, every step listed is marked inferred and sensitive, and a warning says
+that not all of them were followed.
+
 ## Tokens and secrets
 
 - Use a personal, group or project access token with the `read_api` scope from a user with the **Maintainer** role:
@@ -128,6 +154,8 @@ line or an explicit link ties a layer to such a key and it is masked, the layer 
 ## Limits
 
 - CI YAML is read line by line, not with a full YAML parser: `include:`, `extends:`, anchors and `rules:` are not
-  evaluated.
+  evaluated. So a job's own variables win over a hidden job's, but two hidden jobs that set a name differently are
+  alternatives, even when each job extends only one of them.
+- Variables in a job's own `rules:` are read as the job's variables, as if their rule always matched.
 - Pipeline, trigger, schedule and manual variables are not read, though they win over everything else.
 - At most 100 pages per list and 20 nested groups are read.
