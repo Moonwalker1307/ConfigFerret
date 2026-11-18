@@ -133,6 +133,12 @@ manifests; the tool names it and you can pass it with `--env`.
 | --- | --- |
 | `--github-repo owner/name`, `--github-environment`, `--github-workflow` | `GITHUB_TOKEN` or `GH_TOKEN` |
 | `--octopus-project`, `--octopus-server` (or `OCTOPUS_URL`), `--octopus-environment` and the other scopes | `OCTOPUS_API_KEY` |
+| `--octopus-process`, `--octopus-release`, `--octopus-git-ref` (read the deployment process) | `OCTOPUS_API_KEY` |
+
+With `--octopus-process`, the trace names the step whose structured configuration variables replace a key, and links
+`#{Variable}` written in a file to the step that substitutes it. `--octopus-release 1.4.0` reads the variables and the
+process from the snapshot of that release, which is what its deployments used. For a config-as-code project,
+`--octopus-git-ref` picks the branch to read the process from; the default branch is used otherwise.
 
 Tokens and API keys are never accepted as options, so they stay out of shell history, go only in request headers,
 only over HTTPS, and never into a report.

@@ -52,6 +52,13 @@ public sealed partial class OctopusVariables
     /// <summary>Problems found while loading.</summary>
     public IReadOnlyList<string> Warnings { get; }
 
+    /// <summary>
+    /// The deployment process, when it was read (see <see cref="OctopusVariablesOptions.ReadDeploymentProcess"/>), or
+    /// null. With it, the trace says which step replaced a value and links <c>#{Variable}</c> in files to the steps that
+    /// substitute them.
+    /// </summary>
+    public OctopusDeploymentProcess? Process { get; init; }
+
     /// <summary>Returns every variable named <paramref name="name"/>, whatever its scope.</summary>
     public IReadOnlyList<OctopusVariable> Find(string name) => _byName.TryGetValue(name, out var list) ? list : [];
 
@@ -85,15 +92,32 @@ public sealed partial class OctopusVariables
 
         var entries = new List<OctopusVariable>();
         var warnings = new List<string>();
-        await ReadSetAsync(api, space, GetString(project, "VariableSetId"), projectName, isProject: true, entries, cancellationToken).ConfigureAwait(false);
+        var projectId = GetString(project, "Id") ?? options.Project;
 
-        if (options.IncludeLibraryVariableSets && project.TryGetProperty("IncludedLibraryVariableSetIds", out var included) && included.ValueKind == JsonValueKind.Array)
+        // A release keeps snapshots of the variables and the process it was created with, which its deployments use.
+        JsonElement? release = null;
+        if (!string.IsNullOrWhiteSpace(options.Release))
         {
-            foreach (var id in included.EnumerateArray().Select(AsString).Where(s => !string.IsNullOrEmpty(s)))
+            release = await FindReleaseAsync(api, space, projectId, projectName, options.Release, cancellationToken).ConfigureAwait(false);
+        }
+
+        var projectSetId = release is { } r ? GetString(r, "ProjectVariableSetSnapshotId") ?? GetString(project, "VariableSetId") : GetString(project, "VariableSetId");
+        var names = await ReadSetAsync(api, space, projectSetId, projectName, isProject: true, entries, cancellationToken).ConfigureAwait(false);
+
+        if (options.IncludeLibraryVariableSets)
+        {
+            foreach (var (id, snapshotId) in LibrarySets(project, release))
             {
-                using var set = await api.GetAsync($"{space}/libraryvariablesets/{Uri.EscapeDataString(id!)}", cancellationToken).ConfigureAwait(false);
-                var setName = GetString(set.RootElement, "Name") ?? id!;
-                await ReadSetAsync(api, space, GetString(set.RootElement, "VariableSetId"), $"library variable set {setName}", isProject: false, entries, cancellationToken).ConfigureAwait(false);
+                if (id is null)
+                {
+                    // A snapshot id that does not name its library variable set: read it under its own id.
+                    await ReadSetAsync(api, space, snapshotId, $"library variable set {snapshotId}", isProject: false, entries, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                using var set = await api.GetAsync($"{space}/libraryvariablesets/{Uri.EscapeDataString(id)}", cancellationToken).ConfigureAwait(false);
+                var setName = GetString(set.RootElement, "Name") ?? id;
+                await ReadSetAsync(api, space, snapshotId ?? GetString(set.RootElement, "VariableSetId"), $"library variable set {setName}", isProject: false, entries, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -108,7 +132,17 @@ public sealed partial class OctopusVariables
             warnings.Add($"Octopus project {projectName} has no variables the API key can see.");
         }
 
-        return new OctopusVariables(entries, warnings);
+        OctopusDeploymentProcess? process = null;
+        if (options.ReadDeploymentProcess || release is not null)
+        {
+            process = await ReadProcessAsync(api, space, project, projectId, projectName, release, options, names, warnings, cancellationToken).ConfigureAwait(false);
+            if (process is not null)
+            {
+                process = await NameStepTemplatesAsync(api, space, process, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return new OctopusVariables(entries, warnings) { Process = process };
     }
 
     private static async Task<string> FindSpaceAsync(Api api, string? space, CancellationToken cancellationToken)
@@ -135,25 +169,26 @@ public sealed partial class OctopusVariables
             : $"Octopus space '{space}' was not found, or the API key cannot see it.");
     }
 
-    private static async Task ReadSetAsync(Api api, string space, string? variableSetId, string setName, bool isProject, List<OctopusVariable> into, CancellationToken cancellationToken)
+    // Returns the scope names (environment and channel ids to names) the set lists.
+    private static async Task<Dictionary<string, Dictionary<string, string>>> ReadSetAsync(Api api, string space, string? variableSetId, string setName, bool isProject, List<OctopusVariable> into, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(variableSetId))
         {
-            return;
+            return [];
         }
 
         using var doc = await api.GetAsync($"{space}/variables/{Uri.EscapeDataString(variableSetId)}", cancellationToken).ConfigureAwait(false);
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
         {
-            return;
+            return [];
         }
 
         var processTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var names = ReadScopeNames(root, processTypes);
         if (!root.TryGetProperty("Variables", out var variables) || variables.ValueKind != JsonValueKind.Array)
         {
-            return;
+            return names;
         }
 
         foreach (var v in variables.EnumerateArray())
@@ -172,6 +207,8 @@ public sealed partial class OctopusVariables
             var value = sensitive ? null : GetString(v, "Value");
             into.Add(new OctopusVariable(name, value, sensitive, type, setName, isProject, ReadScope(v, names)) { Process = ReadProcessScope(v, processTypes) });
         }
+
+        return names;
     }
 
     private static Dictionary<string, Dictionary<string, string>> ReadScopeNames(JsonElement root, Dictionary<string, string> processTypes)

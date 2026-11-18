@@ -39,7 +39,7 @@ package stays offline and never handles credentials unless you add one:
 | Package | Adds |
 | --- | --- |
 | `ConfigFerret.GitHub` | GitHub Actions organization, repository and environment variables, and secret names ([readme](src/ConfigFerret.GitHub/README.md)) |
-| `ConfigFerret.Octopus` | Octopus Deploy project and library variable set variables, matched by scope, read with an API key ([readme](src/ConfigFerret.Octopus/README.md)) |
+| `ConfigFerret.Octopus` | Octopus Deploy project and library variable set variables, matched by scope, and the deployment steps that replace them, read with an API key ([readme](src/ConfigFerret.Octopus/README.md)) |
 | `ConfigFerret.HashiCorp` | HashiCorp Vault KV secrets (names and metadata, values only when asked) and Consul KV keys, read with a token ([readme](src/ConfigFerret.HashiCorp/README.md)) |
 | `ConfigFerret.KubernetesCluster` | A workload, its ConfigMaps, opt-in Secrets, ExternalSecrets and SecretProviderClasses, read from a live cluster through a kubeconfig or the pod's service account ([readme](src/ConfigFerret.KubernetesCluster/README.md)) |
 | `ConfigFerret.Azure` | Azure Key Vault secrets (names and properties, values only when asked) and Azure App Configuration key-values, Key Vault references and feature flags, read with the Azure SDK ([readme](src/ConfigFerret.Azure/README.md)) |
@@ -621,9 +621,11 @@ ConfigTracer.For(config).WithOptions(o => o.RevealSensitiveValues = true);
   there.
 - A folder of manifests, a chart's `templates` folder and the folder a GitOps app deploys are read without following
   symbolic links: a linked file or folder below them is skipped.
-- GitHub and Octopus links by name or JSON key are guesses, so they are marked `[inferred]`; a workflow `env:` line or
-  `Map` makes a certain link. When a name is on both an environment variable and the Kubernetes env entry behind it,
-  the GitHub or Octopus layer shows under both. Octopus `#{...}` references are not expanded.
+- GitHub and Octopus links by name or JSON key are guesses, so they are marked `[inferred]`; a workflow `env:` line,
+  `Map`, or an Octopus deployment process step whose structured configuration or substitution targets the file makes a
+  certain link. When a name is on both an environment variable and the Kubernetes env entry behind it, the GitHub or
+  Octopus layer shows under both. Octopus `#{...}` references in variable values are not expanded, and .NET XML
+  configuration variables and transforms on `.config` files are not traced.
 - External Secrets Operator and Secrets Store CSI values are never in the manifests, so those Secret keys and files
   show `(unknown)`. The secret store packages link the `ExternalSecretRef` step to the secret in the store.
   `spec.target.template`, `dataFrom.find`, generators and `ClusterExternalSecret` are not expanded.

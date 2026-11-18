@@ -659,4 +659,38 @@ public class RemoteSourceTests
         Assert.DoesNotContain(OctopusKey, result.Output, StringComparison.Ordinal);
         Assert.All(handler.Requests, r => Assert.Equal(OctopusKey, r.Headers.GetValues("X-Octopus-ApiKey").Single()));
     }
+
+    [Fact]
+    public async Task Reads_the_Octopus_release_snapshot_and_its_process()
+    {
+        var handler = new FakeHttpHandler()
+            .Respond("/api/spaces/all", """[{"Id":"Spaces-1","Name":"Default","IsDefault":true}]""")
+            .Respond("/api/Spaces-1/projects/all", """[{"Id":"Projects-7","Name":"Orders","Slug":"orders","VariableSetId":"variableset-Projects-7","IncludedLibraryVariableSetIds":[]}]""")
+            .Respond("/api/Spaces-1/projects/Projects-7/releases/1.4.0", """{"Version":"1.4.0","ProjectVariableSetSnapshotId":"vs-snap","ProjectDeploymentProcessSnapshotId":"dp-snap"}""")
+            .Respond("/api/Spaces-1/variables/vs-snap", """{"Variables":[{"Name":"Paging:PageSize","Value":"25","Type":"String","Scope":{}}]}""")
+            .Respond("/api/Spaces-1/deploymentprocesses/dp-snap", """
+                {"Steps":[{"Name":"Deploy orders","Actions":[{"Name":"Deploy orders","Properties":{
+                  "Octopus.Action.EnabledFeatures":"Octopus.Features.JsonConfigurationVariables",
+                  "Octopus.Action.Package.JsonConfigurationVariablesTargets":"appsettings*.json"}}]}]}
+                """);
+        var runner = new ToolRunner { Http = handler };
+        runner.Environment["OCTOPUS_API_KEY"] = OctopusKey;
+
+        var result = await runner.RunAsync(
+            "trace", "-a", LocalDev, "--no-user-secrets", "--octopus-server", "https://octopus.example.com",
+            "--octopus-project", "orders", "--octopus-release", "1.4.0", "Paging:PageSize");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("step Deploy orders", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsolutePath == "/api/Spaces-1/variables/variableset-Projects-7");
+    }
+
+    [Fact]
+    public async Task Refuses_Octopus_process_options_without_a_project()
+    {
+        var result = await new ToolRunner().RunAsync("trace", "-a", LocalDev, "--octopus-release", "1.4.0");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("--octopus-project", result.Output + result.Error, StringComparison.Ordinal);
+    }
 }
