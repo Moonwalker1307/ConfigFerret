@@ -110,6 +110,7 @@ internal static partial class Targets
             Project = (flags & 1) != 0 ? "Projects-1" : "Api",
             Space = (flags & 6) switch { 2 => "Spaces-1", 4 => "Default", _ => null },
             IncludeLibraryVariableSets = (flags & 8) == 0,
+            ReadDeploymentProcess = true,
         };
 
         using var server = new ScriptedServer(responses, "[]");
@@ -175,11 +176,29 @@ internal static partial class Targets
                 Value = LayerValue,
                 Reference = new FileRef("/app/appsettings.json"),
                 ConfigurationKey = name,
+            }).Append(new ProvenanceStep
+            {
+                Kind = LayerKind.DotNetProvider,
+                Source = "appsettings.json",
+                Value = $"x#{{{name}}}",
+                Reference = new FileRef("/app/appsettings.json"),
+                ConfigurationKey = "Substituted",
             });
             foreach (var layer in layers)
             {
                 foreach (var step in resolver.Resolve(layer, diagnostics))
                 {
+                    if (step.Kind == LayerKind.OctopusDeploy && step.Reference is OctopusStepParameterRef parameter)
+                    {
+                        if (step.Value is not null && variables.Process?.Actions.Any(a => a.StepName == parameter.StepName && a.Parameters.TryGetValue(parameter.Name, out var v) && v == step.Value) != true)
+                        {
+                            throw new InvariantException($"Octopus parameter step for {name} has a value no step sets.");
+                        }
+
+                        CheckNote(step, name);
+                        continue;
+                    }
+
                     if (step.Kind != LayerKind.OctopusDeploy || step.Reference is not OctopusVariableRef reference)
                     {
                         throw new InvariantException($"Octopus step for {name} has kind {step.Kind} and reference {step.Reference}.");

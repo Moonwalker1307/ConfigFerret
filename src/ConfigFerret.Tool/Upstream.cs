@@ -115,7 +115,8 @@ internal static class Upstream
         var project = result.GetValue(options.OctopusProject);
         if (project is null)
         {
-            if (result.GetValue(options.OctopusServer) is not null || result.GetValue(options.OctopusEnvironment) is not null || result.GetValue(options.OctopusSpace) is not null)
+            if (result.GetValue(options.OctopusServer) is not null || result.GetValue(options.OctopusEnvironment) is not null || result.GetValue(options.OctopusSpace) is not null
+                || result.GetValue(options.OctopusProcess) || result.GetValue(options.OctopusRelease) is not null || result.GetValue(options.OctopusGitRef) is not null)
             {
                 throw new UsageException("The --octopus-* options need --octopus-project.");
             }
@@ -137,6 +138,9 @@ internal static class Upstream
             ApiKey = apiKey,
             Project = project,
             Space = result.GetValue(options.OctopusSpace),
+            ReadDeploymentProcess = result.GetValue(options.OctopusProcess) || result.GetValue(options.OctopusGitRef) is not null,
+            Release = result.GetValue(options.OctopusRelease),
+            GitRef = result.GetValue(options.OctopusGitRef),
         };
 
         OctopusVariables variables;

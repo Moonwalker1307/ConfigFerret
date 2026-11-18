@@ -37,6 +37,13 @@ public sealed class OctopusTraceOptions
     public bool MatchByName { get; set; } = true;
 
     /// <summary>
+    /// When true (the default), a value that holds <c>#{Name}</c>, as written in a file that Octopus substitute variables
+    /// in templates processes, is linked to the Octopus variable <c>Name</c>. When the deployment process was read, the
+    /// note names the step that substitutes the file; otherwise these links are marked as inferred.
+    /// </summary>
+    public bool MatchSubstitutions { get; set; } = true;
+
+    /// <summary>
     /// Links the environment variable, env entry, ConfigMap/Secret key or configuration key <paramref name="name"/> to the
     /// Octopus variable <paramref name="variableName"/>, for example <c>Map("DB__Timeout", "Database.Timeout")</c>.
     /// </summary>

@@ -339,6 +339,23 @@ internal sealed class UpstreamOptions
         HelpName = "tag",
     };
 
+    public Option<bool> OctopusProcess { get; } = new("--octopus-process")
+    {
+        Description = "Also read the deployment process, to name the steps that replace values (needs ProcessView).",
+    };
+
+    public Option<string?> OctopusRelease { get; } = new("--octopus-release")
+    {
+        Description = "Read the variables and deployment process from the snapshot of this release.",
+        HelpName = "version",
+    };
+
+    public Option<string?> OctopusGitRef { get; } = new("--octopus-git-ref")
+    {
+        Description = "For a config-as-code project, the branch or Git reference to read the process from.",
+        HelpName = "ref",
+    };
+
     public void AddTo(Command command)
     {
         foreach (var option in new Option[]
@@ -346,6 +363,7 @@ internal sealed class UpstreamOptions
             Chart, Values, Set, Kustomize, KustomizeAllowFilesOutsideFolder,
             GitHubRepository, GitHubEnvironment, GitHubWorkflow, GitHubApiUrl,
             OctopusProject, OctopusServer, OctopusSpace, OctopusEnvironment, OctopusMachine, OctopusRole, OctopusChannel, OctopusStep, OctopusTenantTag,
+            OctopusProcess, OctopusRelease, OctopusGitRef,
         })
         {
             command.Options.Add(option);
