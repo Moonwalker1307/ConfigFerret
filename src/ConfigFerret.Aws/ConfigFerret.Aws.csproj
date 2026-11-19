@@ -29,7 +29,7 @@
     <!-- The official AWS SDK handles request signing, the credential chain, profiles and regions. -->
     <ProjectReference Include="../ConfigFerret/ConfigFerret.csproj" />
     <PackageReference Include="AWSSDK.SecretsManager" Version="4.1.1" />
-    <PackageReference Include="AWSSDK.SimpleSystemsManagement" Version="4.1.1" />
+    <PackageReference Include="AWSSDK.SimpleSystemsManagement" Version="4.1.1.2" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="$(MicrosoftExtensionsVersion)" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="11.0.100" PrivateAssets="All" />
   </ItemGroup>
