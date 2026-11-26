@@ -34,7 +34,7 @@ jobs:
 
       # PackageBat builds ConfigFerret.slnx at the PR's base commit, which still compiles, and fails the check when the
       # bump breaks an API our code uses. The 8.0 runtime is for PackageBat itself (it targets net8.0).
-      - uses: Moonwalker1307/PackageBat@8c57544ce8f9fffc509237e802a9fc77168acbba # main, 2026-11-15
+      - uses: Moonwalker1307/PackageBat@8d1d3d8803745b098a1aea2d8208747f1b101eca # main, 2026-11-15
         with:
           dotnet-version: |
             8.0.x
